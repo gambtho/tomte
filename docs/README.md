@@ -32,6 +32,7 @@ what `make up` actually does, the agent YAML, and how to talk to it.
 | Close the Slack loop: a mention triggers the agent, the agent answers in the thread (AKS) | [inbound.md](inbound.md#slack-events-the-loop) | `make inbound-expose`, `make exposure-scan`, `make inbound-unexpose` |
 | See what the plane's pods can and cannot reach, and prove it | [egress.md](egress.md) | `make netpol-verify`, `make egress-copilot`, `make egress-copilot-off` |
 | Run all of this on a real cluster (AKS) instead of kind | [aks.md](aks.md) | `TARGET=aks`, `make aks-cluster`, `make aks-down` |
+| Scaffold a new governed agent as reviewable YAML | [CLI-PROTOTYPE.md](CLI-PROTOTYPE.md) | `kaimahi agent create`, `make scenario-billing`, `make cli-test` |
 | Fix something that went wrong | [FAQ.md](FAQ.md) | |
 
 The docs build on each other in roughly the table's order: tool
@@ -93,8 +94,11 @@ runbook, that is a bug in the restructure, not a decision. File it.
 
 - [COORDINATION.md](COORDINATION.md): the coordination board, decisions,
   and delta sheets. Owned by the coordinator session.
-- [CLI-PROPOSAL.md](CLI-PROPOSAL.md): the proposed `kaimahi create`
-  command, including the case against building it. Not built.
+- [CLI-PROPOSAL.md](CLI-PROPOSAL.md): the design and survey behind
+  `kaimahi agent create`, including the honest case against building it,
+  and the D19 rulings that settled its open questions.
+- [CLI-PROTOTYPE.md](CLI-PROTOTYPE.md): what the CLI does, its safety
+  properties, and exactly what is and is not verified.
 - [SCENARIOS.md](SCENARIOS.md): the delegation journeys that argue for
   the governance plane.
 - [NAMING.md](NAMING.md): the project name and what is still owed before
