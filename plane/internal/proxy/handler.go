@@ -17,6 +17,7 @@ import (
 
 	"github.com/kaimahi-agents/kaimahi/plane/internal/config"
 	"github.com/kaimahi-agents/kaimahi/plane/internal/meter"
+	"github.com/kaimahi-agents/kaimahi/plane/internal/metrics"
 	"github.com/kaimahi-agents/kaimahi/plane/internal/pricing"
 	"github.com/kaimahi-agents/kaimahi/plane/internal/store"
 )
@@ -56,11 +57,42 @@ func (h *handler) record(r *http.Request, e store.LedgerEntry, reservation strin
 	defer cancel()
 	if err := h.d.Store.RecordLedger(ctx, e, reservation); err != nil {
 		h.ledgerDegraded.Store(true)
+		metrics.SetDegraded(metrics.SeamProxy, true)
 		slog.Error("proxy: ledger append failed; denying traffic until a write succeeds",
 			"credential", e.CredentialName, "upstream", e.Upstream, "status", e.Status, "err", err)
 		return
 	}
 	h.ledgerDegraded.Store(false)
+	metrics.SetDegraded(metrics.SeamProxy, false)
+}
+
+// reasonFor classifies a refusal for the decisions metric — a fixed
+// vocabulary keyed on the messages this package writes, never the
+// message itself (free text is not a label value).
+func reasonFor(status int, msg string) metrics.Reason {
+	switch {
+	case strings.HasPrefix(msg, "unknown upstream"), strings.HasPrefix(msg, "path not allowed"):
+		return metrics.ReasonRoute
+	case strings.HasPrefix(msg, "request body"):
+		return metrics.ReasonBadRequest
+	case strings.HasPrefix(msg, "model has no configured price"):
+		return metrics.ReasonUnpricedModel
+	case strings.HasPrefix(msg, "spend ledger unavailable"):
+		return metrics.ReasonAuditDegraded
+	case strings.HasPrefix(msg, "monthly"):
+		return metrics.ReasonBudget
+	case strings.HasPrefix(msg, "metering unavailable"):
+		return metrics.ReasonMetering
+	case strings.HasPrefix(msg, "upstream credential unavailable"):
+		return metrics.ReasonUpstreamCredential
+	case strings.HasPrefix(msg, "upstream request build failed"):
+		return metrics.ReasonUpstreamUnreachable
+	case status == http.StatusUnauthorized:
+		return metrics.ReasonUnauthorized
+	case status == http.StatusTooManyRequests:
+		return metrics.ReasonBudget
+	}
+	return metrics.ReasonOther
 }
 
 // deny is the single exit for every pre-forward refusal: the denial is
@@ -77,6 +109,7 @@ func (h *handler) deny(w http.ResponseWriter, r *http.Request, cred store.Creden
 		CostSource:     "denied",
 		Status:         status,
 	}, reservation)
+	metrics.Decide(metrics.SeamProxy, metrics.Denied, reasonFor(status, msg))
 	http.Error(w, msg, status)
 }
 
@@ -86,18 +119,21 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request) {
 	// is known to the store only by hash.
 	bearer, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if bearer == "" {
+		metrics.Decide(metrics.SeamProxy, metrics.Denied, metrics.ReasonUnauthorized)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 	hash := sha256.Sum256([]byte(bearer))
 	cred, err := h.d.Store.CredentialByTokenHash(r.Context(), hash[:])
 	if errors.Is(err, store.ErrNotFound) {
+		metrics.Decide(metrics.SeamProxy, metrics.Denied, metrics.ReasonUnauthorized)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 	if err != nil {
 		// Fail closed, but distinguishably: no credential visibility, no egress.
 		slog.Error("proxy: credential lookup failed", "err", err)
+		metrics.Decide(metrics.SeamProxy, metrics.Denied, metrics.ReasonCredentialStore)
 		http.Error(w, "credential store unavailable", http.StatusServiceUnavailable)
 		return
 	}
@@ -223,9 +259,20 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request) {
 		outReq.Header.Set(k, v)
 	}
 
+	// The admission stands whatever the upstream does next; the outcome
+	// is what the metric's reason carries (ok, an upstream error, or
+	// unreachable), and the latency is the upstream's, measured here.
+	admitted := metrics.Allowed
+	admittedBy := metrics.ReasonOK
+	if res.Granted {
+		admitted, admittedBy = metrics.Granted, metrics.ReasonBudget
+	}
+	started := time.Now()
 	resp, err := h.d.client().Do(outReq)
 	if err != nil {
 		slog.Error("proxy: upstream call failed", "upstream", name, "err", err)
+		metrics.ObserveUpstream(metrics.SeamProxy, name, time.Since(started))
+		metrics.Decide(metrics.SeamProxy, admitted, metrics.ReasonUpstreamUnreachable)
 		// The attempt is ledgered even though it failed — spend is
 		// recorded before failures are honored (standing guidance); a
 		// transport failure has no usage to bill, so tokens are zero.
@@ -244,9 +291,15 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request) {
 	} else {
 		u = relayBuffered(w, resp.Body)
 	}
+	metrics.ObserveUpstream(metrics.SeamProxy, name, time.Since(started))
 	if resp.StatusCode < 300 && u == (usage{}) {
 		slog.Warn("proxy: no usage in upstream response; ledgering zero tokens",
 			"upstream", name, "model", req.Model, "stream", req.Stream)
+	}
+	if resp.StatusCode < 300 {
+		metrics.Decide(metrics.SeamProxy, admitted, admittedBy)
+	} else {
+		metrics.Decide(metrics.SeamProxy, admitted, metrics.ReasonUpstreamError)
 	}
 	h.record(r, ledgerFor(cred, name, req.Model, up, priced, price, u, resp.StatusCode), res.ID)
 }

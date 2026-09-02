@@ -2,14 +2,19 @@
 // enforcing LLM proxy mounted at kagent's ModelConfig baseUrl seam, the
 // P4b enforcing MCP gateway mounted at the tool-server seam, and the P7b
 // inbound bridge (the plane's one ingress: webhook → governed A2A
-// invoke). Four listeners: the LLM data plane, the MCP gateway (own
-// Service), the inbound bridge (own Service), and the admin plane
+// invoke). Five listeners: the LLM data plane, the MCP gateway (own
+// Service), the inbound bridge (own Service), the admin plane
 // (credentials, budgets, allowlists, ledger, audits) on a port no data
-// Service exposes.
+// Service exposes, and (P9) the operations listener — Prometheus
+// metrics and the readiness/liveness probes — on a port no Service
+// exposes at all.
 //
 // Secrets reach the process only as mounted files (never argv or env
-// values); non-secret wiring is env. Migrations run at startup —
-// idempotent, so a rollout is its own migration step.
+// values); non-secret wiring is env. Migrations run at startup under a
+// Postgres advisory lock — idempotent and replica-safe, so a rollout of
+// N replicas is its own migration step. The process holds no
+// governance state: every budget, grant, dedupe and decision is exact
+// in Postgres, so any number of replicas agree (P9, D24).
 package main
 
 import (
@@ -31,7 +36,9 @@ import (
 	"github.com/kaimahi-agents/kaimahi/plane/internal/gateway"
 	"github.com/kaimahi-agents/kaimahi/plane/internal/inbound"
 	"github.com/kaimahi-agents/kaimahi/plane/internal/meter"
+	"github.com/kaimahi-agents/kaimahi/plane/internal/metrics"
 	"github.com/kaimahi-agents/kaimahi/plane/internal/notify"
+	"github.com/kaimahi-agents/kaimahi/plane/internal/ops"
 	"github.com/kaimahi-agents/kaimahi/plane/internal/proxy"
 	"github.com/kaimahi-agents/kaimahi/plane/internal/redact"
 	"github.com/kaimahi-agents/kaimahi/plane/internal/store"
@@ -59,6 +66,9 @@ func main() {
 	mcpAddr := env("MCP_ADDR", ":8081")
 	inboundAddr := env("INBOUND_ADDR", ":8082")
 	adminAddr := env("ADMIN_ADDR", ":9091")
+	// P9: the operations listener — Prometheus metrics and the two
+	// probes — on a port of its own that no Service exposes.
+	opsAddr := env("OPS_ADDR", ":9092")
 	// The kagent controller's origin: the ONLY place the inbound bridge
 	// dials (per-agent A2A endpoints live under it).
 	a2aBase := env("A2A_BASE", inbound.DefaultA2ABase)
@@ -127,6 +137,10 @@ func main() {
 
 	st := store.New(pool)
 	mtr := &meter.Meter{Store: st}
+	// The store-derived metrics (ledger totals by credential name, live
+	// grants, open holds) are read at scrape time — replica-independent
+	// truths that live in Postgres, not in this process.
+	metrics.RegisterStore(st, func() time.Time { return meter.MonthStartUTC(time.Now()) })
 
 	// P8b: the approval notifier and the Slack command replier are one
 	// poster: a governed post through the plane's OWN gateway listener
@@ -194,12 +208,28 @@ func main() {
 	adminSrv := &http.Server{Addr: adminAddr, Handler: proxy.NewAdminMux(deps, adminTokenFile),
 		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute}
 
-	errCh := make(chan error, 4)
+	// P9: readiness needs Postgres (a plane that cannot read credentials
+	// or write the ledger fails every call closed anyway); liveness
+	// reports only a LOCAL fault — a data listener not answering on
+	// loopback, or a pool checked out with no progress — so a Postgres
+	// outage or a slow upstream never restarts the proxy.
+	opsSrv := &http.Server{Addr: opsAddr, Handler: ops.NewMux(ops.Deps{
+		Ready: pool,
+		Stats: func() ops.PoolStats {
+			s := pool.Stat()
+			return ops.PoolStats{Acquired: s.AcquiredConns(), Max: s.MaxConns(), AcquireCount: s.AcquireCount()}
+		},
+		Listeners: []string{"127.0.0.1" + portOf(dataAddr), "127.0.0.1" + portOf(mcpAddr), "127.0.0.1" + portOf(inboundAddr)},
+	}), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute}
+
+	errCh := make(chan error, 5)
 	go func() { errCh <- dataSrv.ListenAndServe() }()
 	go func() { errCh <- mcpSrv.ListenAndServe() }()
 	go func() { errCh <- inboundSrv.ListenAndServe() }()
 	go func() { errCh <- adminSrv.ListenAndServe() }()
-	slog.Info("kaimahi-proxy up", "data", dataAddr, "mcp", mcpAddr, "inbound", inboundAddr, "admin", adminAddr,
+	go func() { errCh <- opsSrv.ListenAndServe() }()
+	slog.Info("kaimahi-proxy up", "data", dataAddr, "mcp", mcpAddr, "inbound", inboundAddr, "admin", adminAddr, "ops", opsAddr,
+		"version", metrics.Version(),
 		"upstreams", len(cfg.Upstreams), "tool_upstreams", len(cfg.ToolUpstreams), "inbound_hooks", len(cfg.InboundHooks),
 		"approval_notifier", cfg.ApprovalNotifier != nil, "notifier_gateway", gatewayURL)
 
@@ -214,6 +244,9 @@ func main() {
 		_ = dataSrv.Shutdown(shutdownCtx)
 		_ = mcpSrv.Shutdown(shutdownCtx)
 		_ = adminSrv.Shutdown(shutdownCtx)
+		// The ops listener drains last: readiness keeps answering (503
+		// once the pool closes) while the data listeners finish.
+		defer func() { _ = opsSrv.Shutdown(shutdownCtx) }()
 		select {
 		case <-bridgeDone:
 		case <-shutdownCtx.Done():
