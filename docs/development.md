@@ -53,6 +53,10 @@ python3 scripts/check-doc-links.py
 python3 scripts/check-readme-front-door.py
 python3 scripts/check-readme-front-door-test.py
 python3 scripts/check-brand-assets.py
+# The one to run before pasting any cloud transcript into a PR: refuses
+# Azure identifiers (subscription, tenant, resource group, ACR host,
+# cluster FQDN, public IPs) and proves its own detector first.
+bash   scripts/check-no-azure-ids-test.sh && bash scripts/check-no-azure-ids.sh
 bash   scripts/kube-guard-test.sh
 
 # Container image
