@@ -545,9 +545,14 @@ jobs:
       # `make plane` above booted both replicas together against an
       # EMPTY database, so the migration lock was exercised for real
       # there (its outcome is the consistent version table and two
-      # Ready pods; the current pods are the post-restart generation,
-      # so both log "nothing to apply"). The lock race itself is also
-      # proven by the store test in go-plane.
+      # Ready pods). The current pods are usually the post-restart
+      # generation and log "nothing to apply" — but `make plane` restarts
+      # the deployment the moment Postgres is Ready, and a first-generation
+      # pod still in its connect retry can be replaced before it migrated,
+      # so a post-restart pod may be the one that logs "applied" (seen on
+      # PR #51). Either line is a clean boot under the lock; what must hold
+      # is the consistent version table below. The lock race itself is
+      # also proven by the store test in go-plane.
       - name: Both replicas serve, schema consistent under the migration lock
         if: steps.changes.outputs.docs_only != 'true'
         run: |
@@ -560,7 +565,7 @@ jobs:
           for pod in $pods; do
             KUBECTL="kubectl --context kind-kaimahi-p1" POD="$pod" bash scripts/plane-metrics.sh > "metrics-$pod.out"
             grep -q '^kaimahi_build_info{' "metrics-$pod.out"
-            kubectl --context kind-kaimahi-p1 -n kaimahi logs "$pod" | grep -q 'migrations: nothing to apply'
+            kubectl --context kind-kaimahi-p1 -n kaimahi logs "$pod" | grep -qE 'migrations: (nothing to apply|applied)'
           done
           kubectl --context kind-kaimahi-p1 -n kaimahi exec deploy/kaimahi-postgres -- \
             psql -U kaimahi -d kaimahi -tAc 'SELECT count(*), count(DISTINCT version_id) FROM goose_db_version WHERE version_id > 0' | tee versions.out
