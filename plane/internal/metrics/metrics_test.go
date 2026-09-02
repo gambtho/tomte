@@ -162,6 +162,20 @@ func TestStoreOutageDropsDerivedSeriesAndReportsDown(t *testing.T) {
 	require.EqualValues(t, 0, find(t, "kaimahi_store_up").GetMetric()[0].GetGauge().GetValue())
 }
 
+func TestPrimedUpstreamsExposeEmptyHistograms(t *testing.T) {
+	metrics.PrimeUpstreams(metrics.SeamGateway, []string{"kagent-tools", "not a name!"})
+	seen := map[string]bool{}
+	for _, m := range find(t, "kaimahi_upstream_latency_seconds").GetMetric() {
+		l := labels(m)
+		if l["seam"] == "gateway" {
+			seen[l["upstream"]] = true
+		}
+	}
+	require.True(t, seen["kagent-tools"], "primed series present before any observation")
+	require.True(t, seen["other"], "a name outside the shape primes as other")
+	require.False(t, seen["not a name!"])
+}
+
 func TestDecisionCountsIncrement(t *testing.T) {
 	before := decisionValue(t, "proxy", "denied", "budget")
 	metrics.Decide(metrics.SeamProxy, metrics.Denied, metrics.ReasonBudget)

@@ -169,6 +169,16 @@ func Decide(seam Seam, decision Decision, reason Reason) {
 	decisions.WithLabelValues(string(seam), string(decision), string(reason)).Inc()
 }
 
+// PrimeUpstreams creates the latency series for the configured upstream
+// names at boot, so a replica that has not forwarded anything yet
+// exposes empty histograms rather than none. Names outside the shape
+// collapse to "other" like everywhere else.
+func PrimeUpstreams(seam Seam, upstreams []string) {
+	for _, u := range upstreams {
+		upstreamLatency.WithLabelValues(string(seam), shaped(upstreamShape, u))
+	}
+}
+
 // ObserveUpstream records how long an admitted call spent upstream.
 func ObserveUpstream(seam Seam, upstream string, d time.Duration) {
 	upstreamLatency.WithLabelValues(string(seam), shaped(upstreamShape, upstream)).Observe(d.Seconds())

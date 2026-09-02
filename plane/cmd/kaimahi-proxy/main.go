@@ -21,10 +21,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -141,6 +143,8 @@ func main() {
 	// grants, open holds) are read at scrape time — replica-independent
 	// truths that live in Postgres, not in this process.
 	metrics.RegisterStore(st, func() time.Time { return meter.MonthStartUTC(time.Now()) })
+	metrics.PrimeUpstreams(metrics.SeamProxy, slices.Sorted(maps.Keys(cfg.Upstreams)))
+	metrics.PrimeUpstreams(metrics.SeamGateway, slices.Sorted(maps.Keys(cfg.ToolUpstreams)))
 
 	// P8b: the approval notifier and the Slack command replier are one
 	// poster: a governed post through the plane's OWN gateway listener

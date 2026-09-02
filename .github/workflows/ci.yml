@@ -1130,7 +1130,11 @@ jobs:
           grep -q 'kaimahi_ledger_month_tokens{credential="hello-world"}' metrics.out
           grep -q 'kaimahi_ledger_month_tokens{credential="race-cred"}' metrics.out
           grep -q '^kaimahi_store_up 1' metrics.out
-          grep -q 'kaimahi_decisions_total{decision="denied",reason="budget",seam="proxy"} [1-9]' metrics.out
+          # Per-replica series exist from boot (primed), whatever this
+          # replica has seen since the restart above: the budget-denial
+          # counter and a latency histogram for the configured upstream.
+          grep -q 'kaimahi_decisions_total{decision="denied",reason="budget",seam="proxy"} ' metrics.out
+          grep -q 'kaimahi_upstream_latency_seconds_bucket{le="+Inf",seam="proxy",upstream="ollama"} ' metrics.out
           # No token shape and no synthetic Slack id ever appears in a label.
           if grep -E 'kmh_[0-9a-f]{20,}|U0CIAPPROVER|U0NOBODY|C0CIONLY' metrics.out; then
             echo 'an identifier leaked into the metrics' >&2; exit 1
