@@ -11,7 +11,7 @@
 > schema-valid only, proposed, or unbuilt. The name is provisional — see
 > [docs/NAMING.md](docs/NAMING.md).
 
-**Governance for AI agents running on Kubernetes.**
+## Governance for AI agents running on Kubernetes.
 
 Kaimahi builds on [kagent](https://kagent.dev) rather than replacing it. It adds
 controls at the model and MCP boundaries for consequential agent work.
