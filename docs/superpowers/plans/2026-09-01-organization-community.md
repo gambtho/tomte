@@ -72,8 +72,8 @@ private report flow; the profile and shared security policy link to it.
 
 Kaimahi is an incubation project built on [kagent](https://kagent.dev). It adds
 model-call budgets and metering, keeps provider credentials away from agents,
-constrains and audits tool calls, and supports bounded human approval for
-consequential actions.
+constrains and audits tool calls, and supports human approval through bounded
+grants for consequential actions.
 
 Work happens in public. Capability labels say what is built, demonstrated once,
 proposed, or unbuilt.
@@ -151,8 +151,8 @@ vulnerability** to open a private GitHub security advisory. For Kaimahi, use:
 https://github.com/kaimahi-agents/kaimahi/security/advisories/new
 
 Include the affected commit or version, deployment assumptions, reproduction
-steps, impact, and suggested mitigation. Remove credentials, tenant identifiers,
-cluster addresses, and user data.
+steps, impact, and any suggested mitigation. Remove credentials, tenant
+identifiers, cluster addresses, and user data.
 
 Kaimahi is an incubation project with no formal support window or response-time
 SLA. Maintainers will acknowledge actionable reports and coordinate disclosure
