@@ -189,9 +189,16 @@ func SetDegraded(seam Seam, tripped bool) {
 	degraded.WithLabelValues(string(seam)).Set(v)
 }
 
-// Version is the build's VCS revision as Go stamped it (short), or
-// "unknown" when the binary was built outside a checkout.
+// buildVersion is set by the linker (plane/Dockerfile passes the git
+// revision as -X); the image build has no .git to stamp from itself.
+var buildVersion string
+
+// Version is the build's revision: the linker-set value, else the VCS
+// revision as Go stamped it (short), else "unknown".
 func Version() string {
+	if buildVersion != "" {
+		return buildVersion
+	}
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
 		return "unknown"

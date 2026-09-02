@@ -37,6 +37,9 @@ ARCH := $(shell uname -m | sed -e s/x86_64/amd64/ -e s/aarch64/arm64/)
 # image can never satisfy a newer manifest silently (P4b deviation 6).
 PLANE_IMAGE_REPO ?= kaimahi-proxy
 PLANE_IMAGE_TAG  ?= p9
+# The revision stamped into the binary for kaimahi_build_info (P9); the
+# image build context carries no .git. "unknown" outside a checkout.
+PLANE_VERSION    ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 
 # ---- environment-dependent settings --------------------------------------
 # Everything that genuinely differs between kind and a managed cluster is
@@ -589,7 +592,7 @@ plane: guard plane-image plane-secrets
 
 ifeq ($(TARGET),kind)
 plane-image:
-	docker build -t $(PLANE_IMAGE) plane/
+	docker build --build-arg VERSION=$(PLANE_VERSION) -t $(PLANE_IMAGE) plane/
 	kind load docker-image $(PLANE_IMAGE) --name $(KIND_CLUSTER)
 else
 ## plane-image (TARGET=aks): build IN Azure with ACR Tasks. No local docker
@@ -599,7 +602,7 @@ else
 plane-image:
 	@test -n "$(ACR_NAME)" || \
 		{ echo 'ACR_NAME is required for TARGET=aks (see docs/aks.md)' >&2; exit 1; }
-	az acr build --registry $(ACR_NAME) \
+	az acr build --registry $(ACR_NAME) --build-arg VERSION=$(PLANE_VERSION) \
 		--image $(PLANE_IMAGE_REPO):$(PLANE_IMAGE_TAG) plane/
 endif
 
