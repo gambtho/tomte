@@ -168,6 +168,9 @@ func (f *fakeStore) find(id string) *store.ApprovalRequest {
 func (f *fakeStore) ApproveRequest(_ context.Context, id string, expiresAt *time.Time, maxUses *int32, amount *int64, decidedBy string) (store.Grant, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if decidedBy == "" {
+		return store.Grant{}, store.ErrBounds
+	}
 	r := f.find(id)
 	if r == nil {
 		return store.Grant{}, store.ErrNotFound
@@ -192,6 +195,9 @@ func (f *fakeStore) ApproveRequest(_ context.Context, id string, expiresAt *time
 func (f *fakeStore) DenyApprovalRequest(_ context.Context, id string, decidedBy string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if decidedBy == "" {
+		return store.ErrBounds
+	}
 	r := f.find(id)
 	if r == nil {
 		return store.ErrNotFound

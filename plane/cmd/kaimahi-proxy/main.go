@@ -219,12 +219,13 @@ func main() {
 		case <-shutdownCtx.Done():
 			slog.Warn("inbound workers did not drain before shutdown; queued events are lost (their admitted rows stand without an outcome)")
 		}
-		stopPoster()
-		select {
-		case <-posterDone:
-		case <-shutdownCtx.Done():
-			slog.Warn("notifier did not drain before shutdown; queued posts are lost (the requests stay filed)")
+		if poster != nil {
+			if n := poster.Drain(shutdownCtx); n > 0 {
+				slog.Warn("notifier did not drain before shutdown; queued posts are lost (the requests stay filed)", "queued", n)
+			}
 		}
+		stopPoster()
+		<-posterDone
 	case err := <-errCh:
 		// Any listener stopping before a shutdown signal is abnormal —
 		// even ErrServerClosed — so exit nonzero and let Kubernetes

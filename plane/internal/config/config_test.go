@@ -202,7 +202,7 @@ func TestParseTTL(t *testing.T) {
 		require.NoError(t, err, in)
 		require.Equal(t, want, got, in)
 	}
-	for _, in := range []string{"", "m", "5x", "-5m", "0", "31d", "1.5h", "5 m", "9999999999s"} {
+	for _, in := range []string{"", "m", "5x", "-5m", "0", "31d", "1.5h", "5 m", "9999999999s", "999999999d", "999999999h"} {
 		_, err := config.ParseTTL(in)
 		require.Error(t, err, in)
 	}

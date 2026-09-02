@@ -364,11 +364,12 @@ func ParseTTL(s string) (time.Duration, error) {
 	if err != nil {
 		return 0, err
 	}
-	d := time.Duration(n) * unit
-	if d < time.Second || d > MaxTTL {
+	// Bound BEFORE multiplying: 999999999d overflows int64 nanoseconds
+	// and could wrap back into range.
+	if n < 1 || n > int64(MaxTTL/unit) {
 		return 0, fmt.Errorf("ttl out of range [1s, 30d]")
 	}
-	return d, nil
+	return time.Duration(n) * unit, nil
 }
 
 // MaxTTL is the longest grant any path mints.

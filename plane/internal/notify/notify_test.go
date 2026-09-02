@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/kaimahi-agents/kaimahi/plane/internal/gateway"
 )
 
 // The notifier's contract: a governed post through the plane's own
@@ -85,10 +87,8 @@ func (g *gw) toolCalls() []call {
 }
 
 type fixture struct {
-	gw     *gw
 	p      *Poster
 	sleeps []time.Duration
-	done   chan struct{}
 }
 
 func newFixture(t *testing.T, url string, opts ...func(*Deps)) *fixture {
@@ -146,16 +146,18 @@ func TestPostGoesThroughTheGatewayUnderThePlanesCredential(t *testing.T) {
 func TestRefusalsAreRetriedBounded(t *testing.T) {
 	for name, answer := range map[string]func(w http.ResponseWriter, _ *http.Request){
 		"redirect refused (502 before any byte went out)": func(w http.ResponseWriter, _ *http.Request) {
-			http.Error(w, "tool upstream redirected (refused)", 502)
+			http.Error(w, gateway.MsgUpstreamRedirected, http.StatusBadGateway)
 		},
-		"pre-forward 503": func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "tool audit unavailable", 503) },
+		"pre-forward 503": func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "tool audit unavailable", http.StatusServiceUnavailable)
+		},
 		"not allowlisted (JSON-RPC error)": func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":2,"error":{"code":-32001,"message":"tool not permitted"}}`)
 		},
 		"slack refused (isError)": func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":2,"result":{"isError":true,"content":[{"type":"text","text":"not_in_channel"}]}}`)
 		},
-		"unauthorized (401)": func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "unauthorized", 401) },
+		"unauthorized (401)": func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "unauthorized", http.StatusUnauthorized) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			g := newGW(t)
@@ -172,9 +174,11 @@ func TestAmbiguousFailuresAreNotRetried(t *testing.T) {
 	for name, answer := range map[string]func(w http.ResponseWriter, _ *http.Request){
 		// The gateway's 502 covers a dial refusal AND a reset after the
 		// post was delivered; it cannot say which, so neither is retried.
-		"upstream unreachable (502)": func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "tool upstream unreachable", 502) },
-		"upstream 500 relayed":       func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "boom", 500) },
-		"unparseable 200":            func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "<html>") },
+		"upstream unreachable (502)": func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "tool upstream unreachable", http.StatusBadGateway)
+		},
+		"upstream 500 relayed": func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "boom", http.StatusInternalServerError) },
+		"unparseable 200":      func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "<html>") },
 		"timeout": func(w http.ResponseWriter, r *http.Request) {
 			select {
 			case <-r.Context().Done():
@@ -239,7 +243,7 @@ func TestInitializeFailureStillSendsTheCall(t *testing.T) {
 		}
 		_ = json.Unmarshal(raw, &m)
 		calls = append(calls, m.Method)
-		http.Error(w, "tool upstream unreachable", 502)
+		http.Error(w, "tool upstream unreachable", http.StatusBadGateway)
 	}))
 	t.Cleanup(srv.Close)
 	f := newFixture(t, srv.URL)

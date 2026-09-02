@@ -38,7 +38,7 @@ under `inbound_hooks`. Three ship:
 |---|---|---|---|
 | `demo` | Kaimahi signed webhook (`kaimahi-hmac`) | `hello-world` | the generic primitive; CI drives it end to end |
 | `demo-bearer` | bearer token (`bearer`) | `hello-world` | for a source that can set a header but cannot sign |
-| `slack-events` | Slack request signing (`slack`) | `hello-slack` | the one named source; `app_mention` only, from one channel; also carries the approval commands (`approve`/`deny`) from listed approvers; live-verified on AKS, see below |
+| `slack-events` | Slack request signing (`slack`) | `hello-slack` | the one named source; `app_mention` only, from one channel; also carries the approval commands (`approve`/`deny`) from listed approvers (asserted keyless in CI; live verification pending); live-verified on AKS as the loop, see below |
 
 Each hook names the plane credential it is bound to, how the caller
 proves it, the agent it triggers, and `budget_credential`: the credential
@@ -308,7 +308,7 @@ stale (a grant that just expired, before kagent's next reconcile) or a
 direct MCP client tries. Either way the second gate held.
 
 **Both approvals can be given from Slack.** The same hook carries a
-second verb: a mention whose words are `approve <id> [uses=N] [ttl=D]`
+second verb: a mention whose words are `approve <id> [uses=N] [ttl=D] [amount=N]`
 or `deny <id>` is an approval command, recognised after the signature
 and the channel allowlist and *before* the grant gate, so deciding a
 request needs no inbound grant and never runs the agent. Only a Slack

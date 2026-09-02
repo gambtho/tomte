@@ -397,7 +397,8 @@ to this path:
 - **The Slack MCP server's own endpoint auth is not effective**
   (v1.3.0, http transport). The plane injects a credential the server
   does not check.
-- **Approvals are routed to Slack, and only to Slack.** A filed request
+- **Slack is the only chat route for approvals** (the CLI path, `make
+  approve`, remains and records `admin`). A filed request
   is announced in the pinned channel by the plane's own governed post
   (credential `kaimahi-plane`, allowlisted to the posting tool), and a
   listed approver decides it with `@kaimahi approve <id>`; the grant

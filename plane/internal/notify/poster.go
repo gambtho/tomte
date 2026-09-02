@@ -28,7 +28,10 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
+
+	"github.com/kaimahi-agents/kaimahi/plane/internal/gateway"
 )
 
 // Deps configures the Poster.
@@ -75,8 +78,9 @@ type Post struct {
 
 // Poster sends posts asynchronously through the gateway.
 type Poster struct {
-	d    Deps
-	jobs chan Post
+	d        Deps
+	jobs     chan Post
+	inflight atomic.Bool
 }
 
 func New(d Deps) *Poster {
@@ -132,7 +136,28 @@ func (p *Poster) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case post := <-p.jobs:
+			p.inflight.Store(true)
 			p.send(ctx, post)
+			p.inflight.Store(false)
+		}
+	}
+}
+
+// Drain waits until the queue is empty and nothing is in flight, or ctx
+// is done; it reports how many posts were still queued. Shutdown calls
+// it BEFORE cancelling Run, so a post filed during the servers' drain
+// still goes out within the shutdown budget.
+func (p *Poster) Drain(ctx context.Context) (queued int) {
+	t := time.NewTicker(50 * time.Millisecond)
+	defer t.Stop()
+	for {
+		if len(p.jobs) == 0 && !p.inflight.Load() {
+			return 0
+		}
+		select {
+		case <-ctx.Done():
+			return len(p.jobs)
+		case <-t.C:
 		}
 	}
 }
@@ -326,7 +351,7 @@ func classifyResponse(status int, contentType string, body []byte) (outcome, err
 	switch {
 	case status == http.StatusOK:
 	case status >= 400 && status < 500, status == http.StatusServiceUnavailable,
-		status == http.StatusBadGateway && strings.Contains(string(body), "redirected (refused)"):
+		status == http.StatusBadGateway && strings.TrimSpace(string(body)) == gateway.MsgUpstreamRedirected:
 		return refused, fmt.Errorf("gateway answered HTTP %d: %s", status, strings.TrimSpace(string(body)))
 	default:
 		return ambiguous, fmt.Errorf("gateway answered HTTP %d: %s", status, strings.TrimSpace(string(body)))

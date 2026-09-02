@@ -1015,7 +1015,7 @@ notify-slack: guard
 slack-mention:
 	@test -n "$(SLACK_USER)" && test -n "$(COMMAND)" || \
 		{ echo "usage: make slack-mention SLACK_USER=U… COMMAND='approve <id> [uses=N] [ttl=D]' [EXPECT=200] [WANT=...]" >&2; exit 1; }
-	@KUBECTL="$(KUBECTL)" bash scripts/slack-mention-probe.sh "$(SLACK_USER)" "$(COMMAND)"
+	@KUBECTL="$(KUBECTL)" EXPECT="$(EXPECT)" WANT="$(WANT)" bash scripts/slack-mention-probe.sh "$(SLACK_USER)" "$(COMMAND)"
 
 ## ---- P8: the public edge (docs/inbound.md, "Putting it on the internet") ----
 #
