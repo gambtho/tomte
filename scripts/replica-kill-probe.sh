@@ -45,7 +45,7 @@ test -s "$workdir/token" || { echo "$GOVERNED_SECRET missing/empty (run make gov
 
 ledger_rows() { # count the credential's allowed free rows via the admin script
   KUBECTL="$KUBECTL" bash "$(dirname "$0")/plane-admin.sh" ledger "$CRED" 2>/dev/null \
-    | grep -cE "^$CRED +$UPSTREAM +[^ ]+ +[0-9]+ +[0-9]+ +[0-9]+ +(free|priced|unpriced) +200" || [ $? = 1 ]
+    | grep -cE " $CRED +$UPSTREAM +[^ ]+ +[0-9]+ +[0-9]+ +[0-9]+ +(free|priced|unpriced) +200" || [ $? = 1 ]
 }
 
 mapfile -t pods < <($KUBECTL -n "$NAMESPACE" get pods -l app=kaimahi-proxy \
