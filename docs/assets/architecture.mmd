@@ -1,0 +1,32 @@
+%%{init: {"theme": "base", "flowchart": {"htmlLabels": true, "nodeSpacing": 26, "rankSpacing": 34, "curve": "basis"}, "themeVariables": {"fontFamily": "Arial, Helvetica, sans-serif", "fontSize": "15px", "primaryColor": "#F7FBFC", "primaryTextColor": "#071521", "primaryBorderColor": "#0D3266", "lineColor": "#0D3266", "edgeLabelBackground": "#FFFFFF", "clusterBkg": "#E8F7FA", "clusterBorder": "#0D3266", "tertiaryColor": "#E8F7FA"}}}%%
+flowchart TB
+    A["Kubernetes-hosted agent"]
+
+    subgraph K["Kaimahi governance plane"]
+      direction TB
+      P["Bounded approvals<br/>expiry and/or use count"]
+      L["LLM proxy<br/>auth · budgets · credential custody · spend ledger"]
+      T["MCP gateway<br/>tool allowlists · upstream bounds · audit"]
+      P -. "temporary grant" .-> L
+      P -. "temporary grant" .-> T
+    end
+
+    M["Model provider"]
+    X["MCP tool server"]
+
+    A -->|"governed model call"| L
+    A -->|"governed tool call"| T
+    L --> M
+    T --> X
+    A -. "plain model preset · ungoverned" .-> M
+    A -. "direct MCP wiring · ungoverned" .-> X
+
+    classDef agent fill:#071521,color:#FFF1B3,stroke:#20D6E8,stroke-width:2px;
+    classDef control fill:#F7FBFC,color:#071521,stroke:#0D3266,stroke-width:2px;
+    classDef approval fill:#FFF1B3,color:#071521,stroke:#D67A08,stroke-width:2px;
+    classDef target fill:#FFFFFF,color:#071521,stroke:#124E96,stroke-width:2px;
+    class A agent;
+    class L,T control;
+    class P approval;
+    class M,X target;
+    linkStyle 4,5 stroke:#536878,stroke-width:1.5px,stroke-dasharray:5 4;
