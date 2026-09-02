@@ -222,11 +222,26 @@ func (a *App) stepKagent() error {
 // and a non-default one is restored after the apply, with a warning. Only a
 // NotFound (fresh cluster) may skip the capture — ANY other read failure
 // aborts rather than risk silently un-governing an agent.
+// isNotFound reports whether a kubectl failure was "the object is not there",
+// as opposed to "the cluster could not be reached" or "you may not read it".
+//
+// The distinction is the whole point of the capture-then-restore dance: a
+// fresh cluster legitimately has no agent yet, but an unreachable API server
+// must NEVER be read as "nothing to preserve" — that is how a re-apply
+// silently un-governs a live agent.
+func isNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	return strings.Contains(message, "NotFound") || strings.Contains(message, `" not found`)
+}
+
 func (a *App) liveModelConfig(agent string) (string, error) {
 	out, err := a.kubectlCapture("-n", "kagent", "get", "agent", agent,
 		"-o", "jsonpath={.spec.declarative.modelConfig}")
 	if err != nil {
-		if strings.Contains(err.Error(), "NotFound") || strings.Contains(err.Error(), "not found") {
+		if isNotFound(err) {
 			return "", nil
 		}
 		return "", fmt.Errorf("cannot read %s's live modelConfig (refusing to risk un-governing it): %w", agent, err)
@@ -302,7 +317,7 @@ func (a *App) stepToolsAgent() error {
 	var live agentJSON
 	raw, err := a.kubectlCapture("-n", "kagent", "get", "agent", "hello-tools", "-o", "json")
 	switch {
-	case err != nil && (strings.Contains(err.Error(), "NotFound") || strings.Contains(err.Error(), "not found")):
+	case isNotFound(err):
 		// Fresh cluster: nothing to preserve.
 	case err != nil:
 		return fmt.Errorf("cannot read hello-tools' live tool wiring (refusing to risk un-governing it): %w", err)
@@ -312,15 +327,27 @@ func (a *App) stepToolsAgent() error {
 		}
 	}
 
-	server := ""
+	// Is the live agent wired to the GATEWAY? Every entry is inspected, not
+	// just the first: an agent with a second tool that happens to sort ahead
+	// of the governed one would otherwise read as ungoverned and be quietly
+	// pointed back at the unaudited server. And a decode failure is an
+	// error, not a "no": failing to understand the live wiring is exactly
+	// when this code must not act.
+	governedByGateway := false
 	if len(live.Spec.Declarative.Tools) > 0 {
 		var tools []struct {
 			McpServer struct {
 				Name string `json:"name"`
 			} `json:"mcpServer"`
 		}
-		if err := json.Unmarshal(live.Spec.Declarative.Tools, &tools); err == nil && len(tools) > 0 {
-			server = tools[0].McpServer.Name
+		if err := json.Unmarshal(live.Spec.Declarative.Tools, &tools); err != nil {
+			return fmt.Errorf("cannot read hello-tools' live tool wiring (refusing to risk un-governing it): %w", err)
+		}
+		for _, tool := range tools {
+			if tool.McpServer.Name == "kaimahi-tools" {
+				governedByGateway = true
+				break
+			}
 		}
 	}
 
@@ -333,7 +360,7 @@ func (a *App) stepToolsAgent() error {
 			return err
 		}
 	}
-	if server == "kaimahi-tools" && len(live.Spec.Declarative.Tools) > 0 {
+	if governedByGateway {
 		a.notef("NOTE: hello-tools was governed via kaimahi-tools — restoring gateway wiring ('make ungovern-tools' opts out)")
 		patch := fmt.Sprintf(`{"spec":{"declarative":{"tools":%s}}}`, string(live.Spec.Declarative.Tools))
 		if err := a.kubectlRun("-n", "kagent", "patch", "agent", "hello-tools", "--type", "merge", "-p", patch); err != nil {

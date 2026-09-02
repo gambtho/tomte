@@ -54,7 +54,7 @@ kmx down
 | Command | What it does |
 |---|---|
 | `kmx ctx` | print the context kmx will act on, where that came from, and its posture |
-| `kmx ctx <context>` | select that context for later commands (recorded in `$XDG_CONFIG_HOME/kmx/context`) |
+| `kmx ctx <context>` | select that context for later commands (recorded in kmx's config directory — `~/.config/kmx/context` on Linux; set `KMX_HOME` to put it elsewhere) |
 | `kmx up` | create the kind cluster, deploy Ollama, pull the pinned model, install kagent by helm, apply both agents, wait for each to be Ready, print status |
 | `kmx up --step <step>` | one step only: `cluster`, `ollama`, `model`, `kagent`, `agent`, `tools-agent` |
 | `kmx agent create <name>` | scaffold `agents/<name>.yaml` and apply it |
@@ -83,6 +83,7 @@ run.
 | `MODEL` | `qwen2.5:3b` | model pulled into Ollama |
 | `CHAT_PORT` | `8083` | local port for the controller forward |
 | `KAIMAHI_CONFIRM` | unset | confirm a non-kind context, by name |
+| `KMX_HOME` | `~/.config/kmx` | where the selected context and the cached kagent binary live |
 
 `--context <name>` overrides `KUBE_CTX` for one command.
 

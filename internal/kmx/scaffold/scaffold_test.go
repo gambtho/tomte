@@ -156,6 +156,31 @@ func TestKeyShapedContentIsRefused(t *testing.T) {
 	}
 }
 
+// Emission escapes: a quote becomes \" on the way into a scalar, which moved
+// an assigned key out from under the api-key shape and let it through. The
+// raw-input scan is what closes that; this is the reproduction, as a test.
+func TestAKeyCannotEscapeThroughQuoting(t *testing.T) {
+	for _, field := range []string{
+		`api_key: "AKIAIOSFODNN7EXAMPLEKEY123456"`,
+		`api-key = 'AKIAIOSFODNN7EXAMPLEKEY123456'`,
+		`APIKEY: "AKIAIOSFODNN7EXAMPLEKEY123456"`,
+	} {
+		spec := base("quoted-leak")
+		spec.Description = field
+		doc, err := Generate(spec)
+		if err == nil {
+			t.Errorf("a key in --description must be refused, got:\n%s", doc)
+		}
+	}
+	// And the same text reaching the document through the block scalar,
+	// where no escaping happens.
+	spec := base("block-leak")
+	spec.Instructions = "Authenticate with\napi_key: \"AKIAIOSFODNN7EXAMPLEKEY123456\"\n"
+	if _, err := Generate(spec); err == nil {
+		t.Error("a key in --instructions must be refused")
+	}
+}
+
 func TestKeyShapeCheckRunsOnTheWholeDocument(t *testing.T) {
 	// The check runs on the FINAL manifest, so it cannot be walked around by
 	// splitting a key across two flags.

@@ -97,8 +97,23 @@ func Ensure(opt Options) (string, error) {
 	goos, goarch := Platform()
 	name := fmt.Sprintf("kagent-%s-%s-%s", opt.Version, goos, goarch)
 	path := filepath.Join(opt.CacheDir, name)
-	if info, err := os.Stat(path); err == nil && !info.IsDir() {
-		return path, nil
+	// A cache HIT is re-verified against the digest recorded when it was
+	// downloaded. "Checksum-verified" has to mean the bytes about to be
+	// executed, not the bytes that were fetched some other day: anything with
+	// write access to the cache directory could otherwise substitute a binary
+	// that then runs on every chat, unchecked. Hashing ~60MB costs
+	// milliseconds; a compromised CLI holds the kubeconfig.
+	if cached, err := os.ReadFile(path); err == nil {
+		if sha, err := os.ReadFile(path + ".sha256"); err == nil && Verify(cached, sha) == nil {
+			return path, nil
+		}
+		// Unverifiable: no record, or it no longer matches. Fetch again
+		// rather than run it.
+		if opt.Log != nil {
+			fmt.Fprintf(opt.Log, "cached kagent CLI at %s does not match its recorded digest — re-fetching\n", path)
+		}
+		_ = os.Remove(path)
+		_ = os.Remove(path + ".sha256")
 	}
 
 	base := opt.Base
@@ -146,6 +161,13 @@ func Ensure(opt Options) (string, error) {
 		return "", err
 	}
 	if err := os.Rename(tmp.Name(), path); err != nil {
+		return "", err
+	}
+	// Record the published digest beside the binary so the next run can
+	// re-verify what it is about to execute without going back to the
+	// network. Written after the rename: a digest with no binary is
+	// harmless, a binary with no digest is simply re-fetched.
+	if err := os.WriteFile(path+".sha256", shaFile, 0o644); err != nil {
 		return "", err
 	}
 	return path, nil

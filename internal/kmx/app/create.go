@@ -52,6 +52,12 @@ func (a *App) CreateAgent(opt CreateOptions) error {
 	if namespace == "" {
 		namespace = config.DefaultNamespace
 	}
+	// `--out -` prints and stops, so it is the same kind of action as
+	// --no-apply: a pure generate that must still work with no cluster in
+	// reach (a GitOps checkout, say).
+	if opt.Out == "-" {
+		opt.NoApply = true
+	}
 
 	modelConfig, governed, err := a.resolveModelConfig(opt, namespace)
 	if err != nil {
@@ -123,18 +129,43 @@ func (a *App) CreateAgent(opt CreateOptions) error {
 // its first call. On a fresh `kmx up` cluster there is no plane (milestone 1
 // does not deploy one, D27), so the keyless in-cluster preset is used and the
 // ungoverned warning is printed. An explicit --model always wins.
+// An unreachable cluster is NOT "no plane". Getting that wrong is the whole
+// failure mode this project exists to prevent: a governed agent silently
+// scaffolded onto the keyless preset, with no budget, no ledger and no audit,
+// because an API call blipped. So the read distinguishes a genuine NotFound
+// from any other failure, and only the former means "no plane here".
 func (a *App) resolveModelConfig(opt CreateOptions, namespace string) (string, bool, error) {
 	if opt.ModelConfig != "" {
 		return opt.ModelConfig, opt.ModelConfig == config.GovernedModelConfig, nil
 	}
-	if a.modelConfigExists(config.GovernedModelConfig, namespace) {
+	governed, err := a.modelConfigExists(config.GovernedModelConfig, namespace)
+	switch {
+	case err != nil && !opt.NoApply:
+		return "", false, err
+	case err != nil:
+		// Scaffolding to a file without applying is a legitimate offline
+		// action; say plainly that the governance choice was a guess.
+		a.notef("NOTE: could not ask the cluster whether a governed preset exists (%v).\n"+
+			"      Scaffolding against %q — check the modelConfig before you apply this.",
+			err, config.KeylessModelConfig)
+		return config.KeylessModelConfig, false, nil
+	case governed:
 		return config.GovernedModelConfig, true, nil
 	}
 	return config.KeylessModelConfig, false, nil
 }
 
-func (a *App) modelConfigExists(name, namespace string) bool {
-	return a.kubectlQuiet("-n", namespace, "get", "modelconfig", name)
+func (a *App) modelConfigExists(name, namespace string) (bool, error) {
+	_, err := a.kubectlCapture("-n", namespace, "get", "modelconfig", name, "-o", "name")
+	switch {
+	case err == nil:
+		return true, nil
+	case isNotFound(err):
+		return false, nil
+	default:
+		return false, fmt.Errorf("cannot read modelconfig %q in namespace %s — refusing to guess whether this cluster has a governance plane: %w",
+			name, namespace, err)
+	}
 }
 
 // preflightModelConfig checks the ModelConfig before applying.
@@ -143,7 +174,11 @@ func (a *App) modelConfigExists(name, namespace string) bool {
 // reconcile in silence: the Agent exists, never becomes Ready, and nothing
 // says why. Check first, and print the fix (#16 hit exactly this).
 func (a *App) preflightModelConfig(name, namespace string) error {
-	if a.modelConfigExists(name, namespace) {
+	exists, err := a.modelConfigExists(name, namespace)
+	if err != nil {
+		return err
+	}
+	if exists {
 		return nil
 	}
 	extra := ""

@@ -140,7 +140,8 @@ func (a *App) Chat(agent, task string) error {
 // check.
 func (a *App) waitServable(agent string) error {
 	path := fmt.Sprintf("/api/v1/namespaces/kagent/services/%s:8080/proxy/.well-known/agent-card.json", agent)
-	ok := run.Poll(120*time.Second, time.Second, func() bool {
+	// 120 tries a second apart — `for _ in $(seq 1 120); do … sleep 1; done`.
+	ok := run.Poll(120, time.Second, func() bool {
 		return a.kubectlQuiet("-n", "kagent", "get", "--raw", path)
 	})
 	if !ok {
@@ -208,7 +209,8 @@ func (a *App) portForward() (func(), error) {
 	}
 
 	want := "Forwarding from 127.0.0.1:" + a.Cfg.ChatPort
-	run.Poll(20*time.Second, 250*time.Millisecond, func() bool {
+	// 80 tries a quarter-second apart — `for _ in $(seq 1 80); do … sleep 0.25`.
+	run.Poll(80, 250*time.Millisecond, func() bool {
 		body, _ := os.ReadFile(logPath)
 		if strings.Contains(string(body), want) {
 			return true

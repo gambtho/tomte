@@ -55,19 +55,38 @@ ALLOWED = (
     re.compile(r"\bcommand -v go\b"),
     # The pinned kagent CLI fetch: shared with slack-post and github-ask,
     # which are still make's, and handed to kmx as KAGENT=bin/kagent so a
-    # checkout keeps one binary.
-    re.compile(r"kagent-(dev|\$\(OS\)|linux|darwin)"),
+    # checkout keeps one binary. Anchored to the release URL rather than the
+    # word "kagent", which would exempt any line that merely mentions it.
+    re.compile(r"github\.com/kagent-dev/kagent/releases/download"),
     re.compile(r"^\s*(curl|chmod|mkdir|test|sum=|echo|rm -f bin/kagent)"),
 )
 
+# The kmx invocation inside a recipe line, and everything it was asked to do.
+KMX_CALL = re.compile(r"\bbin/kmx\s+(?P<args>.*)$")
+
+
+def kmx_invocations(recipe: str) -> list[str]:
+    """The argument list of every `bin/kmx …` call in a recipe."""
+    calls = []
+    for line in recipe.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        match = KMX_CALL.search(line)
+        if match:
+            calls.append(match.group("args").strip())
+    return calls
+
 
 def offending_lines(recipe: str) -> list[str]:
-    """Lines in an owned recipe that reach the cluster without kmx."""
+    """Lines in an owned recipe that reach the cluster without kmx.
+
+    A line is NOT exempted just because it mentions kmx: `$(KMX) up --step
+    ollama && kubectl apply -f extra.yaml` delegates and re-implements at the
+    same time, which is the shape that would drift.
+    """
     bad = []
     for line in recipe.splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        if "kmx" in line:
             continue
         if any(pattern.search(line) for pattern in ALLOWED):
             continue
@@ -88,11 +107,30 @@ def dry_run(target: str) -> str:
     return result.stdout
 
 
+def delegates(target: str, expected: str, recipe: str) -> bool:
+    """Does the recipe hand kmx exactly the work this target owns?
+
+    Exact match on the argument list, not a substring of the whole dry run:
+    `make -n up` also prints its prerequisites' recipes, and "up" is a prefix
+    of "up --step cluster" — so a substring search would report that `up`
+    delegates even if the `up` target lost its recipe entirely and only its
+    steps still called kmx.
+    """
+    wanted = expected.removeprefix("kmx ")
+    for args in kmx_invocations(recipe):
+        if args == wanted:
+            return True
+        # `agent chat` carries the agent and the question, which vary.
+        if wanted == "agent chat" and args.startswith("agent chat "):
+            return True
+    return False
+
+
 def check() -> int:
     problems = []
     for target, expected in OWNED.items():
         recipe = dry_run(target)
-        if expected not in recipe.replace("bin/kmx", "kmx"):
+        if not delegates(target, expected, recipe):
             problems.append(f"{target}: does not delegate — expected `{expected}`")
         for line in offending_lines(recipe):
             problems.append(f"{target}: reaches the cluster without kmx: {line}")
@@ -119,6 +157,28 @@ SELFTEST = [
     ("an environment prefix", "KIND_CLUSTER='x' KUBE_CTX='kind-x' bin/kmx down", []),
     # A kubectl hidden behind a shell operator is still a kubectl.
     ("a chained kubectl", "true; kubectl -n kagent get pods", ["true; kubectl -n kagent get pods"]),
+    # …including one chained after a genuine delegation. Mentioning kmx must
+    # not exempt the rest of the line.
+    ("a kubectl chained after kmx", "bin/kmx up --step ollama && kubectl apply -f k8s/extra.yaml",
+     ["bin/kmx up --step ollama && kubectl apply -f k8s/extra.yaml"]),
+    # The kagent-fetch exemption is anchored to the release URL, so a line
+    # that merely mentions kagent-dev is still checked.
+    ("a kubectl on a file named after kagent-dev", "kubectl apply -f kagent-dev-values.yaml",
+     ["kubectl apply -f kagent-dev-values.yaml"]),
+]
+
+# `up` is a prefix of `up --step cluster`, so a substring search would say the
+# `up` target delegates even when its recipe is gone and only its steps call
+# kmx. These pin the exact-match rule.
+DELEGATION_SELFTEST = [
+    ("exact match", "up", "kmx up", "KIND_CLUSTER='x' bin/kmx up", True),
+    ("only the steps delegate, `up` has no recipe of its own", "up", "kmx up",
+     "bin/kmx up --step cluster\nbin/kmx up --step ollama", False),
+    ("no recipe at all", "up", "kmx up", "", False),
+    ("a step", "agent", "kmx up --step agent", "KIND_CLUSTER='x' bin/kmx up --step agent", True),
+    ("chat carries the agent and the question", "chat", "kmx agent chat",
+     'bin/kmx agent chat hello-world "Who are you?"', True),
+    ("chat with no arguments is not the chat recipe", "chat", "kmx agent chat", "bin/kmx agent", False),
 ]
 
 
@@ -129,6 +189,13 @@ def selftest() -> int:
         if got != expected:
             failed += 1
             print(f"FAIL [{name}] -> {got}, want {expected}")
+        else:
+            print(f"ok   [{name}]")
+    for name, target, expected_command, recipe, want in DELEGATION_SELFTEST:
+        got = delegates(target, expected_command, recipe)
+        if got != want:
+            failed += 1
+            print(f"FAIL [{name}] -> delegates={got}, want {want}")
         else:
             print(f"ok   [{name}]")
     if failed:

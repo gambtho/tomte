@@ -118,20 +118,27 @@ func (r *Runner) Quiet(name string, args ...string) bool {
 	return c.Run() == nil
 }
 
-// Poll calls check every interval until it returns true or the deadline
-// passes. It is the loop behind every `for _ in $(seq 1 N)` in the Makefile:
-// a bounded wait that fails loudly rather than a sleep that guesses.
-func Poll(timeout, interval time.Duration, check func() bool) bool {
-	deadline := time.Now().Add(timeout)
-	for {
+// Poll calls check up to attempts times, sleeping interval between tries. It
+// is the loop behind every `for _ in $(seq 1 N)` in the Makefile: a bounded
+// wait that fails loudly rather than a sleep that guesses.
+//
+// Bounded by ATTEMPTS, not by wall-clock, because that is what the shell did
+// and the difference is not cosmetic. Each check here is a real API call, and
+// on a slow path — kind on podman inside a VM, say — those calls are what
+// gets slower. A wall-clock budget silently converts "120 tries" into
+// "however few tries fit in 120 seconds", so the wait gets *shorter* exactly
+// on the machines that need it to be longer, and a rollout race the wait
+// exists to absorb comes back as "the agent is not answering".
+func Poll(attempts int, interval time.Duration, check func() bool) bool {
+	for i := 0; i < attempts; i++ {
 		if check() {
 			return true
 		}
-		if time.Now().After(deadline) {
-			return false
+		if i < attempts-1 {
+			time.Sleep(interval)
 		}
-		time.Sleep(interval)
 	}
+	return false
 }
 
 // MustExist fails with an actionable message when a required tool is not on

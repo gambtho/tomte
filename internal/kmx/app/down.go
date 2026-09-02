@@ -5,9 +5,9 @@ import "fmt"
 // Down deletes the kind cluster `kmx up` created.
 //
 // The guard vouches for KUBE_CTX; this deletes KIND_CLUSTER. They agree by
-// default, but both are overridable, so `KUBE_CTX=kind-safe kmx down
-// --cluster other` would show a banner naming one cluster and destroy
-// another. Refuse when the thing confirmed is not the thing deleted.
+// default, but both are overridable, so `KUBE_CTX=kind-safe
+// KIND_CLUSTER=other kmx down` would show a banner naming one cluster and
+// destroy another. Refuse when the thing confirmed is not the thing deleted.
 func (a *App) Down() error {
 	want := "kind-" + a.Cfg.KindCluster
 	if a.Cfg.KubeContext != want {

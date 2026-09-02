@@ -142,7 +142,11 @@ var keyShapes = []struct {
 }{
 	{"an Anthropic API key", regexp.MustCompile(`sk-[a]nt-`)},
 	{"an OpenAI project key", regexp.MustCompile(`sk-[p]roj-`)},
-	{"an assigned API key", regexp.MustCompile(`(?i)api[_-]?key\s*[:=]\s*["'][A-Za-z0-9_-]{20,}`)},
+	// The `\\?` is not decoration: on the way into a double-quoted scalar a
+	// quote becomes \", so on the emitted document the separator and the
+	// quote are no longer adjacent. Without it this shape could never fire
+	// on the field it was written for — found in review, reproduced, fixed.
+	{"an assigned API key", regexp.MustCompile(`(?i)api[_-]?key\s*[:=]\s*\\?["'][A-Za-z0-9_-]{20,}`)},
 	{"a Kaimahi agent credential", regexp.MustCompile(`kmh_[A-Za-z0-9]{8,}`)},
 	{"a GitHub token", regexp.MustCompile(`gh[pousr]_[A-Za-z0-9]{20,}`)},
 	{"a GitHub fine-grained token", regexp.MustCompile(`github_pat_[A-Za-z0-9_]{20,}`)},
@@ -150,9 +154,16 @@ var keyShapes = []struct {
 	{"a private key", regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`)},
 }
 
-// RefuseKeyShapes fails closed when anything key-shaped reached the
-// manifest. It runs on the FINAL document, not on the inputs, so it cannot
-// be walked around by splitting a key across two flags.
+// RefuseKeyShapes fails closed when anything key-shaped is present.
+//
+// It is run TWICE: once over every raw input, and once over the finished
+// document. Both are necessary and neither is sufficient. The document scan
+// catches a key assembled across two flags, which no per-input check would
+// see. The input scan catches what the document scan cannot: emission
+// escapes, so a value on its way into a quoted scalar has its quotes turned
+// into \" — which moved the text out from under the api-key shape and let a
+// key through. (Found in review, reproduced, fixed.) Checking the value the
+// operator actually typed removes that whole class.
 func RefuseKeyShapes(document string) error {
 	for _, shape := range keyShapes {
 		if shape.re.MatchString(document) {
@@ -172,6 +183,18 @@ plainly when you do not know something.`
 func Generate(spec Spec) (string, error) {
 	if err := ValidateName(spec.Name); err != nil {
 		return "", err
+	}
+	// Every operator-supplied value, as typed — before any escaping can move
+	// it out from under a key shape.
+	inputs := []string{spec.Name, spec.Namespace, spec.Description, spec.ModelConfig, spec.Instructions}
+	if spec.Tools != nil {
+		inputs = append(inputs, spec.Tools.Server)
+		inputs = append(inputs, spec.Tools.Tools...)
+	}
+	for _, input := range inputs {
+		if err := RefuseKeyShapes(input); err != nil {
+			return "", err
+		}
 	}
 	if spec.Namespace == "" {
 		spec.Namespace = "kagent"

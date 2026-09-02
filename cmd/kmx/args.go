@@ -20,6 +20,7 @@ import (
 func extractContext(argv []string) ([]string, string, error) {
 	var kept []string
 	value := ""
+	seen := false
 	for i := 0; i < len(argv); i++ {
 		arg := argv[i]
 		name, inline, hasInline := strings.Cut(arg, "=")
@@ -27,6 +28,7 @@ func extractContext(argv []string) ([]string, string, error) {
 			kept = append(kept, arg)
 			continue
 		}
+		seen = true
 		if hasInline {
 			value = inline
 			continue
@@ -37,7 +39,11 @@ func extractContext(argv []string) ([]string, string, error) {
 		i++
 		value = argv[i]
 	}
-	if strings.TrimSpace(value) == "" && value != "" {
+	// An empty --context must be an error, not a silent fall-through to
+	// KUBE_CTX or the default: `--context=$CTX` with an unset CTX is someone
+	// aiming at a cluster they cannot name, and guessing on their behalf is
+	// exactly what the guard exists to prevent.
+	if seen && strings.TrimSpace(value) == "" {
 		return nil, "", fmt.Errorf("--context needs a context name")
 	}
 	return kept, value, nil

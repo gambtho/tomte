@@ -84,8 +84,17 @@ func TestContextIsExtractedFromAnywhere(t *testing.T) {
 			t.Errorf("%v -> %v, %q; want %v, %q", tc.argv, kept, ctx, tc.wantKept, tc.wantCtx)
 		}
 	}
-	if _, _, err := extractContext([]string{"up", "--context"}); err == nil {
-		t.Error("--context with no value must be refused, not treated as empty")
+	// An empty value must be refused rather than falling through to KUBE_CTX
+	// or the default: `--context=$CTX` with an unset CTX is someone aiming at
+	// a cluster they cannot name.
+	for _, argv := range [][]string{
+		{"up", "--context"},
+		{"up", "--context="},
+		{"up", "--context", "   "},
+	} {
+		if _, _, err := extractContext(argv); err == nil {
+			t.Errorf("%v: an empty --context must be refused, not treated as unset", argv)
+		}
 	}
 }
 

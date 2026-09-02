@@ -102,6 +102,37 @@ func TestEnsureDownloadsVerifiesAndCaches(t *testing.T) {
 	if hits != 1 {
 		t.Errorf("binary downloaded %d times, want 1 (the second call must hit the cache)", hits)
 	}
+
+	// A cache hit is re-verified, so a substituted binary is refused and
+	// re-fetched rather than executed. "Checksum-verified" has to mean the
+	// bytes about to run, not the bytes that were fetched some other day.
+	if err := os.WriteFile(path, []byte("#!/bin/sh\necho pwned\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Ensure(opt); err != nil {
+		t.Fatalf("a tampered cache entry should be replaced, not fatal: %v", err)
+	}
+	if hits != 2 {
+		t.Errorf("a tampered cache entry was NOT re-fetched (downloads: %d)", hits)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(binary) {
+		t.Errorf("the cache still holds the substituted binary: %q", got)
+	}
+
+	// A binary with no recorded digest cannot be verified, so it is not run.
+	if err := os.Remove(path + ".sha256"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Ensure(opt); err != nil {
+		t.Fatal(err)
+	}
+	if hits != 3 {
+		t.Errorf("an unverifiable cache entry was NOT re-fetched (downloads: %d)", hits)
+	}
 }
 
 // A mismatch must leave NOTHING behind: a rejected binary in the cache would
