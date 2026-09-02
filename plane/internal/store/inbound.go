@@ -135,7 +135,7 @@ func (s *Store) InboundAudit(ctx context.Context, hook string, limit int) ([]Inb
 	return out, rows.Err()
 }
 
-// LiveBudgetGrantSum is the read-only half of ConsumeBudgetGrants: the
+// LiveBudgetGrantSum is the read-only half of AdmitSpend's grant step: the
 // headroom live budget grants add to a cap right now, consuming nothing.
 // The inbound door uses it to refuse an event whose spend could not be
 // admitted at the proxy anyway, while leaving the consumption to the
