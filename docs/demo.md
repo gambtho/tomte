@@ -258,7 +258,7 @@ AKS:
 # the DNS label is free for anyone once the cluster is gone
 make inbound-unexpose
 KAIMAHI_CONFIRM=$AKS_RESOURCE_GROUP make aks-down
-az group list --query "[?starts_with(name,'kaimahi')].name" -o tsv    # must print nothing
+az group exists --name "$AKS_RESOURCE_GROUP"      # must print false
 ```
 
 kind: `make down`.
