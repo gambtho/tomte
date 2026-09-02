@@ -1,6 +1,6 @@
 # Kaimahi organization and brand design
 
-**Status:** Approved in conversation; implementation pending written-spec review  
+**Status:** Approved in conversation; implementation pending written-spec review
 **Date:** 2026-09-01
 
 ## Purpose
