@@ -248,6 +248,10 @@ expensive way.
 - **Restarting the podman machine stops kind's node container.** The cluster
   looks broken and `kubectl` hangs on it; `podman start
   <cluster>-control-plane` brings it back.
+- **First `make up` on podman can fail at the ollama rollout.** Pulling the
+  ~1.9GB image through the podman VM took 5m04s here, past the target's
+  300s `rollout status` timeout, so make stops even though the pull
+  succeeds. Re-run `make up`; it is idempotent and continues.
 - **A podman machine with no volume mounts cannot read your checkout**, so
   `podman build` fails with `faccessat <path>: connection refused`. Volumes
   are fixed at `podman machine init` time — `podman machine set` has no flag
