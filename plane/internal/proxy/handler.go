@@ -291,14 +291,31 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	copyResponseHeaders(w.Header(), resp.Header)
-	w.WriteHeader(resp.StatusCode)
-
 	var u usage
 	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
+		copyResponseHeaders(w.Header(), resp.Header)
+		w.WriteHeader(resp.StatusCode)
 		u = relayStream(w, resp.Body)
 	} else {
-		u = relayBuffered(w, resp.Body)
+		// Buffer BEFORE the status goes to the client (P10): a body the
+		// hardened client cuts — too large, or stalled past its lifetime —
+		// must fail closed as a 502, never reach the agent as a 200 with
+		// half a payload, and must still be ledgered (spend is recorded
+		// before failures are honored; the usage envelope never arrived,
+		// so the tokens are zero and the row says 502).
+		raw, err := readBounded(resp.Body)
+		if err != nil {
+			slog.Error("proxy: upstream response cut; failing closed", "upstream", name, "err", err)
+			metrics.ObserveUpstream(metrics.SeamProxy, name, time.Since(started))
+			metrics.Decide(metrics.SeamProxy, admitted, metrics.ReasonUpstreamError)
+			h.record(r, ledgerFor(cred, name, req.Model, up, priced, price, usage{}, http.StatusBadGateway), res.ID)
+			http.Error(w, "upstream response cut", http.StatusBadGateway)
+			return
+		}
+		copyResponseHeaders(w.Header(), resp.Header)
+		w.Header().Del("Content-Length")
+		w.WriteHeader(resp.StatusCode)
+		u = relayBuffered(w, raw)
 	}
 	metrics.ObserveUpstream(metrics.SeamProxy, name, time.Since(started))
 	if resp.StatusCode < 300 && u == (usage{}) {
@@ -350,14 +367,25 @@ func ledgerFor(cred store.Credential, upstream, model string, up config.Upstream
 	return e
 }
 
-// relayBuffered copies a non-streamed response through while extracting
-// usage from the JSON body. The relay is byte-faithful: parse failures
-// only cost usage extraction, never the response.
-func relayBuffered(w http.ResponseWriter, body io.Reader) usage {
-	raw, err := io.ReadAll(io.LimitReader(body, maxBufferedResp))
+// readBounded reads a whole non-streamed body, refusing one larger than
+// the buffer (the hardened client caps hosted bodies at the same size;
+// this is the bound for in-cluster ones) — an error, never a silent
+// truncation.
+func readBounded(body io.Reader) ([]byte, error) {
+	raw, err := io.ReadAll(io.LimitReader(body, maxBufferedResp+1))
 	if err != nil {
-		slog.Error("proxy: reading upstream response", "err", err)
+		return nil, err
 	}
+	if int64(len(raw)) > maxBufferedResp {
+		return nil, egress.ErrResponseTooLarge
+	}
+	return raw, nil
+}
+
+// relayBuffered writes a fully read non-streamed response through while
+// extracting usage from the JSON body. The relay is byte-faithful: parse
+// failures only cost usage extraction, never the response.
+func relayBuffered(w http.ResponseWriter, raw []byte) usage {
 	_, _ = w.Write(raw)
 	var envelope struct {
 		Usage usage `json:"usage"`

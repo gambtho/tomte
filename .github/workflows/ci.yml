@@ -1284,7 +1284,7 @@ jobs:
       # decisions are exercised through the gateway directly). The GitHub
       # server itself is live-verified in the PR with the worker's own
       # read-only token, on kind (docs/hosted-upstreams.md).
-      - name: "Hosted upstreams: synthetic public MCP server up; the proxy vets both hosted hosts at boot"
+      - name: "Hosted upstreams: synthetic public MCP server up; the proxy vets every hosted host at boot"
         if: steps.changes.outputs.docs_only != 'true'
         run: |
           kubectl --context kind-kaimahi-p1 apply --dry-run=server -f k8s/kaimahi-github.yaml -f k8s/github-agent.yaml
@@ -1332,6 +1332,8 @@ jobs:
             EXPECT_BODY='redirected (refused)' bash scripts/upstream-refusal-probe.sh
           make github-audit | tee github-audit-2.out
           grep -E 'hello-github +mcp-echo +tools/call +echo_write +denied +403' github-audit-2.out
+          make approvals | tee github-approvals.out
+          grep -E 'hello-github +tool +echo_write' github-approvals.out
           grep -E 'hello-github +mcp-echo-redirect +tools/call +echo +allowed +502 +tool upstream redirected' github-audit-2.out
       - name: "Hosted upstreams: the record rebinds to the server's private address → the dialer refuses before any byte leaves, audited"
         if: steps.changes.outputs.docs_only != 'true'
@@ -1353,7 +1355,10 @@ jobs:
           KUBECTL="kubectl --context kind-kaimahi-p1" GOVERNED_SECRET=kaimahi-github-token UPSTREAM=mcp-echo \
             EXPECT_BODY='unreachable' bash scripts/upstream-refusal-probe.sh
           make github-audit | tee github-audit-4.out
-          grep -E 'hello-github +mcp-echo +tools/call +echo +allowed +502 +upstream unreachable' github-audit-4.out
+          # Anchored on the dial timeout: the network dropped the packets.
+          # A dead sidecar ("connection refused") or a lost hosts entry
+          # ("no such host") would also read "unreachable" and must not pass.
+          grep -E 'hello-github +mcp-echo +tools/call +echo +allowed +502 +upstream unreachable: .*dial tcp 203\.0\.113\.10:443: i/o timeout' github-audit-4.out
       - name: "Hosted upstreams: teardown (committed table restored)"
         if: steps.changes.outputs.docs_only != 'true'
         run: |

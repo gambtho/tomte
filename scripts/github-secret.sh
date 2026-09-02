@@ -90,8 +90,10 @@ echo "Secret $NAMESPACE/$SECRET_NAME stored." >&2
 cat >&2 <<'NOTE'
 
 The gateway injects this token on calls to the github upstream from plane
-custody; the agent never holds it. Read-only is enforced twice: the
-token's own permissions, and the gateway allowlist (make govern-github),
-which never names a write tool — a write is the action a human approves.
+custody; the agent never holds it. What was PROVEN here: the token is
+fine-grained and can read that one repository. What was NOT (GitHub does
+not expose a fine-grained token's permissions): that you chose read-only
+permissions — that part is yours. The gateway allowlist (make govern-github)
+never names a write tool regardless; a write is the action a human approves.
 Delete it with: make github-revoke
 NOTE

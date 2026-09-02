@@ -395,11 +395,52 @@ func hostedShape(u *url.URL, internet bool, caFile string) error {
 		return nil
 	}
 	h := strings.TrimSuffix(strings.ToLower(host), ".")
-	if strings.HasSuffix(h, ".svc.cluster.local") || strings.HasSuffix(h, ".svc") ||
-		strings.Count(h, ".") <= 1 {
+	if strings.HasSuffix(h, ".svc.cluster.local") || strings.HasSuffix(h, ".svc") || !strings.Contains(h, ".") {
+		return nil
+	}
+	if strings.Count(h, ".") == 1 {
+		// `service.namespace` — but `github.com` has the same shape. An
+		// in-cluster Service here is plain http; https to a two-label name
+		// is what a public host looks like, so it must be marked (or use
+		// the full .svc.cluster.local name). The boot-time vet is the
+		// second layer: an unmarked name that resolves public is refused.
+		if u.Scheme == "https" {
+			return fmt.Errorf("host %q over https does not look in-cluster (use the .svc.cluster.local name, or mark the upstream internet: true)", host)
+		}
 		return nil
 	}
 	return fmt.Errorf("host %q does not look in-cluster (service, service.namespace, or a .svc.cluster.local name); a hosted upstream must be marked internet: true", host)
+}
+
+// InClusterHosts lists the hosts of every UNMARKED upstream, both tables,
+// for the boot-time check that none of them resolves to a public address
+// (the second layer under hostedShape's static rule).
+func (c Config) InClusterHosts() []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(raw string) {
+		u, err := url.Parse(raw)
+		if err != nil {
+			return
+		}
+		name := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
+		if name == "" || seen[name] {
+			return
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	for _, u := range c.Upstreams {
+		if !u.Internet {
+			add(u.BaseURL)
+		}
+	}
+	for _, t := range c.ToolUpstreams {
+		if !t.Internet {
+			add(t.URL)
+		}
+	}
+	return out
 }
 
 // InternetHosts lists every hostname the hardened dialer must know, LLM
@@ -414,7 +455,7 @@ func (c Config) InternetHosts() []egress.Host {
 		if err != nil {
 			return
 		}
-		name := strings.ToLower(u.Hostname())
+		name := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
 		if prev, ok := seen[name]; ok && prev == caFile {
 			return
 		}

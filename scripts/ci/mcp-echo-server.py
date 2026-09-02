@@ -18,9 +18,9 @@ gateway relays, answered as plain JSON.
 
 Usage: mcp-echo-server.py --cert server.crt --key server.key [--bind 0.0.0.0] [--port 443]
 
-The certificate and key are generated at CI time by the workflow (a
-throwaway CA that lives for one job); nothing here is committed key
-material.
+The certificate and key are generated at run time by
+scripts/ci/synthetic-upstream.sh (a throwaway CA that lives for one job);
+nothing here is committed key material.
 """
 import argparse
 import http.server

@@ -560,7 +560,10 @@ func (h *handler) forwardProjected(w http.ResponseWriter, r *http.Request, cred 
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBufferedResp))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBufferedResp+1))
+	if err == nil && int64(len(raw)) > maxBufferedResp {
+		err = egress.ErrResponseTooLarge
+	}
 	if err != nil {
 		slog.Error("gateway: reading tools/list response", "upstream", name, "err", err)
 		http.Error(w, "tool upstream response unreadable", http.StatusBadGateway)
@@ -702,8 +705,10 @@ func (h *handler) do(r *http.Request, up config.ToolUpstream, body []byte) (*htt
 }
 
 // MsgUpstreamRedirected is the 502 body for a redirect the gateway
-// refused to follow — the one 502 issued before any byte reached the
-// upstream, which the notifier (P8b) may therefore retry.
+// refused to follow — a 502 issued before any byte of the message reached
+// the upstream, which the notifier (P8b) may therefore retry. (P10's
+// MsgUpstreamRefused is the other such 502; the notifier's upstream is
+// in-cluster, so it never sees that one.)
 const MsgUpstreamRedirected = "tool upstream redirected (refused)"
 
 // errCredentialUnavailable marks a tool upstream whose own credential

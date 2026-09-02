@@ -1063,13 +1063,8 @@ github-ask: export KAIMAHI_GITHUB_TASK = What is open on the GitHub repository $
 github-ask: $(KAGENT)
 	@test -n "$(GITHUB_REPO)" || \
 		{ echo 'usage: make github-ask GITHUB_REPO=owner/name' >&2; exit 1; }
-	@case "$(GITHUB_REPO)" in \
-		*/*) ;; \
-		*) echo 'invalid GITHUB_REPO (want owner/name)' >&2; exit 1 ;; \
-	esac
-	@case "$(GITHUB_REPO)" in \
-		*[!A-Za-z0-9._/-]*) echo 'invalid GITHUB_REPO (want owner/name)' >&2; exit 1 ;; \
-	esac
+	@printf '%s' "$(GITHUB_REPO)" | grep -qE '^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$$' || \
+		{ echo 'invalid GITHUB_REPO (want owner/name)' >&2; exit 1; }
 	@$(call kagent_forward,hello-github,$(KAGENT_INVOKE) --agent hello-github --task "$$KAIMAHI_GITHUB_TASK",$(CHAT_RETRYABLE_SAFE))
 
 ## github-down: remove the P10 demo (agent, gateway seam). The token is

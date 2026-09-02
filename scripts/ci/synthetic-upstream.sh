@@ -49,8 +49,9 @@ probe_ctx=$($KUBECTL config view --minify -o jsonpath='{.contexts[0].name}')
 KUBE_NS="kaimahi, kube-system" KUBE_CTX="$probe_ctx" \
   bash "$here/scripts/kube-guard.sh" "$(basename "$0") ${1:-}"
 
-corefile_hosts() { # addr-for-rebind -> rewrite the CoreDNS Corefile with our hosts block
+corefile_hosts() { # addr-for-rebind|remove -> rewrite the CoreDNS Corefile with (or without) our hosts block
   local rebind_addr=$1
+  mkdir -p "$WORKDIR"
   $KUBECTL -n kube-system get configmap coredns -o json > "$WORKDIR/coredns.json"
   REBIND="$rebind_addr" python3 - "$WORKDIR/coredns.json" <<'PY' > "$WORKDIR/coredns-patched.json"
 import json, os, re, sys
@@ -58,11 +59,13 @@ cm = json.load(open(sys.argv[1]))
 cf = cm["data"]["Corefile"]
 block = ("    hosts {\n        203.0.113.10 mcp-echo.kaimahi-ci.test\n        %s mcp-echo-rebind.kaimahi-ci.test\n        fallthrough\n    }\n"
          % os.environ["REBIND"])
+if os.environ["REBIND"] == "remove":
+    block = ""
 # Replace an earlier block of ours, else insert right after `ready`.
 cf, n = re.subn(r"    hosts \{\n(?:        .*\n)*?        fallthrough\n    \}\n", block, cf, count=1)
-if n == 0:
+if n == 0 and block:
     cf, n = re.subn(r"(    ready\n)", r"\1" + block.replace("\\", "\\\\"), cf, count=1)
-assert n == 1, "could not place the hosts block in the Corefile"
+assert n == 1 or not block, "could not place the hosts block in the Corefile"
 cm["data"]["Corefile"] = cf
 for k in ("resourceVersion", "uid", "creationTimestamp", "managedFields"):
     cm["metadata"].pop(k, None)
@@ -176,6 +179,7 @@ PY
     $KUBECTL -n kaimahi delete configmap kaimahi-upstream-ca --ignore-not-found >/dev/null
     docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
     docker exec "$NODE" ip route del "$ADDR/32" 2>/dev/null || true
+    corefile_hosts remove
     roll_proxy
     ;;
   *)

@@ -146,11 +146,19 @@ var refusedRanges = []refusedRange{
 	{netip.MustParsePrefix("fe80::/10"), "link-local"},
 	{netip.MustParsePrefix("fc00::/7"), "unique-local (RFC 4193)"},
 	{netip.MustParsePrefix("ff00::/8"), "multicast"},
+	// Tunnel prefixes carry an embedded IPv4 destination a relay would
+	// unwrap; refused outright rather than decoded.
+	{netip.MustParsePrefix("2002::/16"), "6to4 tunnel (embedded IPv4)"},
+	{netip.MustParsePrefix("2001::/32"), "Teredo tunnel (embedded IPv4)"},
 }
 
-// nat64 embeds an IPv4 address in its low 32 bits (RFC 6052); the
-// embedded address is what a NAT64 gateway would reach.
-var nat64 = netip.MustParsePrefix("64:ff9b::/96")
+// nat64 and ipv4Compatible embed an IPv4 address in the low 32 bits
+// (RFC 6052; the deprecated ::a.b.c.d form); the embedded address is
+// what would actually be reached.
+var (
+	nat64          = netip.MustParsePrefix("64:ff9b::/96")
+	ipv4Compatible = netip.MustParsePrefix("::/96")
+)
 
 // Refused reports why an address must not be dialed, or "" when it may.
 // The documentation ranges (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24,
@@ -159,7 +167,7 @@ var nat64 = netip.MustParsePrefix("64:ff9b::/96")
 // loosening the list for it.
 func Refused(a netip.Addr) string {
 	a = a.Unmap() // ::ffff:a.b.c.d is a.b.c.d
-	if nat64.Contains(a) {
+	if a.Is6() && (nat64.Contains(a) || (ipv4Compatible.Contains(a) && a != netip.IPv6Unspecified() && a != netip.IPv6Loopback())) {
 		b := a.As16()
 		return Refused(netip.AddrFrom4([4]byte{b[12], b[13], b[14], b[15]}))
 	}
@@ -310,7 +318,7 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// The body lifetime is a deadline on the request's context: the
 	// transport aborts a body read the moment it passes, whether the
 	// upstream is streaming slowly or has gone silent.
-	ctx, cancel := context.WithTimeout(req.Context(), t.p.BodyLifetime)
+	ctx, cancel := context.WithTimeoutCause(req.Context(), t.p.BodyLifetime, ErrBodyLifetime)
 	resp, err := inner.RoundTrip(req.WithContext(ctx))
 	if err != nil {
 		cancel()
@@ -347,7 +355,9 @@ func (b *boundedBody) Read(p []byte) (int, error) {
 	}
 	n, err := b.body.Read(p)
 	b.left -= int64(n)
-	if err != nil && err != io.EOF && b.ctx.Err() != nil {
+	// Only OUR deadline is a lifetime cut; a caller that cancelled (the
+	// agent went away) keeps its own error.
+	if err != nil && err != io.EOF && context.Cause(b.ctx) == ErrBodyLifetime {
 		return n, fmt.Errorf("%w: %v", ErrBodyLifetime, err)
 	}
 	if err == nil && b.left <= 0 {
@@ -359,7 +369,7 @@ func (b *boundedBody) Read(p []byte) (int, error) {
 			return n, ErrResponseTooLarge
 		}
 		if perr != nil && perr != io.EOF {
-			if b.ctx.Err() != nil {
+			if context.Cause(b.ctx) == ErrBodyLifetime {
 				return n, fmt.Errorf("%w: %v", ErrBodyLifetime, perr)
 			}
 			return n, perr

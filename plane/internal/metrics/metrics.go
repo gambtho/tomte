@@ -60,10 +60,10 @@ const (
 	ReasonUpstreamCredential  Reason = "upstream_credential"
 	ReasonUpstreamError       Reason = "upstream_error"
 	ReasonUpstreamUnreachable Reason = "upstream_unreachable"
-	// ReasonEgressRefused (P10): the hardened dialer refused the upstream
-	// before any byte left — a private/metadata answer, a non-443 port,
-	// a cut body — as distinct from an upstream that was dialed and did
-	// not answer.
+	// ReasonEgressRefused (P10): the egress policy refused the upstream
+	// before any byte left — a private/metadata answer, a forbidden port
+	// or scheme, no hardened client — as distinct from an upstream that
+	// was dialed and did not answer (a cut body counts as upstream_error).
 	ReasonEgressRefused Reason = "egress_refused"
 	ReasonMethod        Reason = "method"
 	ReasonGrantCheck    Reason = "grant_check"

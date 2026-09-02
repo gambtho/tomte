@@ -38,6 +38,9 @@ func TestParseHostedUpstreamShape(t *testing.T) {
 		"public IP without marker":      `{"gh": {"url": "https://203.0.113.10/mcp"}}`,
 		"ca_file without marker":        `{"t": {"url": "http://kagent-tools.kagent:8084/mcp", "ca_file": "/etc/x"}}`,
 		"three-label name without mark": `{"t": {"url": "http://mcp-echo.kaimahi-ci.test/mcp"}}`,
+		// `github.com` has the shape of `service.namespace`; over https it
+		// is what a public host looks like and must be marked.
+		"two-label https without marker": `{"t": {"url": "https://github.com/mcp"}}`,
 	}
 	for name, raw := range bad {
 		_, err := config.Parse([]byte(base + raw + "}"))

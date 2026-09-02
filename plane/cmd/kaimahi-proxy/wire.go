@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/netip"
 
 	"github.com/kaimahi-agents/kaimahi/plane/internal/config"
 	"github.com/kaimahi-agents/kaimahi/plane/internal/egress"
@@ -31,7 +33,7 @@ func hardenedClient(ctx context.Context, cfg config.Config) (*http.Client, error
 		return nil, err
 	}
 	for _, h := range hosts {
-		addrs, err := egress.Vet(ctx, nil, h.Name)
+		addrs, err := vetWithTimeout(ctx, h.Name)
 		switch {
 		case errors.Is(err, egress.ErrPrivateAddress):
 			return nil, fmt.Errorf("hosted upstream refused at config load: %w", err)
@@ -43,7 +45,39 @@ func hardenedClient(ctx context.Context, cfg config.Config) (*http.Client, error
 				"trust", trustOf(h))
 		}
 	}
+	// The other direction (the second layer under config.hostedShape's
+	// static rule): an UNMARKED upstream whose name resolves to a public
+	// address would take the plain in-cluster dial around every check
+	// here — refused, loudly, the same way. A name that does not resolve
+	// at boot (AKS has no ollama, say) is left to the network.
+	for _, name := range cfg.InClusterHosts() {
+		if ip, err := netip.ParseAddr(name); err == nil {
+			if egress.Refused(ip) == "" {
+				return nil, fmt.Errorf("unmarked upstream refused at config load: %s is a public address; mark it internet: true", name)
+			}
+			continue
+		}
+		lookupCtx, cancel := context.WithTimeout(ctx, egress.DefaultConnectTimeout)
+		addrs, err := net.DefaultResolver.LookupNetIP(lookupCtx, "ip", name)
+		cancel()
+		if err != nil || len(addrs) == 0 {
+			continue
+		}
+		for _, a := range addrs {
+			if egress.Refused(a) == "" {
+				return nil, fmt.Errorf("unmarked upstream refused at config load: %s resolves to public address %s; mark it internet: true", name, a)
+			}
+		}
+	}
 	return client, nil
+}
+
+// vetWithTimeout bounds one boot-time lookup so a hanging resolver cannot
+// hold the whole startup.
+func vetWithTimeout(ctx context.Context, host string) ([]netip.Addr, error) {
+	lookupCtx, cancel := context.WithTimeout(ctx, egress.DefaultConnectTimeout)
+	defer cancel()
+	return egress.Vet(lookupCtx, nil, host)
 }
 
 func trustOf(h egress.Host) string {

@@ -67,9 +67,11 @@ The GitHub token is the plane's, exactly like the Copilot token:
   answers a well-formed positive for the named repository.
 - Only a **fine-grained** token is accepted (`github_pat_` prefix; a
   classic PAT or an OAuth token is refused). Scope it to one repository
-  with Issues: Read and Pull requests: Read. Read-only is then enforced
-  twice: by the token, and by the gateway allowlist, which never names a
-  write tool.
+  with Issues: Read and Pull requests: Read. The script proves the token
+  reads that one repository; GitHub does not expose a fine-grained
+  token's permissions, so read-only is your choice at creation, and the
+  gateway allowlist, which never names a write tool, is the layer the
+  plane enforces.
 - Mounted into the proxy pod only, at the path the table names, read per
   request (rotation needs no restart), and added to the log redactor at
   boot.
@@ -101,8 +103,8 @@ fail-closed:
 | A host that resolves to a private, link-local, loopback, carrier-NAT, multicast, reserved or cloud-metadata address (`169.254.169.254` first of all), in IPv4, IPv6, IPv4-mapped or NAT64 form | Every resolved address is checked; one bad answer refuses the call. A private answer at boot refuses the config loudly (the pod does not start); a private answer later refuses that call, audited |
 | DNS rebinding: a record that changes after the check | The connection goes to the address that was checked, never back through the name, and every call resolves afresh (no connection reuse) |
 | Redirects | Surfaced, never followed; the gateway answers 502 and audits it |
-| A silent upstream | 10 s to connect and handshake, 60 s to start answering |
-| A stalled or oversized body | Cut at 5 minutes or 8 MiB; the read fails with a named error rather than truncating silently, the gateway answers 502 and the audit row says so |
+| A silent upstream | 10 s each to resolve, to connect and to handshake; 60 s to start answering |
+| A stalled or oversized body | Cut at 5 minutes or 8 MiB; the read fails with a named error rather than truncating silently. A buffered body becomes a 502 on both seams and the gateway's audit row says so; a streamed (SSE) body has already carried its status, so the stream ends and the row notes the cut |
 
 The documentation ranges (`192.0.2.0/24`, `198.51.100.0/24`,
 `203.0.113.0/24`, `2001:db8::/32`) are deliberately not refused: they
@@ -150,10 +152,10 @@ throwaway certificate through `ca_file` only
 ([`scripts/ci/synthetic-upstream.sh`](../scripts/ci/synthetic-upstream.sh)).
 Every PR then asserts, in order:
 
-1. Both hosted hosts are vetted at boot (the stand-in through its
-   `ca_file`, GitHub through the system roots); a table entry whose host
-   resolves private is refused at load, loudly, while the serving
-   replicas stay up.
+1. Every hosted host is vetted at boot (the stand-in and its rebind
+   name through their `ca_file`, GitHub through the system roots); a
+   table entry whose host resolves private is refused at load, loudly,
+   while the serving replicas stay up.
 2. The credential's allowlist holds one read tool, the write tool is
    absent, the agent-side Secret is `kmh_` only.
 3. With the allowance applied, a governed call is answered by the
@@ -162,7 +164,8 @@ Every PR then asserts, in order:
    stand-in is refused and audited.
 5. The record for the second name is rebound to the sidecar's private
    docker address: the dialer refuses before any byte leaves, and the
-   audit row carries the reason (`… resolves to 172.x.x.x (private)`).
+   audit row carries the reason (`… resolves to 172.x.x.x (private (RFC
+   1918))`).
 6. The allowance is removed: the dial fails closed (`unreachable`),
    audited.
 
