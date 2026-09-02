@@ -1070,8 +1070,10 @@ jobs:
         run: |
           # A fresh subject, so the filing is not deduped and the notifier
           # fires: the denial files, the plane posts, the gateway admits
-          # the plane's call by allowlist (no grant), dials the absent
-          # upstream, 502 — same row shape as the P5a cycle, plane's name.
+          # the plane's call by allowlist (no grant — the detail is the dial
+          # failure, not a grant id), dials the absent upstream, 502 — same
+          # row shape as the P5a cycle, plane's name (P10: a 502 row now
+          # carries why: "upstream unreachable: …").
           bash scripts/tool-denial-probe.sh k8s_get_pods
           for _ in $(seq 1 30); do
             KUBECTL="kubectl --context kind-kaimahi-p1" bash scripts/plane-admin.sh tool-audit kaimahi-plane > plane-audit.out 2>/dev/null
@@ -1079,7 +1081,7 @@ jobs:
             sleep 2
           done
           cat plane-audit.out
-          grep -E 'kaimahi-plane +slack +tools/call +conversations_add_message +allowed +502 *$' plane-audit.out
+          grep -E 'kaimahi-plane +slack +tools/call +conversations_add_message +allowed +502 +upstream unreachable: ' plane-audit.out
           # Exactly ONE attempt: the gateway's 502 cannot say whether the
           # post reached the server (a dial refusal and a reset after
           # delivery answer alike), so it is recorded and NOT retried —
