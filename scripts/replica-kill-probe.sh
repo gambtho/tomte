@@ -51,8 +51,7 @@ ledger_rows() { # the credential's allowed rows, counted in Postgres (not throug
   echo "$n"
 }
 
-mapfile -t pods < <($KUBECTL -n "$NAMESPACE" get pods -l app=kaimahi-proxy \
-  --field-selector=status.phase=Running -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
+mapfile -t pods < <(KUBECTL="$KUBECTL" bash "$(dirname "$0")/plane-pods.sh")
 [ "${#pods[@]}" -eq 2 ] || { echo "expected exactly 2 running kaimahi-proxy pods, found ${#pods[@]}" >&2; exit 1; }
 a="${pods[0]}"; b="${pods[1]}"
 for pair in "$a:$PORT_A" "$b:$PORT_B"; do

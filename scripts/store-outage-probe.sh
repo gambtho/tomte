@@ -32,8 +32,7 @@ restarts() { # -> "pod=count pod=count"
   $KUBECTL -n "$NAMESPACE" get pods -l app=kaimahi-proxy \
     -o jsonpath='{range .items[*]}{.metadata.name}={.status.containerStatuses[0].restartCount} {end}'
 }
-mapfile -t pods < <($KUBECTL -n "$NAMESPACE" get pods -l app=kaimahi-proxy \
-  --field-selector=status.phase=Running -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
+mapfile -t pods < <(KUBECTL="$KUBECTL" bash "$(dirname "$0")/plane-pods.sh")
 [ "${#pods[@]}" -ge 1 ] || { echo "no running kaimahi-proxy pods" >&2; exit 1; }
 ports=()
 for i in "${!pods[@]}"; do

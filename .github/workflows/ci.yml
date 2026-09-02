@@ -492,7 +492,11 @@ jobs:
         run: |
           ready=$(kubectl --context kind-kaimahi-p1 -n kaimahi get deploy kaimahi-proxy -o jsonpath='{.status.readyReplicas}')
           test "$ready" = 2
-          for pod in $(kubectl --context kind-kaimahi-p1 -n kaimahi get pods -l app=kaimahi-proxy -o jsonpath='{.items[*].metadata.name}'); do
+          # Ready and not terminating (the restart in `make plane` leaves
+          # the old pods draining for a moment): scripts/plane-pods.sh.
+          pods=$(KUBECTL="kubectl --context kind-kaimahi-p1" bash scripts/plane-pods.sh)
+          test "$(echo "$pods" | wc -l)" = 2
+          for pod in $pods; do
             KUBECTL="kubectl --context kind-kaimahi-p1" POD="$pod" bash scripts/plane-metrics.sh > "metrics-$pod.out"
             grep -q '^kaimahi_build_info{' "metrics-$pod.out"
             kubectl --context kind-kaimahi-p1 -n kaimahi logs "$pod" | grep -q 'migrations: nothing to apply'

@@ -49,8 +49,7 @@ $KUBECTL -n "$AGENT_NAMESPACE" get secret "$GOVERNED_SECRET" \
 test -s "$workdir/token" || { echo "$GOVERNED_SECRET missing/empty (run make govern-tools)" >&2; exit 1; }
 { printf 'Authorization: Bearer '; cat "$workdir/token"; printf '\n'; } > "$workdir/auth-header"
 
-mapfile -t pods < <($KUBECTL -n "$NAMESPACE" get pods -l app=kaimahi-proxy \
-  --field-selector=status.phase=Running -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
+mapfile -t pods < <(KUBECTL="$KUBECTL" bash "$(dirname "$0")/plane-pods.sh")
 [ "${#pods[@]}" -ge 1 ] || { echo "no running kaimahi-proxy pods" >&2; exit 1; }
 ports=()
 for i in "${!pods[@]}"; do

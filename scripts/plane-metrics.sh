@@ -14,8 +14,7 @@ POD="${POD:-}"
 
 if [ -z "$POD" ]; then
   # shellcheck disable=SC2086 # KUBECTL deliberately carries --context args
-  POD=$($KUBECTL -n "$NAMESPACE" get pods -l app=kaimahi-proxy \
-    --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}')
+  POD=$(KUBECTL="$KUBECTL" bash "$(dirname "$0")/plane-pods.sh" | head -1)
 fi
 test -n "$POD" || { echo "plane-metrics: no running kaimahi-proxy pod" >&2; exit 1; }
 
