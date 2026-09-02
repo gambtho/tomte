@@ -145,8 +145,11 @@ func (m *Meter) Preview(ctx context.Context, cred store.Credential) error {
 	for _, n := range needs {
 		extra, err := m.Store.LiveBudgetGrantSum(ctx, cred.Name, n.Subject)
 		if err != nil {
+			// A store outage, not a cap: the same classification Reserve
+			// gives a failed admission (no BudgetSubject, so the caller
+			// files no budget request for what is not a budget event).
 			slog.Error("meter: budget headroom check failed, denying", "credential", cred.Name, "err", err)
-			return capDenial(n.Subject)
+			return Denial{Status: http.StatusForbidden, Msg: "metering unavailable"}
 		}
 		if extra <= 0 || n.Used >= n.Cap+extra {
 			return capDenial(n.Subject)

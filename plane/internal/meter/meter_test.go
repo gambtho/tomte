@@ -177,9 +177,12 @@ func TestPreviewAdmitsUnderLiveHeadroomWithoutConsuming(t *testing.T) {
 }
 
 func TestPreviewFailsClosedOnHeadroomError(t *testing.T) {
+	// A failed headroom read is a store outage, classified like Reserve's
+	// admission failure: 403, and no budget subject to file against.
 	m := &meter.Meter{Store: &fakeStore{tokens: 5, extraErr: errors.New("db down")}}
 	err := m.Preview(context.Background(), store.Credential{Name: "a", CapTokens: i64(5)})
 	var d meter.Denial
 	require.ErrorAs(t, err, &d)
-	require.Equal(t, http.StatusTooManyRequests, d.Status)
+	require.Equal(t, http.StatusForbidden, d.Status)
+	require.Empty(t, d.BudgetSubject)
 }

@@ -99,9 +99,13 @@ nothing is written to disk in the cluster, no local Postgres client is
 needed. The dump is `--clean --if-exists`, so restoring **replaces**
 the database — every table dropped and recreated — which is what makes
 it work on a fresh cluster whose `make plane` already ran the
-migrations. The proxies keep running and see the restored tables on
-their next query; no restart. Because credential hashes come back, the
-agent-side Secrets issued against the backed-up database work again.
+migrations. A restore is a short outage by design: the script scales
+the proxies to zero first (in-flight calls drain), replaces the tables,
+and scales them back — a proxy admitting calls during the reload could
+write ledger rows the restore then discards, or decide a budget against
+a half-loaded ledger. Nothing is re-migrated. Because credential hashes
+come back, the agent-side Secrets issued against the backed-up database
+work again.
 
 What the file holds: credential names and token hashes (never a token
 or an upstream key), caps, the ledger, the tool, inbound and approval

@@ -287,9 +287,11 @@ func TestConcurrentInboundEventsReplayAndGrantAreExact(t *testing.T) {
 	require.NoError(t, err)
 
 	// The SAME delivery ten times at once: admitted once, replayed nine
-	// times, one use burned.
+	// times, one use burned. Delivery ids carry the credential's unique
+	// name: the replay index is per (hook, delivery), so a persistent
+	// test database must not remember an earlier run's admission.
 	errs := race(10, func(int) error {
-		_, _, err := s.AdmitInboundEvent(ctx, "demo", name, "delivery-1", "kagent/hello")
+		_, _, err := s.AdmitInboundEvent(ctx, "demo", name, name+"-d1", "kagent/hello")
 		return err
 	})
 	var admitted, replays int
@@ -308,7 +310,7 @@ func TestConcurrentInboundEventsReplayAndGrantAreExact(t *testing.T) {
 
 	// Distinct deliveries against the one remaining use: exactly one more.
 	errs = race(10, func(i int) error {
-		_, _, err := s.AdmitInboundEvent(ctx, "demo", name, fmt.Sprintf("delivery-%d", 100+i), "kagent/hello")
+		_, _, err := s.AdmitInboundEvent(ctx, "demo", name, fmt.Sprintf("%s-d%d", name, 100+i), "kagent/hello")
 		return err
 	})
 	admitted = 0
@@ -423,7 +425,7 @@ func TestAdmissionHotPathCost(t *testing.T) {
 	}
 	serial := time.Since(start) / n
 	start = time.Now()
-	race(n, func(int) error {
+	errs := race(n, func(int) error {
 		a, err := s.AdmitSpend(ctx, name, meter.Hold(false), month, time.Minute)
 		if err != nil {
 			return err
@@ -432,5 +434,9 @@ func TestAdmissionHotPathCost(t *testing.T) {
 			InputTokens: 1, CostSource: "free", Status: 200}, a.ReservationID)
 	})
 	concurrent := time.Since(start) / n
+	// A timing that hides a failed call is not a measurement.
+	for _, err := range errs {
+		require.NoError(t, err)
+	}
 	t.Logf("admit+record per call: serial %v, %d-way concurrent (amortised) %v", serial, n, concurrent)
 }

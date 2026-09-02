@@ -124,7 +124,11 @@ func New(d Deps) *Poster {
 func (p *Poster) Enqueue(post Post) bool {
 	select {
 	case p.jobs <- post:
-		metrics.SetQueue(metrics.QueueNotifier, len(p.jobs), cap(p.jobs))
+		depth := len(p.jobs)
+		if p.inflight.Load() {
+			depth++ // queued plus the post being sent right now
+		}
+		metrics.SetQueue(metrics.QueueNotifier, depth, cap(p.jobs))
 		return true
 	default:
 		slog.Error("notify: queue full; post dropped (the request stays filed — run 'make approvals')",
