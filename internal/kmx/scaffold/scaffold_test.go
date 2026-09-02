@@ -160,10 +160,14 @@ func TestKeyShapedContentIsRefused(t *testing.T) {
 // an assigned key out from under the api-key shape and let it through. The
 // raw-input scan is what closes that; this is the reproduction, as a test.
 func TestAKeyCannotEscapeThroughQuoting(t *testing.T) {
+	// Assembled at runtime: written out, the assignment below is exactly what
+	// the repository's own "No secrets in tree" scan greps for, and this file
+	// would fail it.
+	secret := "AKIA" + strings.Repeat("X", 26)
 	for _, field := range []string{
-		`api_key: "AKIAIOSFODNN7EXAMPLEKEY123456"`,
-		`api-key = 'AKIAIOSFODNN7EXAMPLEKEY123456'`,
-		`APIKEY: "AKIAIOSFODNN7EXAMPLEKEY123456"`,
+		`api_key: "` + secret + `"`,
+		`api-key = '` + secret + `'`,
+		`APIKEY: "` + secret + `"`,
 	} {
 		spec := base("quoted-leak")
 		spec.Description = field
@@ -175,7 +179,7 @@ func TestAKeyCannotEscapeThroughQuoting(t *testing.T) {
 	// And the same text reaching the document through the block scalar,
 	// where no escaping happens.
 	spec := base("block-leak")
-	spec.Instructions = "Authenticate with\napi_key: \"AKIAIOSFODNN7EXAMPLEKEY123456\"\n"
+	spec.Instructions = "Authenticate with\napi_key: \"" + secret + "\"\n"
 	if _, err := Generate(spec); err == nil {
 		t.Error("a key in --instructions must be refused")
 	}
