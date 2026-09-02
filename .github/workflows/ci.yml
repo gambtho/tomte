@@ -898,18 +898,18 @@ jobs:
           if kubectl --context kind-kaimahi-p1 -n kagent get secret kaimahi-notifier-token >/dev/null 2>&1; then
             echo "the plane's own credential must not live in the agent namespace" >&2; exit 1
           fi
-          # Wait for kubelet to project the four files (P5b delta).
-          for f in inbound/slack-events slack/channel slack/approvers notifier/api-key; do
-            for _ in $(seq 1 60); do
-              kubectl --context kind-kaimahi-p1 -n kaimahi exec deploy/kaimahi-proxy -- \
-                cat "/etc/kaimahi/$f" >/dev/null 2>&1 && break
-              sleep 3
-            done
-            # distroless image: no `test`; a non-empty cat is the check.
-            kubectl --context kind-kaimahi-p1 -n kaimahi exec deploy/kaimahi-proxy -- cat "/etc/kaimahi/$f" | grep -q .
+          # Wait for kubelet to project the Secrets (P5b delta). The proxy
+          # image is distroless (no shell, no cat to exec), so the check
+          # is the plane's own behaviour: a signed mention from a
+          # NON-approver answers 503 while the signing secret, the channel
+          # or the approver list is still missing, and exactly 403 once
+          # all three are readable. The notifier's file is proven by its
+          # audit row in the next step.
+          for _ in $(seq 1 60); do
+            EXPECT=403 bash scripts/slack-mention-probe.sh U0NOBODY "approve 00000000" >/dev/null 2>&1 && break
+            sleep 3
           done
-          # The approver file holds the synthetic id and nothing else.
-          test "$(kubectl --context kind-kaimahi-p1 -n kaimahi exec deploy/kaimahi-proxy -- cat /etc/kaimahi/slack/approvers)" = U0CIAPPROVER
+          EXPECT=403 bash scripts/slack-mention-probe.sh U0NOBODY "approve 00000000"
       - name: "Approvals from Slack: a filing is announced through the governed path (allowed 502 under the plane's credential)"
         if: steps.changes.outputs.docs_only != 'true'
         run: |
