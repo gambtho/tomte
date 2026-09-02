@@ -50,47 +50,36 @@ from pathlib import Path
 readme = Path(__file__).resolve().parents[1] / "README.md"
 text = readme.read_text()
 
-required = [
-    "brand/hero.png",
-    "Governance for AI agents running on Kubernetes.",
-    "docs/assets/architecture.svg",
-    "## Quickstart",
-    "make up",
-    "make chat",
-    "## Status",
-]
-
-missing = [item for item in required if item not in text]
-if missing:
-    raise SystemExit("README front door missing: " + ", ".join(missing))
-
-positions = {item: text.index(item) for item in required}
+# Required in this order: identity, the three governance outcomes,
+# architecture, then the working quickstart before status.
 order = [
     "brand/hero.png",
     "Governance for AI agents running on Kubernetes.",
+    "### Control model spend",
+    "### Constrain tool calls",
+    "### Approve consequential actions",
     "docs/assets/architecture.svg",
     "## Quickstart",
     "make up",
     "make chat",
     "## Status",
 ]
-if [positions[item] for item in order] != sorted(positions[item] for item in order):
+
+missing = [item for item in order if item not in text]
+if missing:
+    raise SystemExit("README front door missing: " + ", ".join(missing))
+
+positions = [text.index(item) for item in order]
+if positions != sorted(positions):
     raise SystemExit("README front-door sections are out of order")
 
+# The proposed CLI may not appear anywhere before the end of the working
+# quickstart, including between `make up` and `make chat`.
 proposed_cli = text.find("npx kaimahi create")
-working_quickstart = text.find("make up")
-if proposed_cli != -1 and proposed_cli < working_quickstart:
+if proposed_cli != -1 and proposed_cli < text.index("make chat"):
     raise SystemExit("proposed CLI appears before the working quickstart")
 
-for heading in (
-    "Control model spend",
-    "Constrain tool calls",
-    "Approve consequential actions",
-):
-    if heading not in text:
-        raise SystemExit(f"README capability statement missing: {heading}")
-
-print("README front door: identity, architecture, quickstart, and status order valid")
+print("README front door: identity, outcomes, architecture, quickstart, and status order valid")
 ```
 
 - [ ] **Step 2: Run and confirm failure before rewriting**
@@ -132,7 +121,7 @@ git commit -m "test: protect README front-door hierarchy"
 Use this complete opening, then retain and reconcile the existing prerequisites,
 commands, status table, and detailed sections beneath it:
 
-```markdown
+````markdown
 <p align="center">
   <img src="brand/hero.png"
        alt="Kaimahi night worker guarding paths for AI agents"
@@ -186,7 +175,7 @@ make chat   # talk to the default agent
 The default path needs no API key. It uses an in-cluster Ollama model for a real
 agent conversation. Continue with the [getting-started guide](docs/getting-started.md)
 or choose a capability from the [documentation index](docs/README.md).
-```
+````
 
 - [ ] **Step 2: Move the proposed CLI section below working capability**
 
@@ -239,9 +228,20 @@ git commit -m "docs: lead README with Kaimahi governance outcomes"
 - Consumes: organization default and existing Make/CI commands.
 - Produces: local setup and verification detail that should not live in the organization default.
 
-- [ ] **Step 1: Create the complete local guide**
+- [ ] **Step 1: Confirm the organization guide the local guide links to is published**
 
-```markdown
+Run:
+
+```bash
+curl -fsSI https://github.com/kaimahi-agents/.github/blob/main/CONTRIBUTING.md
+```
+
+Expected: HTTP `200`. The organization community plan creates that file;
+if it is still unmerged, land it first rather than publishing a dead link.
+
+- [ ] **Step 2: Create the complete local guide**
+
+````markdown
 # Contributing to Kaimahi
 
 Kaimahi is an incubation project. Focus contributions on fixes, documentation
@@ -282,9 +282,9 @@ name when another lane owns the shared cluster. See
   registry names, cluster addresses, or unsanitized user data.
 
 Every change lands through a pull request with required checks green.
-```
+````
 
-- [ ] **Step 2: Validate and commit**
+- [ ] **Step 3: Validate and commit**
 
 ```bash
 python3 scripts/check-doc-links.py

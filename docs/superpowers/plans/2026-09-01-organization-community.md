@@ -30,9 +30,9 @@
 | `CONTRIBUTING.md` | Shared contribution expectations |
 | `SECURITY.md` | Private vulnerability reporting through GitHub |
 | `SUPPORT.md` | Incubation-appropriate support routing |
-| `ISSUE_TEMPLATE/bug.yml` | Structured, secret-safe bug reports |
-| `ISSUE_TEMPLATE/feature.yml` | Problem-first feature proposals |
-| `ISSUE_TEMPLATE/config.yml` | Blank-issue policy and support/security links |
+| `.github/ISSUE_TEMPLATE/bug.yml` | Structured, secret-safe bug reports |
+| `.github/ISSUE_TEMPLATE/feature.yml` | Problem-first feature proposals |
+| `.github/ISSUE_TEMPLATE/config.yml` | Blank-issue policy and support/security links |
 | `PULL_REQUEST_TEMPLATE.md` | Verification and claim-quality checklist |
 
 ### Task 1: Replace the organization profile
@@ -191,14 +191,14 @@ git commit -m "docs: add organization community defaults"
 ### Task 3: Add issue forms
 
 **Files:**
-- Create: `ISSUE_TEMPLATE/bug.yml`
-- Create: `ISSUE_TEMPLATE/feature.yml`
-- Create: `ISSUE_TEMPLATE/config.yml`
+- Create: `.github/ISSUE_TEMPLATE/bug.yml`
+- Create: `.github/ISSUE_TEMPLATE/feature.yml`
+- Create: `.github/ISSUE_TEMPLATE/config.yml`
 
 **Interfaces:**
 - Produces: valid GitHub issue-form YAML with secret-safety prompts.
 
-- [ ] **Step 1: Create `ISSUE_TEMPLATE/bug.yml`**
+- [ ] **Step 1: Create `.github/ISSUE_TEMPLATE/bug.yml`**
 
 ```yaml
 name: Bug report
@@ -273,7 +273,7 @@ body:
           required: true
 ```
 
-- [ ] **Step 2: Create `ISSUE_TEMPLATE/feature.yml`**
+- [ ] **Step 2: Create `.github/ISSUE_TEMPLATE/feature.yml`**
 
 ```yaml
 name: Feature request
@@ -318,7 +318,7 @@ body:
           required: true
 ```
 
-- [ ] **Step 3: Create `ISSUE_TEMPLATE/config.yml`**
+- [ ] **Step 3: Create `.github/ISSUE_TEMPLATE/config.yml`**
 
 ```yaml
 blank_issues_enabled: false
@@ -336,18 +336,28 @@ contact_links:
 Run:
 
 ```bash
-ruby -e 'require "yaml"; Dir["ISSUE_TEMPLATE/*.yml"].each { |f| YAML.load_file(f); puts f }'
-rg -n 'required: true|private|credentials|user problem' ISSUE_TEMPLATE
+ruby -e 'require "yaml"; Dir[".github/ISSUE_TEMPLATE/*.yml"].each { |f| YAML.load_file(f); puts f }'
+rg -n 'required: true|private|credentials|user problem' .github/ISSUE_TEMPLATE
 git diff --check
 ```
 
 Expected: Ruby prints all three files and exits `0`; grep finds the required
 guardrails.
 
+The forms apply the `bug` and `enhancement` labels, which GitHub creates by
+default in every new repository. Confirm they still exist wherever the forms
+will be used:
+
+```bash
+gh api repos/kaimahi-agents/kaimahi/labels --jq '.[].name' | grep -x -e bug -e enhancement
+```
+
+Expected: both names print. Recreate a missing label before relying on the form.
+
 - [ ] **Step 5: Commit**
 
 ```bash
-git add ISSUE_TEMPLATE
+git add .github/ISSUE_TEMPLATE
 git commit -m "chore: add organization issue forms"
 ```
 

@@ -164,10 +164,11 @@ cannot be served well from the repository and docs.
 ├── CONTRIBUTING.md
 ├── SECURITY.md
 ├── SUPPORT.md
-├── ISSUE_TEMPLATE/
-│   ├── bug.yml
-│   ├── feature.yml
-│   └── config.yml
+├── .github/
+│   └── ISSUE_TEMPLATE/
+│       ├── bug.yml
+│       ├── feature.yml
+│       └── config.yml
 └── PULL_REQUEST_TEMPLATE.md
 ```
 

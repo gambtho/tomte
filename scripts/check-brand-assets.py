@@ -152,19 +152,24 @@ def png_metadata(path: Path) -> tuple[int, int, bool]:
     if color_type == 3 and not saw_plte:
         raise ValueError("indexed PNG has no PLTE chunk")
 
-    compressed = b"".join(idat_parts)
-    try:
-        decompressor = zlib.decompressobj()
-        image_data = decompressor.decompress(compressed) + decompressor.flush()
-    except zlib.error as error:
-        raise ValueError("invalid PNG image data") from error
-    if not decompressor.eof or decompressor.unused_data or decompressor.unconsumed_tail:
-        raise ValueError("invalid PNG image data stream")
-
     layout = png_scanline_layout(
         width, height, depth * PNG_CHANNELS[color_type], interlace
     )
     expected_size = sum(rows * (row_bytes + 1) for rows, row_bytes in layout)
+
+    # Decompress at most one byte past the size the header implies, so an
+    # over-long stream is rejected before it is materialized in full.
+    compressed = b"".join(idat_parts)
+    try:
+        decompressor = zlib.decompressobj()
+        image_data = decompressor.decompress(compressed, expected_size + 1)
+        if len(image_data) > expected_size:
+            raise ValueError("invalid PNG image data length")
+        image_data += decompressor.flush()
+    except zlib.error as error:
+        raise ValueError("invalid PNG image data") from error
+    if not decompressor.eof or decompressor.unused_data or decompressor.unconsumed_tail:
+        raise ValueError("invalid PNG image data stream")
     if len(image_data) != expected_size:
         raise ValueError("invalid PNG image data length")
     position = 0
