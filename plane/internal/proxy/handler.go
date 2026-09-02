@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/kaimahi-agents/kaimahi/plane/internal/config"
+	"github.com/kaimahi-agents/kaimahi/plane/internal/egress"
 	"github.com/kaimahi-agents/kaimahi/plane/internal/meter"
 	"github.com/kaimahi-agents/kaimahi/plane/internal/metrics"
 	"github.com/kaimahi-agents/kaimahi/plane/internal/pricing"
@@ -268,11 +269,20 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request) {
 		admitted, admittedBy = metrics.Granted, metrics.ReasonBudget
 	}
 	started := time.Now()
-	resp, err := h.d.client().Do(outReq)
+	var resp *http.Response
+	client, err := h.d.clientFor(up)
+	if err == nil {
+		resp, err = client.Do(outReq)
+	}
 	if err != nil {
 		slog.Error("proxy: upstream call failed", "upstream", name, "err", err)
 		metrics.ObserveUpstream(metrics.SeamProxy, name, time.Since(started))
-		metrics.Decide(metrics.SeamProxy, admitted, metrics.ReasonUpstreamUnreachable)
+		reason := metrics.ReasonUpstreamUnreachable
+		if errors.Is(err, errNoInternetClient) || errors.Is(err, egress.ErrPrivateAddress) ||
+			errors.Is(err, egress.ErrPort) || errors.Is(err, egress.ErrScheme) || errors.Is(err, egress.ErrUnknownHost) {
+			reason = metrics.ReasonEgressRefused
+		}
+		metrics.Decide(metrics.SeamProxy, admitted, reason)
 		// The attempt is ledgered even though it failed — spend is
 		// recorded before failures are honored (standing guidance); a
 		// transport failure has no usage to bill, so tokens are zero.
