@@ -350,7 +350,7 @@ Measured choices, not guesses (Azure retail prices API, 2026-09-01):
 | Registry | **ACR Basic** | ~$0.167/day; supports ACR Tasks, which is what `az acr build` needs |
 | Load balancer | AKS default (Standard) | ~$0.025/hr; created for egress even with no `LoadBalancer` Service |
 | Public IP (edge, optional) | Standard static, with a DNS label | ~$0.004/hr; only while `make inbound-expose` is up |
-| Edge certificate volume (optional) | 1 GiB PVC | Azure's minimum billable disk; deleted with the edge |
+| Edge certificate volume (optional) | 1 GiB PVC | provisioned on the default StorageClass and billed at the smallest disk tier (E1, 4 GiB, a few cents a day); deleted with the edge |
 | Disks | 32 GiB OS disk + the 1 Gi Postgres PVC | rounded up to Azure's minimum billable sizes |
 
 A run of a few hours is **well under US$2**. The first verified run

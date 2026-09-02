@@ -74,7 +74,10 @@ AKS_FQDN = re.compile(r"[A-Za-z0-9-]+\.[a-z0-9-]+\.azmk8s\.io")
 # of the surrounding shell quoting and become unreadable.
 ACR = re.compile(r"(?P<name>[^\s\"\x27`/=]*)\.azurecr\.io")
 CLOUDAPP = re.compile(r"(?P<name>[^\s\"\x27`/=]*)\.[a-z0-9<>$(){}_-]*\.cloudapp\.azure\.com")
-IPV4 = re.compile(r"(?<![\w.])(?P<ip>(?:\d{1,3}\.){3}\d{1,3})(?![\w.])")
+# Trailing: not a word char, and not ".<digit>" (a fifth component means a
+# five-component version string); a sentence-final "." after a real address
+# still matches.
+IPV4 = re.compile(r"(?<![\w.])(?P<ip>(?:\d{1,3}\.){3}\d{1,3})(?!\w)(?!\.\d)")
 WELL_KNOWN_IPS = {"1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4", "9.9.9.9"}
 PLACEHOLDER = re.compile(r"""(
       \$\(?\{?[A-Za-z_][A-Za-z0-9_]*\}?\)?   # $ACR, ${ACR}, $(ACR_NAME)

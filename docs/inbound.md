@@ -90,11 +90,12 @@ because the proof travels with every request; present so a source that
 cannot sign still has a path. A real credential that is not the hook's
 gets 403, not 401.
 
-The event text is the JSON body's `text` field if there is one,
-otherwise the body itself. It becomes the agent's prompt as-is. On the
-generic hooks, a body that is not UTF-8 text, or has no text, is a 400;
-on the Slack hook, anything but the two envelope shapes above is, and
-the inner event is mapped rather than pasted (below).
+On the generic hooks the event text is the JSON body's `text` field
+when the body is a JSON object that has one, otherwise the whole body
+as text; it becomes the agent's prompt as-is. A body that is not UTF-8,
+or whose text is empty after trimming (an empty `text`, an empty body),
+is a 400. On the Slack hook, anything but the two envelope shapes above
+is a 400 too, and the inner event is mapped rather than pasted (below).
 
 ## Approval: a hook is granted, bounded, or it does not run
 
@@ -298,9 +299,13 @@ approve ID=… USES=… TTL=…`). The reply needs a live *tool* grant for
 approval, exactly as [slack.md](slack.md#the-demo) walks through it,
 including the rediscover-and-restart so the agent can see the tool. A
 mention with the first grant and not the second runs the agent, which
-is told the post was denied, says so, and stops: the inbound audit shows
-`completed`, the Slack audit shows `denied 403`, and nothing lands in
-the channel. That is not a failure; it is the second gate.
+has **no posting tool in its hands** (the gateway projects only the
+allowlist onto `tools/list`, so kagent never discovered it — the P5a
+rule), says it cannot post, and stops: the inbound audit shows
+`completed`, nothing lands in the channel, and the Slack audit shows no
+call at all. A `denied 403` row appears there only when discovery is
+stale (a grant that just expired, before kagent's next reconcile) or a
+direct MCP client tries. Either way the second gate held.
 
 ### Run it
 

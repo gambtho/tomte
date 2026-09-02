@@ -73,7 +73,7 @@ node_rg=$(az aks show --name "$CLUSTER" --resource-group "$RG" --query nodeResou
 [ -n "$node_rg" ] || { echo "exposure-scan: cannot resolve the node resource group of $CLUSTER" >&2; exit 1; }
 az network public-ip list --resource-group "$node_rg" --query '[].ipAddress' -o tsv > "$workdir/ips"
 [ -s "$workdir/ips" ] || { echo "exposure-scan: Azure lists no public IPs in the node resource group — refusing to report clean" >&2; exit 1; }
-grep -qx "$edge_ip" "$workdir/ips" || {
+grep -Fqx "$edge_ip" "$workdir/ips" || {
   echo "exposure-scan: the edge Service's IP is not among the node resource group's public IPs" >&2; exit 1; }
 
 REVEAL_IPS="${REVEAL_IPS:-0}" EDGE_IP="$edge_ip" SCAN_TIMEOUT="${SCAN_TIMEOUT:-2}" SCAN_WORKERS="${SCAN_WORKERS:-512}" \

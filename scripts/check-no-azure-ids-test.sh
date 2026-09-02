@@ -50,6 +50,7 @@ expect refused "literal cloudapp DNS label"   "Request URL: https://$edge/hook/s
 expect refused "bare cloudapp FQDN"           "$edge"                                            "literal public DNS label"
 expect refused "public IPv4 address"          "public IP: $ip1"                                  "public IPv4 address"
 expect refused "public IPv4 in a URL"         "curl https://$ip2/"                               "public IPv4 address"
+expect refused "public IPv4 ending a sentence" "the edge answered on $ip1."                       "public IPv4 address"
 
 # --- must pass -----------------------------------------------------------------
 expect clean "variable ACR reference"         'image: $(ACR_NAME).azurecr.io/kaimahi-proxy:p8'
