@@ -6,8 +6,8 @@
 # Deliberately NOT under k8s/plane/: kind and CI deploy a plane with no
 # public path at all (docs/inbound.md), and `make plane` must never
 # grow one as a side effect. This file is applied by `make inbound-expose`
-# on TARGET=aks, rendered by scripts/inbound-expose.sh — the two
-# ${KAIMAHI_...} tokens below are the DNS label the operator chooses and
+# on TARGET=aks, rendered by scripts/inbound-expose.sh — the
+# two KAIMAHI_ render tokens below are the DNS label the operator chooses and
 # the public FQDN Azure derives from it (<label>.<region>.cloudapp.azure.com).
 # Both are Azure identifiers, so neither is committed; the render refuses
 # to apply with a token left unfilled, and scripts/check-no-azure-ids.sh
@@ -61,6 +61,11 @@ data:
       admin off
     }
     {$KAIMAHI_PUBLIC_FQDN} {
+      # Access log to stdout: what reached the edge, and what it answered
+      # (kubectl logs deploy/kaimahi-inbound-edge). Bodies are not logged.
+      log {
+        output stdout
+      }
       tls {
         issuer acme {
           disable_http_challenge
@@ -160,6 +165,11 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: [ALL]
+              # The image's caddy binary carries the cap_net_bind_service
+              # file capability; with it outside the bounding set, exec
+              # fails outright ("operation not permitted"). Adding it back
+              # is the whole concession — the listener is on 8443 anyway.
+              add: [NET_BIND_SERVICE]
             readOnlyRootFilesystem: true
       volumes:
         - name: caddyfile
