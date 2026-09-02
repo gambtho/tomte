@@ -43,8 +43,10 @@ it is also the first thing to state honestly in any doc you write.
 Everything below is runnable from a clean checkout with no cluster.
 
 ```bash
-# Go plane — the only thing that compiles
-cd plane && gofmt -l . && go vet ./... && go build ./... && go test ./...
+# Go plane — the only thing that compiles.
+# `gofmt -l` LISTS unformatted files but still exits 0, so it has to be
+# wrapped to actually fail the chain — the same trap as `! grep` below.
+cd plane && test -z "$(gofmt -l .)" && go vet ./... && go build ./... && go test ./...
 
 # Repository checks (these are the CI hygiene job)
 python3 scripts/check-doc-links.py
@@ -125,10 +127,20 @@ Postgres, migrated from `plane/internal/db/migrations/`:
 
 `k8s/plane/upstreams.yaml` is the upstream table: base URL plus **exactly
 one** allowed forwarded path per upstream, for models and for MCP servers.
-That file is the egress rule at the application layer;
-`k8s/plane/network-policy.yaml` is the same rule at the network layer. If
-you are adding a destination, you are editing config and policy — not
-writing a new client.
+
+`k8s/plane/network-policy.yaml` is a **complementary** control, not the same
+rule restated. They constrain different things and neither substitutes for
+the other:
+
+| | Enforces | Cannot see |
+|---|---|---|
+| `upstreams.yaml` | which base URL, and the one permitted path on it | anything below the process — a pod can still open sockets the table never mentions |
+| `network-policy.yaml` | which pods, namespaces, IP blocks and ports are reachable at all | URLs, paths, or HTTP at all — it is L3/L4 |
+
+So the policy stops the pod reaching a host that is not allowed; the
+upstream table stops the proxy forwarding to a path that is not allowed on a
+host it *can* reach. If you are adding a destination you are editing both —
+and writing neither a new client nor a new egress path.
 
 ## Invariants
 
