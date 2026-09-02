@@ -852,7 +852,8 @@ jobs:
           bash scripts/inbound-probe.sh demo 'second use'
           EXPECT=403 bash scripts/inbound-probe.sh demo 'third: grant exhausted'
           make approval-audit | tee approval-audit-inbound.out
-          grep -E 'inbound-demo +inbound +demo +approved +expires=.* uses=2' approval-audit-inbound.out
+          # P8b: the trail now names who decided between the action and the bounds.
+          grep -E 'inbound-demo +inbound +demo +approved +admin +expires=.* uses=2' approval-audit-inbound.out
       - name: "Inbound: bearer hook authenticates the same way and is gated the same way"
         if: steps.changes.outputs.docs_only != 'true'
         run: |
