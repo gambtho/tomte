@@ -340,6 +340,12 @@ jobs:
         run: go build ./...
       - name: kmx — test (guard port, scaffolder, kagent checksum, make delegation)
         run: |
+          # This job does not set `shell: bash`, so it runs under `bash -e`
+          # with NO pipefail: without this line `go test | tee` reports tee's
+          # status, and a failure in a package the greps below do not name
+          # would pass silently. The go-plane job sets the shell for the same
+          # reason; say it explicitly here.
+          set -o pipefail
           go test ./... 2>&1 | tee kmx-test.out
           # The guard port and the scaffolder's refusals are the reason this
           # job is required; a silently skipped package would be a green

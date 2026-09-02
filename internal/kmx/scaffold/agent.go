@@ -232,7 +232,7 @@ func Generate(spec Spec) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	systemMessage, err := blockScalar(instructions, 6)
+	systemMessage, err := literalBlock("systemMessage", instructions, 4, 6)
 	if err != nil {
 		return "", err
 	}
@@ -269,7 +269,6 @@ func Generate(spec Spec) (string, error) {
 		"          memory: 320Mi\n" +
 		"        limits:\n" +
 		"          memory: 1Gi\n")
-	b.WriteString("    systemMessage: |\n")
 	b.WriteString(systemMessage)
 
 	if spec.Tools != nil {

@@ -1,7 +1,9 @@
 package scaffold
 
 import (
+	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -240,29 +242,83 @@ func TestQuotesAndBackslashesSurviveQuoting(t *testing.T) {
 	}
 }
 
-func TestGeneratedManifestParsesAsYAML(t *testing.T) {
-	// No YAML library is a dependency of this module (that is the point), so
-	// the structural assertion is the indentation contract itself: nothing
-	// under `spec:` may sit at column 0, and the block scalar's lines must
-	// all be deeper than the key that introduces them.
-	spec := base("shape-check")
-	spec.Instructions = "line one\n\nline three\n   already indented\n"
-	doc := mustGenerate(t, spec)
-	inScalar := false
-	for _, line := range strings.Split(doc, "\n") {
-		if strings.HasPrefix(line, "#") || line == "" {
-			continue
-		}
-		if strings.HasSuffix(line, "systemMessage: |") {
-			inScalar = true
-			continue
-		}
-		if inScalar && !strings.HasPrefix(line, "      ") {
-			// The scalar ends at the first line indented less than its body;
-			// for this spec (no tools) there should be none.
-			t.Errorf("block scalar leaked at %q:\n%s", line, doc)
-			break
-		}
+// No YAML library is a dependency of this module — that is the point — so the
+// generated manifest is handed to a real parser out of process. This is the
+// test that would have caught the block-scalar defect review found: an
+// instructions file whose FIRST line is indented made YAML infer a deeper
+// block indent than the body was emitted at, and the manifest stopped parsing
+// altogether. The explicit `|2` indicator is what fixes it, and only a parser
+// can confirm that.
+func TestGeneratedManifestParsesAndKeepsInstructionsInsideTheScalar(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 is not installed; the structural checks still run in the other tests")
+	}
+	for _, tc := range []struct{ name, instructions string }{
+		{"ordinary", "Answer briefly.\nNever ask questions.\n"},
+		{"blank lines and deeper indentation", "line one\n\nline three\n   already indented\n"},
+		// The one review found: an indented FIRST line.
+		{"indented first line", "    Answer briefly.\ntools:\n  - type: McpServer\n"},
+		{"only an indented line", "        just this\n"},
+		{"a line that looks like a sibling key", "modelConfig: attacker-owned\ntools: []\n"},
+		{"trailing and leading blank lines", "\n\nAnswer.\n\n\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec := base("parse-check")
+			spec.Instructions = tc.instructions
+			wiring, err := ParseTools("kagent-tool-server:k8s_get_resources")
+			if err != nil {
+				t.Fatal(err)
+			}
+			spec.Tools = wiring
+			doc := mustGenerate(t, spec)
+
+			script := `
+import sys, yaml, json
+doc = yaml.safe_load(sys.stdin.read())
+d = doc["spec"]["declarative"]
+print(json.dumps({"keys": sorted(d.keys()),
+                  "systemMessage": d.get("systemMessage"),
+                  "tools": d.get("tools")}))
+`
+			cmd := exec.Command("python3", "-c", script)
+			cmd.Stdin = strings.NewReader(doc)
+			out, err := cmd.Output()
+			if err != nil {
+				t.Fatalf("the generated manifest does not parse: %v\n%s", err, doc)
+			}
+			var parsed struct {
+				Keys          []string `json:"keys"`
+				SystemMessage string   `json:"systemMessage"`
+				Tools         []struct {
+					McpServer struct {
+						Name      string   `json:"name"`
+						ToolNames []string `json:"toolNames"`
+					} `json:"mcpServer"`
+				} `json:"tools"`
+			}
+			if err := json.Unmarshal(out, &parsed); err != nil {
+				t.Fatal(err)
+			}
+
+			// Nothing the operator wrote became a key: declarative has
+			// exactly the four kmx puts there.
+			want := []string{"deployment", "modelConfig", "systemMessage", "tools"}
+			if strings.Join(parsed.Keys, ",") != strings.Join(want, ",") {
+				t.Errorf("instructions changed the manifest's shape: keys=%v\n%s", parsed.Keys, doc)
+			}
+			// The instructions survive verbatim (modulo the trailing newline
+			// normalization a literal block does).
+			if got, expect := parsed.SystemMessage, strings.TrimRight(tc.instructions, "\n")+"\n"; got != expect {
+				t.Errorf("systemMessage round-trip:\n got %q\nwant %q\n%s", got, expect, doc)
+			}
+			// And the tool wiring is the one kmx emitted, not one the
+			// instructions supplied.
+			if len(parsed.Tools) != 1 ||
+				parsed.Tools[0].McpServer.Name != "kagent-tool-server" ||
+				len(parsed.Tools[0].McpServer.ToolNames) != 1 {
+				t.Errorf("tool wiring is not the generated one: %+v\n%s", parsed.Tools, doc)
+			}
+		})
 	}
 }
 

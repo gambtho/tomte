@@ -18,9 +18,9 @@ func (a *App) Ctx(context string) error {
 	if context == "" {
 		return a.showCtx()
 	}
-	kubeconfig, err := guard.LoadKubeconfig("kubectl")
+	kubeconfig, err := a.kubeconfig()
 	if err != nil {
-		return fmt.Errorf("kube-guard: %w", err)
+		return err
 	}
 	if err := guard.Check(kubeconfig, guard.Request{
 		Action:     "select " + context + " as the context kmx acts on",
@@ -43,9 +43,9 @@ func (a *App) Ctx(context string) error {
 // showCtx reports the resolved context and its posture without changing
 // anything.
 func (a *App) showCtx() error {
-	kubeconfig, err := guard.LoadKubeconfig("kubectl")
+	kubeconfig, err := a.kubeconfig()
 	if err != nil {
-		return fmt.Errorf("kube-guard: %w", err)
+		return err
 	}
 	posture, err := guard.Classify(kubeconfig, a.Cfg.KubeContext)
 	if err != nil {

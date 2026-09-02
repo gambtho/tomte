@@ -244,7 +244,13 @@ func (a *App) liveModelConfig(agent string) (string, error) {
 		if isNotFound(err) {
 			return "", nil
 		}
-		return "", fmt.Errorf("cannot read %s's live modelConfig (refusing to risk un-governing it): %w", agent, err)
+		// Deliberately NOT treated as absence, however it reads. The most
+		// common cause is that kagent is not installed yet — the Agent CRD
+		// does not exist, so kubectl says "the server doesn't have a resource
+		// type", not NotFound — and applying an Agent to that cluster would
+		// fail a moment later anyway. Name the likely cause; do not guess.
+		return "", fmt.Errorf("cannot read %s's live modelConfig (refusing to risk un-governing it): %w\n"+
+			"  If kagent is not installed on this cluster yet, that is `kmx up`.", agent, err)
 	}
 	return strings.TrimSpace(out), nil
 }

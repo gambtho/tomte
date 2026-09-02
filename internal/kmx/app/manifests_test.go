@@ -32,6 +32,13 @@ func TestEmbeddedManifestsAreTheOnesInTheTree(t *testing.T) {
 // along in the binary: kmx applying a plane manifest is precisely the
 // scope this milestone said it would not have.
 func TestThePlaneIsNotEmbedded(t *testing.T) {
+	// The premise first: this asserts an EXCLUSION, and an exclusion test
+	// passes for free once the thing it excludes stops existing. If the
+	// plane's manifests move, this test must fail and be rewritten against
+	// wherever they went — not quietly keep passing.
+	if _, err := os.Stat(filepath.Join("..", "..", "..", "k8s", "plane", "proxy.yaml")); err != nil {
+		t.Fatalf("k8s/plane/proxy.yaml is gone, so this exclusion test no longer proves anything: %v", err)
+	}
 	if _, err := manifest("plane/proxy.yaml"); err == nil {
 		t.Error("the plane's manifests must not be embedded in kmx (D27: runtime only)")
 	}

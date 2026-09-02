@@ -63,6 +63,23 @@ func (a *App) kubectlQuiet(args ...string) bool {
 	return a.Run.Quiet("kubectl", a.kubectl(args...)...)
 }
 
+// kubeconfig reads the merged kubeconfig, saying plainly when the reason it
+// cannot is that kubectl is not installed. On a fresh machine the missing tool
+// is the whole story, and "cannot read the kubeconfig — refusing to act blind"
+// would otherwise read as something being wrong with the cluster. Every path
+// that classifies a context goes through here, `kmx ctx` included.
+func (a *App) kubeconfig() (*guard.Kubeconfig, error) {
+	if err := run.MustExist("kubectl", "to read the kubeconfig and reach the cluster",
+		"https://kubernetes.io/docs/tasks/tools/"); err != nil {
+		return nil, err
+	}
+	cfg, err := guard.LoadKubeconfig("kubectl")
+	if err != nil {
+		return nil, fmt.Errorf("kube-guard: %w", err)
+	}
+	return cfg, nil
+}
+
 // Guard prints where the action will land and refuses anything that is not a
 // local kind cluster without explicit confirmation. It runs at most once per
 // process.
@@ -70,17 +87,9 @@ func (a *App) Guard(action, command string) error {
 	if a.guarded {
 		return nil
 	}
-	// Said plainly here rather than as "cannot read the kubeconfig": on a
-	// fresh machine the missing tool is the whole story, and the guard's
-	// refusal would otherwise read as something being wrong with the
-	// cluster.
-	if err := run.MustExist("kubectl", "to read the kubeconfig and reach the cluster",
-		"https://kubernetes.io/docs/tasks/tools/"); err != nil {
-		return err
-	}
-	cfg, err := guard.LoadKubeconfig("kubectl")
+	cfg, err := a.kubeconfig()
 	if err != nil {
-		return fmt.Errorf("kube-guard: %w", err)
+		return err
 	}
 	if err := guard.Check(cfg, guard.Request{
 		Action:     action,
