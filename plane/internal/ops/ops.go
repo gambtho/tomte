@@ -26,6 +26,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -48,6 +49,10 @@ type PoolStats struct {
 
 type Deps struct {
 	Ready Pinger
+	// Draining is set by main on SIGTERM: readiness answers 503 from
+	// that moment (the conventional shape — stop being routed to before
+	// the listeners close), while liveness is unaffected.
+	Draining *atomic.Bool
 	// Stats reports the pool right now; nil skips the stall check.
 	Stats func() PoolStats
 	// Listeners are loopback addresses of the data listeners
@@ -92,6 +97,10 @@ func NewMux(d Deps) *http.ServeMux {
 func (h *handler) ready(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
+	if h.d.Draining != nil && h.d.Draining.Load() {
+		http.Error(w, "not ready: draining", http.StatusServiceUnavailable)
+		return
+	}
 	if h.d.Ready == nil {
 		http.Error(w, "not ready: no store", http.StatusServiceUnavailable)
 		return

@@ -176,10 +176,13 @@ All unit-tested and live-verified:
   the model is priced — until its own ledger write lands), so N
   concurrent calls against a cap with room for one admit exactly one,
   whichever replicas they land on. CI fires eight at both replicas at
-  once and asserts one 200 and seven 429s. What remains is the accepted
-  soft stop: the one call admitted below the cap may finish above it,
-  by its own usage. A hold that a crashed replica never released stops
-  counting after ten minutes (longer than any call the proxy allows).
+  once and asserts one 200 and seven 429s. The hold bounds *admissions*,
+  not overshoot: what remains is the accepted soft stop — every call
+  admitted while the cap had room for its hold may still finish above
+  the cap by its own usage, so with plenty of headroom several in-flight
+  calls can each end over it. A hold that a crashed replica never
+  released stops counting after ten minutes (longer than any call the
+  proxy allows).
 - If the ledger store is unreadable, budgeted credentials are denied
   (**403 "metering unavailable"**): no spend visibility, no spend. A
   credential with no caps skips the budget read, but a failed ledger

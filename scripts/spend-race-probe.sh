@@ -79,6 +79,7 @@ workers=()
 for i in $(seq 1 "$n"); do
   port="${ports[$(( (i - 1) % ${#ports[@]} ))]}"
   (
+    : > "$workdir/ready-$i"
     read -r _ < "$workdir/gate" || true
     curl -sS -o "$workdir/resp-$i" -w '%{http_code}' -X POST -H @"$workdir/auth-header" \
       -H 'Content-Type: application/json' --data @"$workdir/body" \
@@ -88,14 +89,22 @@ for i in $(seq 1 "$n"); do
   ) &
   workers+=("$!")
 done
-sleep 0.5
-# Open the fifo for writing once; every reader is released.
+# Every worker must be at the gate before it opens (bounded).
+for _ in $(seq 1 100); do
+  [ "$(find "$workdir" -maxdepth 1 -name 'ready-*' | wc -l)" -ge "$n" ] && break
+  sleep 0.1
+done
+[ "$(find "$workdir" -maxdepth 1 -name 'ready-*' | wc -l)" -ge "$n" ] || {
+  echo "spend-race: workers did not all reach the gate" >&2; kill "${workers[@]}" 2>/dev/null || true; exit 1; }
+# Open the fifo for writing once; every reader is released. The write
+# end stays open until the workers are done, so a reader that opens the
+# gate late still finds a writer and its line rather than blocking.
 exec 3> "$workdir/gate"
 for _ in $(seq 1 "$n"); do echo go >&3; done
-exec 3>&-
 # The workers only — the port-forwards are background jobs too and
 # never exit on their own.
 wait "${workers[@]}"
+exec 3>&-
 
 admitted=0; denied=0; other=0
 declare -A per_port

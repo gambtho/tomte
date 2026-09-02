@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,6 +38,17 @@ func TestReadinessFollowsTheStoreAndLivenessDoesNot(t *testing.T) {
 	require.Equal(t, 200, get(mux, "/livez").Code)
 	p.err = nil
 	require.Equal(t, 200, get(mux, "/readyz").Code)
+}
+
+func TestDrainingDropsReadinessNotLiveness(t *testing.T) {
+	var draining atomic.Bool
+	mux := ops.NewMux(ops.Deps{Ready: &pinger{}, Draining: &draining})
+	require.Equal(t, 200, get(mux, "/readyz").Code)
+	draining.Store(true)
+	w := get(mux, "/readyz")
+	require.Equal(t, 503, w.Code)
+	require.Contains(t, w.Body.String(), "draining")
+	require.Equal(t, 200, get(mux, "/livez").Code)
 }
 
 func TestLivenessFailsOnlyOnASaturatedPoolMakingNoProgress(t *testing.T) {

@@ -28,6 +28,7 @@ import (
 	"os/signal"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -217,8 +218,10 @@ func main() {
 	// reports only a LOCAL fault — a data listener not answering on
 	// loopback, or a pool checked out with no progress — so a Postgres
 	// outage or a slow upstream never restarts the proxy.
+	var draining atomic.Bool
 	opsSrv := &http.Server{Addr: opsAddr, Handler: ops.NewMux(ops.Deps{
-		Ready: pool,
+		Ready:    pool,
+		Draining: &draining,
 		Stats: func() ops.PoolStats {
 			s := pool.Stat()
 			return ops.PoolStats{Acquired: s.AcquiredConns(), Max: s.MaxConns(), AcquireCount: s.AcquireCount()}
@@ -241,6 +244,10 @@ func main() {
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
+		// Readiness drops first — stop being routed to — then the
+		// listeners drain; the ops listener itself stays up through the
+		// drain so the probe keeps answering (503) until the end.
+		draining.Store(true)
 		// Stop accepting events first, then let workers finish the
 		// event they are on (bounded by the shutdown budget).
 		_ = inboundSrv.Shutdown(shutdownCtx)
@@ -248,8 +255,8 @@ func main() {
 		_ = dataSrv.Shutdown(shutdownCtx)
 		_ = mcpSrv.Shutdown(shutdownCtx)
 		_ = adminSrv.Shutdown(shutdownCtx)
-		// The ops listener drains last: readiness keeps answering (503
-		// once the pool closes) while the data listeners finish.
+		// The ops listener closes last (a deferred call runs after the
+		// drain below), so the probes answer throughout.
 		defer func() { _ = opsSrv.Shutdown(shutdownCtx) }()
 		select {
 		case <-bridgeDone:

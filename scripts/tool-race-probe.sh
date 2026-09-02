@@ -90,6 +90,8 @@ for i in $(seq 1 "$m"); do
     hdr=(); [ -n "$session" ] && { printf 'Mcp-Session-Id: %s\n' "$session" > "$d/session"; hdr=(-H @"$d/session"); }
     curl -sS -o /dev/null -X POST -H @"$workdir/auth-header" -H 'Content-Type: application/json' \
       -H 'Accept: application/json, text/event-stream' "${hdr[@]}" --data @"$workdir/initialized" "$url" || true
+    # Handshake done: report ready, then block on the gate.
+    : > "$d/ready"
     read -r _ < "$workdir/gate" || true
     st=$(curl -sS -X POST -H @"$workdir/auth-header" -H 'Content-Type: application/json' \
       -H 'Accept: application/json, text/event-stream' "${hdr[@]}" --data @"$workdir/call" \
@@ -120,13 +122,25 @@ EOF
   ) &
   workers+=("$!")
 done
-sleep 1
+# Every worker must have finished its handshake and be waiting at the
+# gate before it opens: a worker that reached the gate after the writer
+# closed would block forever, and one released alone would not be in
+# the race. Bounded — a handshake that never completes fails the probe.
+for _ in $(seq 1 300); do
+  [ "$(find "$workdir" -name ready -type f | wc -l)" -ge "$m" ] && break
+  sleep 0.2
+done
+[ "$(find "$workdir" -name ready -type f | wc -l)" -ge "$m" ] || {
+  echo "tool-race: only $(find "$workdir" -name ready -type f | wc -l)/$m workers completed the MCP handshake" >&2
+  kill "${workers[@]}" 2>/dev/null || true; exit 1; }
 exec 3> "$workdir/gate"
 for _ in $(seq 1 "$m"); do echo go >&3; done
-exec 3>&-
 # The workers only — the port-forwards are background jobs too and
-# never exit on their own.
+# never exit on their own. The write end stays open until they are all
+# done, so a reader that opens the gate late still finds a writer and
+# its line rather than blocking forever.
 wait "${workers[@]}"
+exec 3>&-
 
 admitted=0; denied=0; other=0
 declare -A per_port

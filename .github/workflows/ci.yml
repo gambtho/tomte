@@ -271,6 +271,9 @@ jobs:
     defaults:
       run:
         working-directory: plane
+        # bash turns on pipefail: `go test | tee | grep` must fail on go
+        # test's own exit code, not on whether grep matched an `ok` line.
+        shell: bash
     # P9: the store's concurrency tests race the real SQL against a real
     # Postgres (a throwaway service container with a throwaway password
     # — not a secret, and no hosted key of any kind; D14 holds). Without
@@ -305,7 +308,10 @@ jobs:
         env:
           KAIMAHI_TEST_PG_DSN: postgres://kaimahi:ci-throwaway@127.0.0.1:5432/kaimahi?sslmode=disable
         run: |
-          go test ./... -v 2>&1 | tee test.out | grep -E '^(ok|FAIL|--- FAIL|--- PASS: Test(Concurrent|Migrate|Reservation|Expired|Admission|EveryLabel))|admit\+record'
+          # go test's exit code is the step's (pipefail, and the tee is
+          # the only stage after it); the grep is a report, not a gate.
+          go test ./... -v 2>&1 | tee test.out
+          grep -E '^(ok|FAIL|--- FAIL|--- PASS: Test(Concurrent|Migrate|Reservation|Expired|Admission|EveryLabel))|admit\+record' test.out
           # The concurrency proofs must have RUN, not skipped: a lost DSN
           # would turn the proof into a green no-op.
           if grep -q 'SKIP: TestConcurrent' test.out; then
@@ -1087,7 +1093,10 @@ jobs:
       - name: "Exact grants: 8 concurrent tool calls against a USES=1 grant admit exactly one, across both replicas"
         if: steps.changes.outputs.docs_only != 'true'
         run: |
-          before=$(make tool-audit | grep -cE 'hello-tools +kagent-tools +tools/call +k8s_get_events +allowed +200 +granted' || [ $? = 1 ])
+          # Counted in Postgres, not through the audit view's newest-50 window.
+          granted() { kubectl --context kind-kaimahi-p1 -n kaimahi exec deploy/kaimahi-postgres -- \
+            psql -U kaimahi -d kaimahi -tAc "SELECT count(*) FROM tool_audit WHERE credential_name = 'hello-tools' AND tool = 'k8s_get_events' AND decision = 'allowed' AND status = 200 AND detail LIKE 'granted %'"; }
+          before=$(granted)
           bash scripts/tool-denial-probe.sh k8s_get_events
           make approvals | tee approvals-race.out
           id=$(awk '$3=="hello-tools" && $4=="tool" && $5=="k8s_get_events" {print $1}' approvals-race.out)
@@ -1095,8 +1104,9 @@ jobs:
           make approve ID="$id" USES=1 TTL=10m
           EXPECT_ADMITTED=1 bash scripts/tool-race-probe.sh k8s_get_events 8 '{"namespace": "default"}' | tee tool-race.out
           grep -q 'admitted=1 denied(-32001)=7 other=0' tool-race.out
-          after=$(make tool-audit | grep -cE 'hello-tools +kagent-tools +tools/call +k8s_get_events +allowed +200 +granted' || [ $? = 1 ])
+          after=$(granted)
           test "$after" -eq $((before + 1))
+          make tool-audit | grep -E 'hello-tools +kagent-tools +tools/call +k8s_get_events +allowed +200 +granted'
       - name: "Replica killed mid-cycle: the in-flight call drains, the survivor serves the next, no ledger row lost"
         if: steps.changes.outputs.docs_only != 'true'
         run: bash scripts/replica-kill-probe.sh
@@ -1106,10 +1116,20 @@ jobs:
       - name: "Both replicas restarted together come up clean under the migration lock"
         if: steps.changes.outputs.docs_only != 'true'
         run: |
+          old=$(kubectl --context kind-kaimahi-p1 -n kaimahi get pods -l app=kaimahi-proxy -o jsonpath='{.items[*].metadata.name}')
           kubectl --context kind-kaimahi-p1 -n kaimahi delete pods -l app=kaimahi-proxy --wait=false
+          # Wait for the OLD pods to be gone before reading the Deployment:
+          # its status lags the deletes, and a Terminating pod's log still
+          # says "up". The pods asserted below must be new ones.
+          for p in $old; do
+            kubectl --context kind-kaimahi-p1 -n kaimahi wait --for=delete "pod/$p" --timeout=120s
+          done
           kubectl --context kind-kaimahi-p1 -n kaimahi rollout status deploy/kaimahi-proxy --timeout=300s
           test "$(kubectl --context kind-kaimahi-p1 -n kaimahi get deploy kaimahi-proxy -o jsonpath='{.status.readyReplicas}')" = 2
-          for pod in $(kubectl --context kind-kaimahi-p1 -n kaimahi get pods -l app=kaimahi-proxy -o jsonpath='{.items[*].metadata.name}'); do
+          new=$(kubectl --context kind-kaimahi-p1 -n kaimahi get pods -l app=kaimahi-proxy --field-selector=status.phase=Running -o jsonpath='{.items[*].metadata.name}')
+          test "$(echo "$new" | wc -w)" = 2
+          for pod in $new; do
+            case " $old " in *" $pod "*) echo "old pod $pod still listed" >&2; exit 1 ;; esac
             kubectl --context kind-kaimahi-p1 -n kaimahi logs "$pod" | grep -q 'migrations: nothing to apply'
             kubectl --context kind-kaimahi-p1 -n kaimahi logs "$pod" | grep -q 'kaimahi-proxy up'
           done

@@ -11,9 +11,11 @@
 -- concurrent admission is exactly what serial admission would be.
 --
 -- A hold is the LEAST an admitted call can spend (one token; one cent
--- when the model is priced), never an estimate: the cap is still passed
--- by at most the one call admitted below it (the P4a soft-stop), and
--- nothing else. expires_at bounds a reservation a crashed replica never
+-- when the model is priced), never an estimate: it bounds ADMISSIONS
+-- (no more calls are admitted concurrently than the cap has room for),
+-- not overshoot — every call admitted with headroom for its hold may
+-- still finish above the cap by its own usage (the P4a soft-stop).
+-- expires_at bounds a reservation a crashed replica never
 -- consumed: it stops counting when it expires (longer than any call the
 -- proxy allows), and the next admission for that credential sweeps it.
 CREATE TABLE spend_reservation (

@@ -43,9 +43,12 @@ $KUBECTL -n "$SECRET_NAMESPACE" get secret "$GOVERNED_SECRET" \
 test -s "$workdir/token" || { echo "$GOVERNED_SECRET missing/empty (run make govern)" >&2; exit 1; }
 { printf 'Authorization: Bearer '; cat "$workdir/token"; printf '\n'; } > "$workdir/auth-header"
 
-ledger_rows() { # count the credential's allowed free rows via the admin script
-  KUBECTL="$KUBECTL" bash "$(dirname "$0")/plane-admin.sh" ledger "$CRED" 2>/dev/null \
-    | grep -cE " $CRED +$UPSTREAM +[^ ]+ +[0-9]+ +[0-9]+ +[0-9]+ +(free|priced|unpriced) +200" || [ $? = 1 ]
+ledger_rows() { # the credential's allowed rows, counted in Postgres (not through a newest-N view)
+  local n
+  n=$($KUBECTL -n "$NAMESPACE" exec deploy/kaimahi-postgres -- psql -U kaimahi -d kaimahi -tAc \
+    "SELECT count(*) FROM ledger_entry WHERE credential_name = '$CRED' AND upstream = '$UPSTREAM' AND status = 200 AND cost_source <> 'denied'")
+  case "$n" in ''|*[!0-9]*) echo "ledger count unreadable: '$n'" >&2; return 1 ;; esac
+  echo "$n"
 }
 
 mapfile -t pods < <($KUBECTL -n "$NAMESPACE" get pods -l app=kaimahi-proxy \
@@ -76,6 +79,11 @@ chat() { # port -> status
 chat "$PORT_A" > "$workdir/status-a" &
 inflight=$!
 sleep 0.5
+# The call must STILL be open when A goes, or no drain is exercised
+# (curl writes the status only on completion). A host fast enough to
+# finish a generation in half a second fails here honestly rather than
+# passing on a call that was already over.
+[ ! -s "$workdir/status-a" ] || { echo "the call finished before the delete; drain not exercised (got $(cat "$workdir/status-a"))" >&2; exit 1; }
 # 2. ...A is deleted (a direct delete: no eviction, no PDB — the harsher case)...
 echo "deleting replica $a while a call is in flight"
 $KUBECTL -n "$NAMESPACE" delete pod "$a" --wait=false >/dev/null
