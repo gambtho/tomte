@@ -136,15 +136,18 @@ func ParseTools(value string) (*ToolWiring, error) {
 // The first two are written with a one-character class — `sk-[a]nt-` rather
 // than the literal — so this file does not itself trip the repository's
 // "No secrets in tree" scan, which greps for exactly those prefixes.
-var keyShapes = []*regexp.Regexp{
-	regexp.MustCompile(`sk-[a]nt-`),
-	regexp.MustCompile(`sk-[p]roj-`),
-	regexp.MustCompile(`(?i)api[_-]?key\s*[:=]\s*["'][A-Za-z0-9_-]{20,}`),
-	regexp.MustCompile(`kmh_[A-Za-z0-9]{8,}`),
-	regexp.MustCompile(`gh[pousr]_[A-Za-z0-9]{20,}`),
-	regexp.MustCompile(`github_pat_[A-Za-z0-9_]{20,}`),
-	regexp.MustCompile(`xox[baprs]-[A-Za-z0-9-]{10,}`),
-	regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`),
+var keyShapes = []struct {
+	what string
+	re   *regexp.Regexp
+}{
+	{"an Anthropic API key", regexp.MustCompile(`sk-[a]nt-`)},
+	{"an OpenAI project key", regexp.MustCompile(`sk-[p]roj-`)},
+	{"an assigned API key", regexp.MustCompile(`(?i)api[_-]?key\s*[:=]\s*["'][A-Za-z0-9_-]{20,}`)},
+	{"a Kaimahi agent credential", regexp.MustCompile(`kmh_[A-Za-z0-9]{8,}`)},
+	{"a GitHub token", regexp.MustCompile(`gh[pousr]_[A-Za-z0-9]{20,}`)},
+	{"a GitHub fine-grained token", regexp.MustCompile(`github_pat_[A-Za-z0-9_]{20,}`)},
+	{"a Slack token", regexp.MustCompile(`xox[baprs]-[A-Za-z0-9-]{10,}`)},
+	{"a private key", regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`)},
 }
 
 // RefuseKeyShapes fails closed when anything key-shaped reached the
@@ -152,10 +155,10 @@ var keyShapes = []*regexp.Regexp{
 // be walked around by splitting a key across two flags.
 func RefuseKeyShapes(document string) error {
 	for _, shape := range keyShapes {
-		if shape.MatchString(document) {
-			return fmt.Errorf("refusing to write this manifest: it contains something shaped like a credential (%s).\n"+
+		if shape.re.MatchString(document) {
+			return fmt.Errorf("refusing to write this manifest: it contains something shaped like %s.\n"+
 				"  kmx never handles keys. An agent references a Secret; it does not carry one:\n"+
-				"    kubectl -n kagent create secret generic <name> --from-file=api-key=/dev/stdin", shape.String())
+				"    kubectl -n kagent create secret generic <name> --from-file=api-key=/dev/stdin", shape.what)
 		}
 	}
 	return nil

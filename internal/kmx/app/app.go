@@ -70,6 +70,14 @@ func (a *App) Guard(action, command string) error {
 	if a.guarded {
 		return nil
 	}
+	// Said plainly here rather than as "cannot read the kubeconfig": on a
+	// fresh machine the missing tool is the whole story, and the guard's
+	// refusal would otherwise read as something being wrong with the
+	// cluster.
+	if err := run.MustExist("kubectl", "to read the kubeconfig and reach the cluster",
+		"https://kubernetes.io/docs/tasks/tools/"); err != nil {
+		return err
+	}
 	cfg, err := guard.LoadKubeconfig("kubectl")
 	if err != nil {
 		return fmt.Errorf("kube-guard: %w", err)

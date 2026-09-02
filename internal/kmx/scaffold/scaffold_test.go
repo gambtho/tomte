@@ -138,8 +138,20 @@ func TestKeyShapedContentIsRefused(t *testing.T) {
 	for _, key := range keys {
 		spec := base("leaky")
 		spec.Instructions = "Use this credential when you call the API:\n" + key + "\n"
-		if _, err := Generate(spec); err == nil {
+		_, err := Generate(spec)
+		if err == nil {
 			t.Errorf("a manifest containing %q must be refused", key[:12]+"…")
+			continue
+		}
+		// The refusal names what it found, not the pattern that found it: a
+		// regex in an error message tells the operator nothing about which
+		// line of their instructions file to go and look at.
+		if strings.Contains(err.Error(), "[a]") || strings.Contains(err.Error(), `\s`) {
+			t.Errorf("the refusal leaks its regex instead of naming the credential: %v", err)
+		}
+		// And it never echoes the secret it just refused to write.
+		if strings.Contains(err.Error(), key) {
+			t.Errorf("the refusal echoes the credential back: %v", err)
 		}
 	}
 }

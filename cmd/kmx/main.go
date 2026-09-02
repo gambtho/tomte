@@ -159,13 +159,13 @@ func agentCreate(a *app.App, args []string) error {
 	fs.StringVar(&opt.Out, "out", "", "where to write the manifest (default agents/<name>.yaml; '-' for stdout)")
 	fs.BoolVar(&opt.NoApply, "no-apply", false, "write the manifest and stop")
 	fs.BoolVar(&opt.DryRun, "dry-run", false, "server-side dry run against the live CRDs instead of applying")
-	if err := fs.Parse(args); err != nil {
+	names, err := parseInterspersed(fs, args)
+	if err != nil {
 		return err
 	}
-	rest := fs.Args()
-	if len(rest) != 1 {
+	if len(names) != 1 {
 		return errors.New("usage: kmx agent create <name> [flags]")
 	}
-	opt.Name = rest[0]
+	opt.Name = names[0]
 	return a.CreateAgent(opt)
 }
