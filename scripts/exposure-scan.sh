@@ -16,7 +16,13 @@
 # Fail closed: a scan that finds NOTHING open anywhere is a broken scan
 # (a firewall between here and Azure, a dead tool), not a secure cluster
 # — the edge's 443 is the positive control. A Service without an IP, an
-# IP the Azure API does not list, or an unreadable list all fail.
+# IP the Azure API does not list, or an unreadable list all fail. Two
+# more ways a scan could report clean while proving nothing, both
+# refused: a scanning host whose own egress allows only 443 would see
+# every other port "closed" everywhere (so a known-open NON-443 port on
+# the internet must answer first — the egress control), and a host that
+# runs out of sockets mid-sweep would too (so a resource error aborts
+# the scan instead of counting as closed).
 #
 # The IPs are Azure identifiers; they are MASKED in the output by default
 # so a pasted transcript carries none (REVEAL_IPS=1 shows them locally).
@@ -24,6 +30,9 @@
 # Env:  KUBECTL, AKS_RESOURCE_GROUP (required), AKS_CLUSTER (default kaimahi)
 #       SCAN_TIMEOUT (per-port connect timeout, seconds, default 2)
 #       SCAN_WORKERS (default 512)
+#       EGRESS_CONTROL (host:port that must answer on a non-443 port from
+#                       this machine; default 1.1.1.1:80 — the same
+#                       control target scripts/netpol-probe.sh uses)
 set -euo pipefail
 
 KUBECTL="${KUBECTL:-kubectl}"
@@ -68,8 +77,9 @@ grep -qx "$edge_ip" "$workdir/ips" || {
   echo "exposure-scan: the edge Service's IP is not among the node resource group's public IPs" >&2; exit 1; }
 
 REVEAL_IPS="${REVEAL_IPS:-0}" EDGE_IP="$edge_ip" SCAN_TIMEOUT="${SCAN_TIMEOUT:-2}" SCAN_WORKERS="${SCAN_WORKERS:-512}" \
+EGRESS_CONTROL="${EGRESS_CONTROL:-1.1.1.1:80}" \
 python3 - "$workdir/ips" <<'EOF'
-import os, socket, sys
+import errno, os, socket, sys
 from concurrent.futures import ThreadPoolExecutor
 
 ips = [l.strip() for l in open(sys.argv[1]) if l.strip()]
@@ -77,25 +87,50 @@ edge = os.environ["EDGE_IP"]
 timeout = float(os.environ["SCAN_TIMEOUT"])
 workers = int(os.environ["SCAN_WORKERS"])
 reveal = os.environ.get("REVEAL_IPS") == "1"
+ctl_host, ctl_port = os.environ["EGRESS_CONTROL"].rsplit(":", 1)
 
 def label(ip):
     if reveal:
         return ip
     return "<edge-public-ip>" if ip == edge else f"<public-ip-{ips.index(ip) + 1}>"
 
+# Errors that mean THIS HOST could not attempt the connection — out of
+# file descriptors, ephemeral ports or buffers, or a policy refusal —
+# not that the target declined it. Counting them as "closed" would let
+# an exhausted scanner report a clean cluster.
+LOCAL_FAILURE = {errno.EMFILE, errno.ENFILE, errno.EAGAIN, errno.ENOBUFS, errno.ENOMEM,
+                 errno.EPERM, errno.EACCES, errno.EADDRNOTAVAIL}
+
+class ScanBroken(Exception):
+    pass
+
 def probe(ip, port):
     try:
         with socket.create_connection((ip, port), timeout=timeout):
             return port
-    except OSError:
+    except socket.timeout:
         return None
+    except OSError as e:
+        if e.errno in LOCAL_FAILURE:
+            raise ScanBroken(f"{label(ip)} port {port}: {e}") from e
+        return None  # ECONNREFUSED / EHOSTUNREACH: the target's answer
+
+# Egress control: this machine must reach a known-open port that is not
+# 443, or a "nothing but 443 is open" verdict would say more about the
+# scanner's network than the cluster's.
+if int(ctl_port) == 443 or probe(ctl_host, int(ctl_port)) is None:
+    sys.exit(f"exposure-scan: egress control {ctl_host}:{ctl_port} (a non-443 port) is not reachable from here — "
+             "this host cannot tell a closed port from a blocked one; refusing to scan")
 
 failed = False
 for ip in ips:
     expect = {443} if ip == edge else set()
     print(f"scanning {label(ip)} tcp/1-65535 ...", file=sys.stderr, flush=True)
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        open_ports = sorted(p for p in ex.map(lambda p: probe(ip, p), range(1, 65536)) if p)
+    try:
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            open_ports = sorted(p for p in ex.map(lambda p: probe(ip, p), range(1, 65536)) if p)
+    except ScanBroken as e:
+        sys.exit(f"exposure-scan: the scanner itself failed mid-sweep ({e}); lower SCAN_WORKERS and re-run — no verdict")
     ok = set(open_ports) == expect
     failed |= not ok
     print(f"{label(ip)}: open {open_ports or 'none'} — expected {sorted(expect) or 'none'} — {'OK' if ok else 'FAIL'}")

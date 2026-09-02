@@ -198,17 +198,20 @@ func (b *Bridge) Run(ctx context.Context) {
 }
 
 // audit appends one inbound row on a cancel-free context (a client
-// disconnect must not drop the record of a decision already made).
-func (b *Bridge) audit(ctx context.Context, e store.InboundAuditEntry) {
+// disconnect must not drop the record of a decision already made) and
+// reports whether it was written. A denial stands either way; an
+// acknowledgement (challenge, ignored) is withheld when its row is not.
+func (b *Bridge) audit(ctx context.Context, e store.InboundAuditEntry) bool {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	if err := b.d.Store.RecordInboundAudit(ctx, e); err != nil {
 		b.auditDegraded.Store(true)
 		slog.Error("inbound: audit append failed; denying events until a write succeeds",
 			"hook", e.Hook, "decision", e.Decision, "err", err)
-		return
+		return false
 	}
 	b.auditDegraded.Store(false)
+	return true
 }
 
 // deny is the single exit for every attributable refusal: audited
@@ -226,11 +229,12 @@ func (b *Bridge) deny(w http.ResponseWriter, r *http.Request, name string, h con
 // up to three times, and counts failures towards disabling the
 // subscription — so a 4xx that would only re-file the same denial (no
 // grant, wrong channel, replay, malformed) says so with
-// X-Slack-No-Retry. A 5xx is the plane degraded, and a retry is exactly
-// what should happen then, so it carries nothing. Other hooks' callers
-// have their own contracts and get no Slack header.
+// X-Slack-No-Retry. A 429 is the one 4xx a retry CAN change (the token
+// bucket refills; a budget gets raised), so it carries nothing, like a
+// 5xx: the plane is not refusing the event, it is refusing it NOW.
+// Other hooks' callers have their own contracts and get no Slack header.
 func slackRetryPolicy(w http.ResponseWriter, h config.InboundHook, status int) {
-	if h.Auth == config.AuthSlack && status >= 400 && status < 500 {
+	if h.Auth == config.AuthSlack && status >= 400 && status < 500 && status != http.StatusTooManyRequests {
 		w.Header().Set("X-Slack-No-Retry", "1")
 	}
 }
@@ -286,9 +290,14 @@ func (b *Bridge) receive(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if ev.challenge != "" {
-		// Slack's URL verification: echo, audit, trigger nothing.
-		b.audit(r.Context(), store.InboundAuditEntry{Hook: name, CredentialName: cred.Name,
-			Decision: "challenge", Status: http.StatusOK, Agent: agentRef(h)})
+		// Slack's URL verification: echo, audit, trigger nothing. An
+		// acknowledgement the trail cannot record is not given (503,
+		// which Slack retries), the same rule as everything else here.
+		if !b.audit(r.Context(), store.InboundAuditEntry{Hook: name, CredentialName: cred.Name,
+			Decision: "challenge", Status: http.StatusOK, Agent: agentRef(h)}) {
+			http.Error(w, "inbound audit unavailable", http.StatusServiceUnavailable)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"challenge": ev.challenge})
 		return
@@ -299,8 +308,13 @@ func (b *Bridge) receive(w http.ResponseWriter, r *http.Request) {
 		// anything but a human's app_mention). Acknowledged so the source
 		// does not retry it, audited so the trail shows it arrived, and
 		// nothing else: no budget preview, no grant use, no agent.
-		b.audit(r.Context(), store.InboundAuditEntry{Hook: name, CredentialName: cred.Name,
-			DeliveryID: delivery, Decision: "ignored", Status: http.StatusOK, Detail: ev.ignored, Agent: agentRef(h)})
+		if !b.audit(r.Context(), store.InboundAuditEntry{Hook: name, CredentialName: cred.Name,
+			DeliveryID: delivery, Decision: "ignored", Status: http.StatusOK, Detail: ev.ignored, Agent: agentRef(h)}) {
+			// Unrecorded is unacknowledged: a 503 makes Slack redeliver
+			// once the trail is back, so the row is written eventually.
+			http.Error(w, "inbound audit unavailable", http.StatusServiceUnavailable)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ignored", "reason": ev.ignored})
 		return

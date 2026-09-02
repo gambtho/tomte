@@ -192,8 +192,9 @@ spec:
 # zero extra CPU requests), its own Service so the ingress seam is
 # addressable on its own name and can be exposed on its own terms. It is
 # a ClusterIP: on kind the demo reaches it via port-forward; exposing it
-# beyond the cluster (an Ingress/LoadBalancer with TLS) is the operator's
-# step and is documented, not committed. The admin port stays off it.
+# beyond the cluster is an opt-in step, `make inbound-expose` on
+# TARGET=aks (k8s/inbound-edge.yaml), never a side effect of `make plane`.
+# The admin port stays off it.
 apiVersion: v1
 kind: Service
 metadata:

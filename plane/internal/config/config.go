@@ -115,8 +115,10 @@ type InboundHook struct {
 	// that restricts where the Slack MCP server may post
 	// (SLACK_MCP_ADD_MESSAGE_TOOL), so "the private test channel" has one
 	// source of truth for both directions. Unreadable, empty, or a
-	// server-side "anywhere" value fails the hook closed (503). Absent
-	// from the config: any channel the app is mentioned in.
+	// server-side "anywhere" value fails the hook closed (503). Required
+	// for slack auth: a hook without it would trigger from any room the
+	// app is mentioned in, and an ingress that widens because a key was
+	// dropped from the table is the silent failure this file refuses.
 	SlackChannelsFile string `json:"slack_channels_file,omitempty"`
 	// BudgetCredential is the governed credential the triggered agent
 	// spends under (its governed preset's credential). An event is
@@ -233,6 +235,9 @@ func Parse(raw []byte) (Config, error) {
 			// the mistake is loud at rollout, not silent at first event.
 			if h.SigningSecretFile == "" {
 				return Config{}, fmt.Errorf("config: inbound hook %q: %s auth requires signing_secret_file", name, h.Auth)
+			}
+			if h.Auth == AuthSlack && h.SlackChannelsFile == "" {
+				return Config{}, fmt.Errorf("config: inbound hook %q: slack auth requires slack_channels_file (the channel(s) the hook may be triggered from)", name)
 			}
 		default:
 			return Config{}, fmt.Errorf("config: inbound hook %q: auth must be %q, %q or %q", name, AuthBearer, AuthKaimahiHMAC, AuthSlack)

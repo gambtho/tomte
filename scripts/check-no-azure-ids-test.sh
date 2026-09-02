@@ -2,8 +2,8 @@
 # Prove scripts/check-no-azure-ids.sh still catches every identifier
 # class it claims to — and still lets the placeholder forms through. A
 # scanner is a gate that fails OPEN when a pattern quietly stops matching
-# (P5b's lesson about probes applies to gates), so CI runs this before
-# trusting the scanner's verdict on the tree.
+# (P5b's lesson about probes applies to gates), so CI runs this BEFORE
+# the tree scan and trusts the scanner's verdict only after it passes.
 #
 # Each case is one file under a temp dir, scanned by path (the scanner's
 # explicit-paths mode), so the repo's own contents never affect it.
@@ -15,16 +15,21 @@ workdir=$(mktemp -d)
 trap 'rm -rf "$workdir"' EXIT
 
 fail=0
-expect() { # expect <refused|clean> <label> <content>
-  local want=$1 label=$2 content=$3 dir rc
+expect() { # expect <refused|clean> <label> <content> [<finding class the refusal must name>]
+  local want=$1 label=$2 content=$3 class=${4:-} dir rc
   dir=$(mktemp -d "$workdir/case.XXXXXX")
   printf '%s\n' "$content" > "$dir/file.txt"
   set +e
   bash "$scanner" "$dir" > "$dir/out" 2>&1
   rc=$?
   set -e
+  # A refusal counts only when the scanner names the class this case
+  # exists to catch: exit 1 for another reason (an empty file list, a
+  # traceback) must not pass as "still catches it".
   case "$want:$rc" in
-    (refused:1|clean:0) echo "ok   $want  $label" ;;
+    (refused:1) if grep -q "$class" "$dir/out"; then echo "ok   $want  $label"; else
+                  echo "FAIL want=$want (class '$class') got=rc1 without that class  $label"; sed 's/^/     /' "$dir/out"; fail=1; fi ;;
+    (clean:0) echo "ok   $want  $label" ;;
     (*) echo "FAIL want=$want got=rc$rc  $label"; sed 's/^/     /' "$dir/out"; fail=1 ;;
   esac
 }
@@ -38,13 +43,13 @@ acr=$(printf 'kaimahidemo.%s' azurecr.io)
 edge=$(printf 'kaimahi-demo-4c1f.westus3.cloudapp.%s' azure.com)
 ip1=$(printf '20.150.%s' 32.11)
 ip2=$(printf '52.160.%s' 1.2)
-expect refused "subscription/tenant GUID"     "sub $guid"
-expect refused "AKS API server FQDN"          "https://$aks:443"
-expect refused "literal ACR login server"     "image: $acr/kaimahi-proxy:p8"
-expect refused "literal cloudapp DNS label"   "Request URL: https://$edge/hook/slack-events"
-expect refused "bare cloudapp FQDN"           "$edge"
-expect refused "public IPv4 address"          "public IP: $ip1"
-expect refused "public IPv4 in a URL"         "curl https://$ip2/"
+expect refused "subscription/tenant GUID"     "sub $guid"                                        "GUID"
+expect refused "AKS API server FQDN"          "https://$aks:443"                                 "AKS cluster FQDN"
+expect refused "literal ACR login server"     "image: $acr/kaimahi-proxy:p8"                     "literal ACR login server"
+expect refused "literal cloudapp DNS label"   "Request URL: https://$edge/hook/slack-events"     "literal public DNS label"
+expect refused "bare cloudapp FQDN"           "$edge"                                            "literal public DNS label"
+expect refused "public IPv4 address"          "public IP: $ip1"                                  "public IPv4 address"
+expect refused "public IPv4 in a URL"         "curl https://$ip2/"                               "public IPv4 address"
 
 # --- must pass -----------------------------------------------------------------
 expect clean "variable ACR reference"         'image: $(ACR_NAME).azurecr.io/kaimahi-proxy:p8'

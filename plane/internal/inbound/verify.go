@@ -231,7 +231,7 @@ func slackEvent(body []byte) (event, bool) {
 		case e.Type != "app_mention":
 			ev.ignored = "event type " + e.Type + " is not a trigger (app_mention only)"
 			return ev, true
-		case e.BotID != "" || e.Subtype != "":
+		case e.BotID != "" || e.Subtype == "bot_message":
 			ev.ignored = "bot-authored mention (loop guard)"
 			return ev, true
 		}
@@ -279,5 +279,5 @@ func slackTask(text string, m slackMention) string {
 	return "A Slack message from " + who + " in channel " + m.channel + " mentioned you. Their message was: " +
 		strconv.Quote(text) + "\n\nAnswer it in one short paragraph, then post that answer to Slack by calling " +
 		"conversations_add_message with channel_id " + strconv.Quote(m.channel) +
-		" and thread_ts " + strconv.Quote(m.threadTS) + "."
+		", thread_ts " + strconv.Quote(m.threadTS) + ", and your answer as the payload."
 }

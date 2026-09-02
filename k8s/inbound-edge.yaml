@@ -32,7 +32,8 @@
 #     fewer. An ingress controller's LoadBalancer answers 80 and 443 for
 #     the whole cluster; the edge answers one path on one port.
 #
-# What the edge forwards: POST /hook/slack-events, body ≤ 64 KiB, to the
+# What the edge forwards: POST /hook/slack-events, body ≤ 64 KiB (the
+# bridge's own default), to the
 # bridge's Service on 8082. Everything else is a 404 from Caddy that never
 # reaches the plane. The bridge's own gates (signature, replay window,
 # channel allowlist, grant, budget, audit) are unchanged — the edge is
@@ -72,7 +73,7 @@ data:
         }
       }
       request_body {
-        max_size 64KB
+        max_size 64KiB
       }
       @hook {
         method POST
@@ -203,8 +204,9 @@ spec:
 # The edge's own boundary, under the namespace default-deny.
 #
 # In: the internet, on the TLS port — this rule IS the exposure, stated
-# in one place. Out: DNS; the bridge on 8082 (the only in-cluster pod it
-# may reach — not Postgres, not the admin port, not the MCP servers); and
+# in one place. Out: DNS; the bridge on 8082 (besides CoreDNS, the only
+# in-cluster pod it may reach — not Postgres, not the admin port, not the
+# MCP servers); and
 # TCP 443 to non-private addresses for the ACME directory (the same
 # 0.0.0.0/0-minus-private shape as every internet allowance in
 # k8s/plane/network-policy.yaml, and CI checks this file against the

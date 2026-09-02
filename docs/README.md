@@ -58,7 +58,7 @@ the plane covers, kept in one place so it cannot drift between docs.
 | Internet-facing *gateway* upstreams | **Not built.** Every committed tool upstream is in-cluster; going internet-facing needs a hardened dialer and SSRF protection that do not exist yet |
 | Approval routing (Slack, email, per-approver identity) | **Not built.** The queue is CLI-only, and "who approved" is the admin bearer token, not a person |
 | What an agent *sees* after a grant | **Lagging, not wrong.** Enforcement is immediate; the agent's discovered tool list updates on kagent's next RemoteMCPServer reconcile ([slack.md](slack.md#why-the-agent-is-never-the-one-denied)) |
-| AKS | **Demonstrated, not maintained.** Three verified runs on 2026-09-01 (the plane, NetworkPolicy enforcement, the Slack loop through a public edge), each deleted the same day. CI stays on kind and keyless ([aks.md](aks.md)) |
+| AKS | **Demonstrated, not maintained.** Three verified runs on 2026-09-01/02 (the plane, NetworkPolicy enforcement, the Slack loop through a public edge), each deleted the same day. CI stays on kind and keyless ([aks.md](aks.md)) |
 | Public exposure | **One opt-in edge, one port.** Only the inbound edge (`make inbound-expose`, AKS) is internet-reachable: TLS on 443, one path, proven by `make exposure-scan`. Everything else stays cluster-internal ([inbound.md](inbound.md#putting-it-on-the-internet)) |
 
 ## How these docs are organised

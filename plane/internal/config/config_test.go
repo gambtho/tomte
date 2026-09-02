@@ -130,7 +130,8 @@ func TestParseInboundHooksRejects(t *testing.T) {
 	cases := map[string]string{
 		"unknown auth":              hook(`"credential": "c", "auth": "basic", "agent_namespace": "kagent", "agent": "a", "budget_credential": "b"`),
 		"hmac without secret file":  hook(`"credential": "c", "auth": "kaimahi-hmac", "agent_namespace": "kagent", "agent": "a", "budget_credential": "b"`),
-		"slack without secret file": hook(`"credential": "c", "auth": "slack", "agent_namespace": "kagent", "agent": "a", "budget_credential": "b"`),
+		"slack without secret file": hook(`"credential": "c", "auth": "slack", "slack_channels_file": "/y", "agent_namespace": "kagent", "agent": "a", "budget_credential": "b"`),
+		"slack without channels":    hook(`"credential": "c", "auth": "slack", "signing_secret_file": "/x", "agent_namespace": "kagent", "agent": "a", "budget_credential": "b"`),
 		"bearer with secret file":   hook(good + `, "signing_secret_file": "/x"`),
 		"channels file off slack":   hook(good + `, "slack_channels_file": "/x"`),
 		"missing credential":        hook(`"auth": "bearer", "agent_namespace": "kagent", "agent": "a", "budget_credential": "b"`),

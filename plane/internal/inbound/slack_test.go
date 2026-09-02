@@ -1,6 +1,7 @@
 package inbound
 
 import (
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -130,8 +131,10 @@ func TestSlackChannelAllowlistIsEnforcedFailClosed(t *testing.T) {
 	require.Equal(t, http.StatusServiceUnavailable, rec.Code, rec.Body.String())
 	require.Zero(t, f.a2a.count())
 
-	// The hook without an allowlist file keeps P7b's behaviour: any
-	// channel the app is mentioned in.
+	// config.Parse refuses a slack hook without an allowlist file; the
+	// bridge itself, handed one anyway, admits from any channel — the
+	// test fixture's "slack" hook is that shape, and this pins it so the
+	// two layers are known to differ rather than assumed to agree.
 	require.Equal(t, http.StatusAccepted, f.post("slack", elsewhere, f.slackSigned(elsewhere)).Code)
 }
 
@@ -164,6 +167,26 @@ func TestSlackReplayAnswers409WithoutRetry(t *testing.T) {
 	rec = f.post("demo", `{"text":"x"}`, bearer("d-replay"))
 	require.Equal(t, http.StatusConflict, rec.Code)
 	require.Empty(t, rec.Header().Get("X-Slack-No-Retry"))
+}
+
+func TestUnrecordedAcknowledgementIsWithheld(t *testing.T) {
+	fs := newFakeStore()
+	f := newSlackFixture(t, fs)
+	fs.setAuditErr(errors.New("pg down"))
+	// The FIRST failing write is the ignored event's own row: the 2xx
+	// Slack would stop retrying on is withheld, and no retry header is
+	// set, so the event comes back once the trail is writable.
+	msg := `{"type":"event_callback","event_id":"Ev0000000011","event":{"type":"message",` +
+		`"user":"U2","text":"hello","channel":"C0TEST","ts":"1725.0007"}}`
+	rec := f.post("slack-chan", msg, f.slackSigned(msg))
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code, rec.Body.String())
+	require.Empty(t, rec.Header().Get("X-Slack-No-Retry"))
+	require.Empty(t, fs.decisions("slack-chan"), "nothing recorded, nothing acknowledged")
+	// Same for the handshake: Slack's retry of it is what heals the row.
+	fs.setAuditErr(nil)
+	f.post("demo", "x", nil) // any recorded decision clears the breaker
+	challenge := `{"type":"url_verification","challenge":"abc"}`
+	require.Equal(t, http.StatusOK, f.post("slack-chan", challenge, f.slackSigned(challenge)).Code)
 }
 
 func TestStripMentions(t *testing.T) {

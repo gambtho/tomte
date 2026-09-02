@@ -995,6 +995,7 @@ ifeq ($(TARGET),aks)
 ##   TARGET=aks make inbound-expose KAIMAHI_DNS_LABEL=<unique-label>
 inbound-expose: guard
 	@KUBECTL="$(KUBECTL)" KAIMAHI_DNS_LABEL='$(KAIMAHI_DNS_LABEL)' AKS_LOCATION='$(AKS_LOCATION)' \
+		AKS_RESOURCE_GROUP='$(AKS_RESOURCE_GROUP)' AKS_CLUSTER='$(AKS_CLUSTER)' \
 		bash scripts/inbound-expose.sh
 
 ## inbound-unexpose: take the edge down (Deployment, Service + public IP,

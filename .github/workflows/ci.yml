@@ -57,13 +57,13 @@ jobs:
       # must never land in the tree — every Azure identifier is supplied by
       # the operator at run time. The same script is what the operator runs
       # locally while writing up an AKS run.
-      - name: No Azure identifiers in tree
-        run: bash scripts/check-no-azure-ids.sh
       # The scanner is itself a gate that can fail open (a regex that
       # matches nothing passes everything): prove it still catches each
       # identifier class before trusting its verdict on the tree.
       - name: Azure identifier scanner still catches every class
         run: bash scripts/check-no-azure-ids-test.sh
+      - name: No Azure identifiers in tree
+        run: bash scripts/check-no-azure-ids.sh
       # The docs are organised by capability, with the old phase-named
       # files kept as forwarding stubs. Every relative Markdown link and
       # every #anchor must resolve — a broken forward is a broken doc.
@@ -169,15 +169,18 @@ jobs:
                   if d and d.get("kind") == "NetworkPolicy"]
           assert {p["metadata"]["name"] for p in edge} == {"kaimahi-inbound-edge", "kaimahi-proxy-ingress-edge"}, "edge policies renamed"
           assert all(p["metadata"]["namespace"] == "kaimahi" for p in edge), "edge policy outside kaimahi"
-          for p in edge:
+          for p in pols + [copilot] + edge:
               for rule in p["spec"].get("ingress") or []:
                   ports = {(x.get("protocol", "TCP"), x["port"]) for x in rule.get("ports") or []}
+                  # A rule with no `from` admits every source; refuse it like a `to`-less egress.
+                  assert rule.get("from"), f'{p["metadata"]["name"]}: ingress rule without `from` (admits all sources)'
                   for peer in rule["from"]:
                       if "ipBlock" in peer:
-                          # The one internet-facing ingress in the repo: the edge's TLS port, nothing else.
+                          # The ONE internet-facing ingress in the repo, wherever a policy lives:
+                          # the edge's TLS port, nothing else.
                           assert p["metadata"]["name"] == "kaimahi-inbound-edge" and ports == {("TCP", 8443)}, \
                               f'{p["metadata"]["name"]}: internet ingress on {ports}'
-                      else:
+                      elif p in edge:
                           # The plane-side allowance: the edge may reach the proxy on the inbound port only.
                           assert p["metadata"]["name"] == "kaimahi-proxy-ingress-edge" and ports == {("TCP", 8082)} \
                               and peer.get("podSelector", {}).get("matchLabels") == {"app": "kaimahi-inbound-edge"}, \
@@ -743,6 +746,11 @@ jobs:
               assert h["budget_credential"] == "hello-world", (name, h)
               if h["auth"] != "bearer":
                   assert h["signing_secret_file"].startswith("/etc/kaimahi/inbound/"), (name, h)
+              if h["auth"] == "slack":
+                  # P8: a Slack hook is bound to the channel(s) in a plane-side
+                  # FILE (the same Secret key that restricts posting); dropping
+                  # the key would widen the ingress to the whole workspace.
+                  assert h["slack_channels_file"].startswith("/etc/kaimahi/slack/"), (name, h)
               assert not any(k in h for k in ("secret", "signing_secret", "token", "api_key")), (name, h)
           print("inbound hooks:", {k: (v["auth"], v["agent"]) for k, v in hooks.items()})
           EOF

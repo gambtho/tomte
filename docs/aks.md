@@ -502,7 +502,7 @@ The full governed-vs-ungoverned table is in
 [README.md](README.md#what-is-governed-today-and-what-is-not). Specific
 to this path:
 
-- **Demonstrated once, not maintained.** Nothing re-proves the cloud
+- **Demonstrated, not maintained.** Nothing re-proves the cloud
   run; only the portability logic runs in CI.
 - **Copilot only.** No keyless model on AKS, so no free tier there.
 - **Slack on AKS is the inbound-loop demo only**, on a cluster deleted

@@ -264,7 +264,8 @@ value `make slack-secret` vets (private, bot is a member) and the MCP
 server uses to restrict posting. A mention anywhere else is a 403,
 audited. The file being unreadable or empty, or holding the server's
 `true` ("post anywhere"), is a 503: the hook refuses rather than widen
-to the workspace. No channel ID is in the repo; the committed table
+to the workspace. The file is required for a `slack` hook: the config
+is refused without it. No channel ID is in the repo; the committed table
 names the file.
 
 **What the agent is asked.** The mention becomes a task, not a pasted
@@ -283,11 +284,12 @@ within three seconds, up to three times, and counts failures towards
 disabling the subscription. The bridge answers admitted events 202 in
 milliseconds (the agent runs afterwards). A refusal a retry could not
 change — no grant (403), wrong channel (403), replay of an admitted
-event (409), malformed (400), rate limit (429) — carries
-`X-Slack-No-Retry: 1`. A 503 (audit trail down, queue full, secret not
-projected yet) carries nothing, so Slack retries it, which is what a
-503 is for. After an event is admitted, its `event_id` is in the audit
-index; a late retry is a 409 and burns nothing.
+event (409), malformed (400) — carries
+`X-Slack-No-Retry: 1`. A 429 (the hook's rate limit, or the target
+agent's budget) and a 503 (audit trail down, queue full, secret not
+projected yet) carry nothing, so Slack retries them, which is what a
+"not now" is for. After an event is admitted, its `event_id` is in the
+audit index; a late retry is a 409 and burns nothing.
 
 **Two approvals, both bounded.** The hook needs a live `inbound` grant
 (`make approvals` shows the request the first mention files; `make
