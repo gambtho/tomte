@@ -45,7 +45,7 @@ flowchart TB
       H["Kaimahi<br/>governance plane"]
       P["Bounded approvals<br/>expiry and/or use count"]
       L["LLM proxy<br/>auth · budgets<br/>credential custody<br/>spend ledger"]
-      T["MCP gateway<br/>request auth · allowlists<br/>upstream bounds · audit<br/>proxy-side credential custody"]
+      T["MCP gateway<br/>request auth · allowlists<br/>upstream bounds · audit<br/>proxy-side credential custody<br/>credential injection<br/>(keyed upstreams only)"]
       H ~~~ P
       P -. "temporary grant" .-> L
       P -. "temporary grant" .-> T
@@ -60,7 +60,7 @@ flowchart TB
     A -->|"governed<br/>model call"| L
     A -->|"governed<br/>tool call"| T
     L --> M
-    T -->|"injects upstream<br/>credential"| X
+    T --> X
     A -. "plain preset<br/>ungoverned" .-> M
     A -. "direct MCP<br/>ungoverned" .-> X
 
