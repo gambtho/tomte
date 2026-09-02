@@ -1428,9 +1428,14 @@ Build:
   post to the pinned channel through the gateway under the plane's OWN
   credential (issue it the way `make govern-slack` issues hello-slack's,
   allowlisted to the posting tool only — that is configuration, not a
-  grant, because the plane is the trust root). Asynchronous, bounded
-  retry, and a failed notification never un-files a request. Once per
-  filing (dedupe already exists). The message carries the request id,
+  grant, because the plane is the trust root). Asynchronous, and a
+  failed notification never un-files a request. Retry ONLY failures
+  known to have happened before Slack accepted the post (a refusal, a
+  connect failure); an ambiguous failure (timeout, reset, EOF after the
+  request went out) is recorded, not retried — a notification posted
+  twice is the double-post the #20 fix exists to prevent, and the human
+  can always run `make approvals`. Once per filing (dedupe already
+  exists). The message carries the request id,
   credential, kind/subject and the command to type. The notification is
   a bot message, so the loop guard already ignores it — prove that.
 
@@ -1452,9 +1457,12 @@ the approver's identity → the retried action admitted under that
 grant → the audit rows. Check Socket Mode is OFF before spending an
 hour (docs/inbound.md).
 
-Guardrails, all hard: NO Azure identifiers, Slack user ids or channel
-ids in the tree or the PR (scripts/check-no-azure-ids.sh gates the
-Azure ones; treat the Slack ones the same way); every mutating command
+Guardrails, all hard: NO Azure identifiers and no REAL Slack workspace
+identifiers (user ids, channel ids) in the tree or the PR —
+scripts/check-no-azure-ids.sh gates the Azure ones; the workspace's
+real ids stay in Secrets and redacted transcripts. Clearly synthetic
+fixtures such as the unit tests' `U2` / `C0TEST` are fine and any check
+you add must not reject them; every mutating command
 through the context guard; no repo secrets in CI, ever; the channel
 allowlist still applies to commands; the admin port stays unexposed.
 
