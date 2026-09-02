@@ -278,8 +278,7 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request) {
 		slog.Error("proxy: upstream call failed", "upstream", name, "err", err)
 		metrics.ObserveUpstream(metrics.SeamProxy, name, time.Since(started))
 		reason := metrics.ReasonUpstreamUnreachable
-		if errors.Is(err, errNoInternetClient) || errors.Is(err, egress.ErrPrivateAddress) ||
-			errors.Is(err, egress.ErrPort) || errors.Is(err, egress.ErrScheme) || errors.Is(err, egress.ErrUnknownHost) {
+		if egress.IsRefusal(err) {
 			reason = metrics.ReasonEgressRefused
 		}
 		metrics.Decide(metrics.SeamProxy, admitted, reason)

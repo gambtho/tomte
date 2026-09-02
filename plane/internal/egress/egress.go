@@ -60,7 +60,26 @@ var (
 	ErrUnknownHost      = errors.New("egress: host is not a configured hosted upstream")
 	ErrResponseTooLarge = errors.New("egress: upstream response exceeds the size cap")
 	ErrBodyLifetime     = errors.New("egress: upstream body cut at the lifetime deadline")
+	// ErrNoClient is what a seam answers when an upstream is marked
+	// internet but no hardened client was injected: fail closed, never
+	// the plain dial.
+	ErrNoClient = errors.New("egress: no hardened client configured for a hosted upstream")
 )
+
+// IsRefusal reports whether err is the egress policy refusing a call
+// before any byte left — a private or metadata answer, a forbidden port
+// or scheme, an unknown host, or no hardened client at all — as distinct
+// from an upstream that was dialed and did not answer.
+func IsRefusal(err error) bool {
+	return errors.Is(err, ErrPrivateAddress) || errors.Is(err, ErrPort) ||
+		errors.Is(err, ErrScheme) || errors.Is(err, ErrUnknownHost) || errors.Is(err, ErrNoClient)
+}
+
+// IsBodyCut reports whether err is the hardened client cutting a
+// response body (the size cap or the lifetime deadline).
+func IsBodyCut(err error) bool {
+	return errors.Is(err, ErrResponseTooLarge) || errors.Is(err, ErrBodyLifetime)
+}
 
 // Resolver is the one lookup the dialer performs. *net.Resolver satisfies it.
 type Resolver interface {
@@ -313,9 +332,13 @@ type boundedBody struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	left   int64
+	done   bool // a clean EOF was already returned; keep answering it
 }
 
 func (b *boundedBody) Read(p []byte) (int, error) {
+	if b.done {
+		return 0, io.EOF
+	}
 	if b.left <= 0 {
 		return 0, ErrResponseTooLarge
 	}
@@ -341,7 +364,11 @@ func (b *boundedBody) Read(p []byte) (int, error) {
 			}
 			return n, perr
 		}
+		b.done = true
 		return n, io.EOF
+	}
+	if err == io.EOF {
+		b.done = true
 	}
 	return n, err
 }

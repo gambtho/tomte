@@ -14,11 +14,11 @@ package proxy
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"time"
 
 	"github.com/kaimahi-agents/kaimahi/plane/internal/config"
+	"github.com/kaimahi-agents/kaimahi/plane/internal/egress"
 	"github.com/kaimahi-agents/kaimahi/plane/internal/meter"
 	"github.com/kaimahi-agents/kaimahi/plane/internal/store"
 )
@@ -74,14 +74,10 @@ type Deps struct {
 	InternetClient *http.Client
 }
 
-// errNoInternetClient is the fail-closed answer for a hosted upstream
-// when no hardened client was injected: never the plain dial.
-var errNoInternetClient = errors.New("egress: no hardened client configured for a hosted upstream")
-
 func (d Deps) clientFor(up config.Upstream) (*http.Client, error) {
 	if up.Internet {
 		if d.InternetClient == nil {
-			return nil, errNoInternetClient
+			return nil, egress.ErrNoClient
 		}
 		return d.InternetClient, nil
 	}

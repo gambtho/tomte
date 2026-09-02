@@ -170,7 +170,8 @@ PY
     echo "load refusal: the new pod refused the table loudly; both old replicas kept serving" >&2
     ;;
   down)
-    cd "$WORKDIR" 2>/dev/null || exit 0
+    # Restore first and unconditionally: the committed table must come
+    # back whether or not this run's workdir still exists.
     $KUBECTL apply -f "$here/k8s/plane/upstreams.yaml" >/dev/null
     $KUBECTL -n kaimahi delete configmap kaimahi-upstream-ca --ignore-not-found >/dev/null
     docker rm -f "$CONTAINER" >/dev/null 2>&1 || true

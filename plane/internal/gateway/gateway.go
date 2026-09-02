@@ -88,14 +88,10 @@ type Deps struct {
 	InternetClient *http.Client
 }
 
-// errNoInternetClient is the fail-closed answer for a hosted upstream
-// when no hardened client was injected: never the plain dial.
-var errNoInternetClient = errors.New("egress: no hardened client configured for a hosted upstream")
-
 func (d Deps) clientFor(up config.ToolUpstream) (*http.Client, error) {
 	if up.Internet {
 		if d.InternetClient == nil {
-			return nil, errNoInternetClient
+			return nil, egress.ErrNoClient
 		}
 		return d.InternetClient, nil
 	}
@@ -108,22 +104,6 @@ func (d Deps) clientFor(up config.ToolUpstream) (*http.Client, error) {
 			return http.ErrUseLastResponse
 		},
 	}, nil
-}
-
-// egressRefused reports whether an upstream error is the hardened
-// dialer refusing before any byte left (a private or metadata answer,
-// a forbidden port or scheme, an unknown host) — as distinct from an
-// upstream that was dialed and did not answer.
-func egressRefused(err error) bool {
-	return errors.Is(err, egress.ErrPrivateAddress) || errors.Is(err, egress.ErrPort) ||
-		errors.Is(err, egress.ErrScheme) || errors.Is(err, egress.ErrUnknownHost) ||
-		errors.Is(err, errNoInternetClient)
-}
-
-// bodyCut reports whether the hardened client cut the response body (the
-// size cap or the lifetime deadline).
-func bodyCut(err error) bool {
-	return errors.Is(err, egress.ErrResponseTooLarge) || errors.Is(err, egress.ErrBodyLifetime)
 }
 
 type handler struct {
@@ -503,7 +483,7 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, name string,
 		http.Error(w, "tool upstream credential unavailable", http.StatusServiceUnavailable)
 		return outcome{status: http.StatusServiceUnavailable}
 	}
-	if egressRefused(err) {
+	if egress.IsRefusal(err) {
 		slog.Error("gateway: tool upstream refused by the egress policy", "upstream", name, "err", err)
 		http.Error(w, MsgUpstreamRefused, http.StatusBadGateway)
 		return outcome{status: http.StatusBadGateway, note: "egress refused: " + err.Error(), refused: true}
@@ -538,7 +518,7 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, name string,
 	if err != nil {
 		slog.Error("gateway: tool upstream response cut; failing closed", "upstream", name, "err", err)
 		msg := "tool upstream response cut"
-		if bodyCut(err) {
+		if egress.IsBodyCut(err) {
 			msg = "tool upstream response cut by the egress policy"
 		}
 		http.Error(w, msg, http.StatusBadGateway)
@@ -568,7 +548,7 @@ func (h *handler) forwardProjected(w http.ResponseWriter, r *http.Request, cred 
 		http.Error(w, "tool upstream credential unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	if egressRefused(err) {
+	if egress.IsRefusal(err) {
 		slog.Error("gateway: tool upstream refused by the egress policy", "upstream", name, "err", err)
 		http.Error(w, MsgUpstreamRefused, http.StatusBadGateway)
 		return
@@ -685,7 +665,7 @@ func (h *handler) terminate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp, err := client.Do(outReq)
-	if egressRefused(err) {
+	if egress.IsRefusal(err) {
 		http.Error(w, MsgUpstreamRefused, http.StatusBadGateway)
 		return
 	}
