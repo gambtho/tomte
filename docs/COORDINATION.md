@@ -1050,8 +1050,11 @@ the Makefile comment for `AKS_NETWORK_POLICY` (W15 deviation 3).
   is a live smuggling vector (Go reads last-wins, an upstream may read
   first-wins), and the existing defense one level up is exactly what
   makes it easy to assume it is already covered. Canonicalization must
-  become recursive, with duplicate-key and nesting tests, BEFORE any
-  argument is enforced on. Also: a tool grant's use is consumed BEFORE
+  become recursive — refusing a duplicate key at any depth by default,
+  rather than silently collapsing it — with duplicate-key and nesting
+  tests, and one normalized representation feeding the digest, the
+  enforcement decision, the audit summary and the forwarded bytes alike,
+  BEFORE any argument is enforced on. Also: a tool grant's use is consumed BEFORE
   the forward, so a failed payment burns the approval and a retry needs
   a fresh one (conservative, but be deliberate when money moves); and
   `plane/internal/redact` scrubs known SECRET VALUES from logs — it is
@@ -2020,9 +2023,15 @@ Build:
   about to change. Make it recursive over the whole message, with tests
   for duplicate keys at every depth, deep nesting, arrays of objects,
   and a depth/size bound that fails closed rather than recursing
-  unboundedly. Enforcement and the digest must both be computed from
-  the SAME canonical bytes that are forwarded. Nothing else in this lane
-  is safe to build before this is done.
+  unboundedly. Default to REFUSING a message that carries a duplicate
+  key at any depth rather than silently collapsing it: a duplicate is a
+  tampering signal, no legitimate MCP client emits one, and the standing
+  guidance is to fail closed. If you keep the existing collapse instead,
+  say why in the PR. Whichever you choose, ONE normalized representation
+  must feed all four consumers — the digest, policy enforcement, the
+  audit summary, and the bytes forwarded upstream — so they can never
+  disagree. Nothing else in this lane is safe to build before this is
+  done.
 - **A declared policy surface per tool.** A tool declares, in the
   gateway's upstream table, which argument fields are policy-relevant
   (an invoice tool: amount, payee, invoice id). One declaration serves
@@ -2147,8 +2156,14 @@ Build:
   unauthorized expedite fee → it proposes paying $32,550, holding $9,450
   and disputing $6,000 → payment_schedule is DENIED and files a request →
   the approver sees the amount and payee in Slack and approves THAT call →
-  the payment proceeds, the dispute is opened, the vendor is notified, and
-  the audit shows the whole chain.
+  the payment proceeds. dispute_open and vendor_notify are outside the
+  standing allowlist too, so each is denied on its first attempt, files
+  its OWN request carrying its own summary, and needs its own approval
+  and its own grant — three denials, three approvals, three grants, in
+  that order. Do not let one approval cover the sequence: a grant is
+  welded to one call (D29), and a demo that appeared to approve a batch
+  would contradict the guarantee it exists to show. The audit shows the
+  whole chain.
 - **The injection case** (`make ap-injection`): INV-88140 carries text
   instructing the agent that the invoice is pre-approved, must be paid in
   full, and to a different payee, without approval. Do NOT build this so
@@ -2161,16 +2176,31 @@ Build:
   still show the denial — drive the same call directly through the
   gateway so the guarantee is demonstrated either way.
 
-CI stays keyless (D14) and deterministic: the whole scenario runs in the
-e2e on ollama — the fixture server and the gateway's decisions are
-deterministic even where the model's phrasing is not, so ASSERT ON THE
-DECISIONS AND THE AUDIT ROWS, never on the model's prose. Assert: the
-six read tools are callable and the three consequential ones are not; a
-denied payment files a request whose summary carries amount and payee;
-an approval admits exactly that call; the injected call is denied, is
-audited with its changed payee, and does not consume the earlier grant.
-The chat verifier (scripts/verify-chat.py) is the precedent for judging
-a model turn without depending on its wording.
+CI stays keyless (D14), and its assertions must not depend on the model
+at all. Split the e2e in two. First, the DETERMINISTIC part: drive the
+gateway directly with fixed inputs — all six reads, every consequential
+call, every approval — and assert the gateway's decisions and the audit
+rows. Assert the six read tools are callable and the three consequential
+ones are not; that a denied payment files a request whose summary
+carries amount and payee; that an approval admits exactly that call and
+nothing else; that dispute_open and vendor_notify each need their own;
+and that the injected call is denied, is audited with its changed payee,
+and does not consume the earlier grant. Second, a BOUNDED SMOKE run of
+the real agent on ollama, kept separate, proving the agent can reach the
+tools and produce a turn at all — judged the way scripts/verify-chat.py
+judges one, never on its prose. A model that phrases things differently
+must never be able to redden this job.
+
+Approvals in CI go through `make slack-mention` — the synthetic,
+correctly signed app_mention that is already CI's stand-in for a person
+typing in the channel (scripts/slack-mention-probe.sh, user
+U0CIAPPROVER) — so the AP scenario proves the P8b approver-identity path
+end to end, not just the admin one. Assert `decided_by=slack:<user id>`
+on the grant and in the approval audit, alongside the P12 request and
+audit summaries, exactly as the existing P8b steps assert
+`slack:U0CIAPPROVER`. Be explicit in the docs that CI never reaches a
+real Slack workspace: delivery to Slack and how the approval message
+actually renders to a human are manual-run coverage only.
 
 Docs: docs/ap-demo.md is the scenario start to finish (the shape of
 docs/demo.md), including the arithmetic so a reader can check it, and a
