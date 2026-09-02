@@ -142,8 +142,8 @@ these controls are collected in `docs/SCENARIOS.md` (proposed separately).
 
 ## Command reference
 
-Commands that exist today. `kaimahi create` is deliberately **not** in this
-table — it is a proposal.
+Commands that exist today. `kaimahi agent create` is deliberately **not** in
+this table — it was prototyped and shelved, not built.
 
 | Command | Does |
 |---|---|

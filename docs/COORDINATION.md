@@ -113,12 +113,12 @@ prefix.
 | Docs cleanup (D23): stubs, plans/specs, CLI wording, pycache | coordinator | PR open 2026-09-02 | docs + .gitignore; W18 rebases its docs/README.md edit |
 | P8b: approval routing via Slack + per-approver identity (D21) | W18 worker | GO 2026-09-02 — prompt below, user launches | own AKS cluster + the user's private Slack test channel; no kind-cluster contention with anything open |
 | Brand assets + architecture diagram + org/front-door plans | user-run lane (outside the board's prompt set) | PR #33 MERGED (+ kaimahi-agents/.github#1); main CI green | brand validator in the hygiene job |
-| README front door + CONTRIBUTING.md | user-run lane (outside the board's prompt set) | PR #34 MERGED; main CI green | anchored front-door checker in hygiene: section order enforced, no `npx kaimahi create` mention before the quickstart ends — PR #16's README hunk must land under "Proposed CLI direction" |
+| README front door + CONTRIBUTING.md | user-run lane (outside the board's prompt set) | PR #34 MERGED; main CI green | anchored front-door checker in hygiene: section order enforced, no `npx kaimahi create` mention before the quickstart ends — PR #16's README hunk must land under "A scaffolder CLI: considered, not built" (was "Proposed CLI direction" until D23) |
 | CLI decisions + PR #16 review | user + coordinator | D19 ruled; coordinator review rounds done (2026-09-01/02) | not a build lane; parallelises with everything |
 | CI flake: agent-readiness race (P5b finding) | coordinator — PR #20 MERGED (73917e9) after a review round: retry anchored to the controller's whole error line; slack-post retries only unambiguous failures | User ruling 2026-09-01: fold into the next phase rather than a standalone micro-lane — as its **FIRST commit, before feature work**, so the lane's own CI is not reddened by someone else's race | retry predicate covers `connection refused` but not `EOF`; main went red once then green on re-run. Widen narrowly (EOF, connection-reset) so it cannot mask a real outage — see P5b delta sheet |
 | ~~NetworkPolicy egress (promoted 2026-09-01)~~ | — | BUILT as P7a (PR #23) and enforced on AKS by W15 (PR #30) | row kept for the promotion record |
 | ~~P6: inbound connectors (webhooks/user APIs)~~ | — | BUILT as P7b (PR #24); public edge + Slack loop as P8a (PR #35) | row kept for the sequencing record |
-| CLI: `kaimahi agent create` (Tatsinnit, PR #16) | teammate | CLOSED by the author 2026-09-02 (unmerged; checks were green at 6b952fa, conflicts with #32–#35 unresolved). Nothing under `cli/` is on main; D19's rulings stand for whenever the CLI returns | if reopened: rebase (README text under "Proposed CLI direction"), add scripts/kube-guard.sh to package.json `files`, `--yes` in scenario-billing, `cli` job into protect-main |
+| CLI: `kaimahi agent create` (Tatsinnit, PR #16) | teammate | CLOSED by the author 2026-09-02 (unmerged; checks were green at 6b952fa, conflicts with #32–#35 unresolved). Nothing under `cli/` is on main; D19's rulings stand for whenever the CLI returns | if reopened: rebase (README text under "A scaffolder CLI: considered, not built" (was "Proposed CLI direction" until D23)), add scripts/kube-guard.sh to package.json `files`, `--yes` in scenario-billing, `cli` job into protect-main |
 | Status output + host preflight (davidgamero, PR #37) | teammate | OPEN; coordinator review in progress | Makefile `preflight-kind` + `scripts/status.py`; not a board lane |
 | Development guide + Python 3.9 fix (Tatsinnit, PR #38) | teammate | OPEN; coordinator fact-check in progress | docs/development.md; not a board lane |
 | Docs: CLI-first framing + naming record | teammate (Tatsinnit) | PR #10 MERGED (ratifies D12) | staleness fixes folded into reconciliation lane |
@@ -999,7 +999,7 @@ the Makefile comment for `AKS_NETWORK_POLICY` (W15 deviation 3).
   every review point had been addressed at 6b952fa but before the
   conflicts with #32–#35 were resolved. Nothing under `cli/` is on main.
   D19's four rulings stand for whenever the CLI comes back. If it does:
-  rebase with the README text under "Proposed CLI direction" (#34's
+  rebase with the README text under "A scaffolder CLI: considered, not built" (was "Proposed CLI direction" until D23) (#34's
   checker pins the section order); add `scripts/kube-guard.sh` to
   `package.json`'s `files` (from the `npx github:` install `--apply` can
   only print "refused by the context guard" — `npm pack --dry-run`
