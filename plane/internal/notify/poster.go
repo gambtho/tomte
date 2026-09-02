@@ -113,6 +113,9 @@ func New(d Deps) *Poster {
 			},
 		}
 	}
+	// Expose the queue series from the start (an idle replica shows 0,
+	// not nothing).
+	metrics.SetQueue(metrics.QueueNotifier, 0, d.QueueSize)
 	return &Poster{d: d, jobs: make(chan Post, d.QueueSize)}
 }
 

@@ -173,6 +173,9 @@ func New(d Deps) *Bridge {
 	// One clock: the limiter borrows the bridge's, so a test (or a
 	// future injected clock) has a single thing to set.
 	b.limiter = newLimiter(func() time.Time { return b.d.Now() })
+	// Expose the queue series from the start (an idle replica shows 0,
+	// not nothing).
+	b.publishQueue()
 	return b
 }
 
