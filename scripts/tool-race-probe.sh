@@ -76,6 +76,7 @@ printf '{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "
 # the upstream), then — released together with every other worker at
 # the gate — the governed call.
 mkfifo "$workdir/gate"
+workers=()
 for i in $(seq 1 "$m"); do
   port="${ports[$(( (i - 1) % ${#ports[@]} ))]}"
   url="http://127.0.0.1:$port/upstream/$UPSTREAM/mcp"
@@ -117,12 +118,15 @@ else:
 EOF
     echo "$port" > "$d/port"
   ) &
+  workers+=("$!")
 done
 sleep 1
 exec 3> "$workdir/gate"
 for _ in $(seq 1 "$m"); do echo go >&3; done
 exec 3>&-
-wait
+# The workers only — the port-forwards are background jobs too and
+# never exit on their own.
+wait "${workers[@]}"
 
 admitted=0; denied=0; other=0
 declare -A per_port

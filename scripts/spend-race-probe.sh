@@ -75,6 +75,7 @@ printf '{"model": "%s", "messages": [{"role": "user", "content": "Reply with the
 
 # Release every request together: each waits on the same fifo.
 mkfifo "$workdir/gate"
+workers=()
 for i in $(seq 1 "$n"); do
   port="${ports[$(( (i - 1) % ${#ports[@]} ))]}"
   (
@@ -85,13 +86,16 @@ for i in $(seq 1 "$n"); do
       || echo "000" > "$workdir/status-$i"
     echo "$port" > "$workdir/port-$i"
   ) &
+  workers+=("$!")
 done
 sleep 0.5
 # Open the fifo for writing once; every reader is released.
 exec 3> "$workdir/gate"
 for _ in $(seq 1 "$n"); do echo go >&3; done
 exec 3>&-
-wait
+# The workers only — the port-forwards are background jobs too and
+# never exit on their own.
+wait "${workers[@]}"
 
 admitted=0; denied=0; other=0
 declare -A per_port
