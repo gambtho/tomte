@@ -32,14 +32,17 @@ workdir=$(mktemp -d)
 trap 'rm -rf "$workdir"' EXIT
 
 echo "Paste the Slack USER ids who may approve from Slack (comma- or newline-separated), press Enter, then Ctrl-D:" >&2
-tr ', \r' '\n\n\n' < /dev/stdin | sed '/^$/d' > "$workdir/ids"
+# The trailing newline is added explicitly: a paste (or a pipe) whose
+# last id has no newline would otherwise be skipped by the `read` loop
+# below — stored, but never validated or counted.
+{ tr ', \r' '\n\n\n' < /dev/stdin; printf '\n'; } | sed '/^$/d' > "$workdir/ids"
 test -s "$workdir/ids" || { echo 'no ids read on stdin — refusing to store an empty list' >&2; exit 1; }
 
 # Every line must be an id. One bad entry refuses the whole list: the
 # plane would refuse it too (a half-garbled list is not a list of
 # approvers), and better here than at the first command.
 n=0
-while IFS= read -r id; do
+while IFS= read -r id || [ -n "$id" ]; do
   if ! [[ "$id" =~ ^[UW][A-Z0-9]{1,63}$ ]]; then
     case "$id" in
       ([CG]*) echo "'$id' looks like a CHANNEL id; this list is people (U…), not rooms." >&2 ;;
@@ -50,6 +53,7 @@ while IFS= read -r id; do
   fi
   n=$((n + 1))
 done < "$workdir/ids"
+[ "$n" -gt 0 ] || { echo 'no ids validated — refusing to store an empty list' >&2; exit 1; }
 
 $KUBECTL get namespace "$NAMESPACE" >/dev/null 2>&1 || $KUBECTL create namespace "$NAMESPACE"
 $KUBECTL -n "$NAMESPACE" create secret generic "$SECRET" \
