@@ -905,7 +905,8 @@ jobs:
                 cat "/etc/kaimahi/$f" >/dev/null 2>&1 && break
               sleep 3
             done
-            kubectl --context kind-kaimahi-p1 -n kaimahi exec deploy/kaimahi-proxy -- test -s "/etc/kaimahi/$f"
+            # distroless image: no `test`; a non-empty cat is the check.
+            kubectl --context kind-kaimahi-p1 -n kaimahi exec deploy/kaimahi-proxy -- cat "/etc/kaimahi/$f" | grep -q .
           done
           # The approver file holds the synthetic id and nothing else.
           test "$(kubectl --context kind-kaimahi-p1 -n kaimahi exec deploy/kaimahi-proxy -- cat /etc/kaimahi/slack/approvers)" = U0CIAPPROVER
