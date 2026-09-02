@@ -107,6 +107,17 @@ type InboundHook struct {
 	// AgentNamespace/Agent name the kagent Agent the event triggers.
 	AgentNamespace string `json:"agent_namespace"`
 	Agent          string `json:"agent"`
+	// SlackChannelsFile (slack auth only, P8) names a Secret-mounted file
+	// listing the channel IDs whose mentions may trigger this hook —
+	// comma- or newline-separated, read per request. The committed table
+	// names the FILE because a channel ID is a workspace identifier this
+	// public repo never carries; the demo mounts the same Secret key
+	// that restricts where the Slack MCP server may post
+	// (SLACK_MCP_ADD_MESSAGE_TOOL), so "the private test channel" has one
+	// source of truth for both directions. Unreadable, empty, or a
+	// server-side "anywhere" value fails the hook closed (503). Absent
+	// from the config: any channel the app is mentioned in.
+	SlackChannelsFile string `json:"slack_channels_file,omitempty"`
 	// BudgetCredential is the governed credential the triggered agent
 	// spends under (its governed preset's credential). An event is
 	// refused at the door when that budget is already exhausted, so the
@@ -207,6 +218,9 @@ func Parse(raw []byte) (Config, error) {
 		}
 		if !dnsLabel.MatchString(h.Agent) || !dnsLabel.MatchString(h.AgentNamespace) {
 			return Config{}, fmt.Errorf("config: inbound hook %q: agent and agent_namespace must be lowercase DNS labels", name)
+		}
+		if h.SlackChannelsFile != "" && h.Auth != AuthSlack {
+			return Config{}, fmt.Errorf("config: inbound hook %q: slack_channels_file is meaningless with %s auth", name, h.Auth)
 		}
 		switch h.Auth {
 		case AuthBearer:

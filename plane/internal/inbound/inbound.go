@@ -217,7 +217,22 @@ func (b *Bridge) deny(w http.ResponseWriter, r *http.Request, name string, h con
 	delivery string, status int, msg string) {
 	b.audit(r.Context(), store.InboundAuditEntry{Hook: name, CredentialName: h.Credential,
 		DeliveryID: delivery, Decision: "denied", Status: status, Detail: msg, Agent: agentRef(h)})
+	slackRetryPolicy(w, h, status)
 	http.Error(w, msg, status)
+}
+
+// slackRetryPolicy tells Slack not to retry a refusal that a retry
+// cannot change. Slack re-delivers any event it did not get a 2xx for,
+// up to three times, and counts failures towards disabling the
+// subscription — so a 4xx that would only re-file the same denial (no
+// grant, wrong channel, replay, malformed) says so with
+// X-Slack-No-Retry. A 5xx is the plane degraded, and a retry is exactly
+// what should happen then, so it carries nothing. Other hooks' callers
+// have their own contracts and get no Slack header.
+func slackRetryPolicy(w http.ResponseWriter, h config.InboundHook, status int) {
+	if h.Auth == config.AuthSlack && status >= 400 && status < 500 {
+		w.Header().Set("X-Slack-No-Retry", "1")
+	}
 }
 
 func agentRef(h config.InboundHook) string { return h.AgentNamespace + "/" + h.Agent }
@@ -241,6 +256,7 @@ func (b *Bridge) receive(w http.ResponseWriter, r *http.Request) {
 	// deliberate — a flood starves its hook, not the database.
 	if !b.limiter.allow(name, h.RatePerMinute, h.Burst) {
 		slog.Warn("inbound: rate limit exceeded", "hook", name)
+		slackRetryPolicy(w, h, http.StatusTooManyRequests)
 		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 		return
 	}
@@ -276,6 +292,37 @@ func (b *Bridge) receive(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"challenge": ev.challenge})
 		return
+	}
+
+	if ev.ignored != "" {
+		// A well-formed event that is deliberately not a trigger (Slack:
+		// anything but a human's app_mention). Acknowledged so the source
+		// does not retry it, audited so the trail shows it arrived, and
+		// nothing else: no budget preview, no grant use, no agent.
+		b.audit(r.Context(), store.InboundAuditEntry{Hook: name, CredentialName: cred.Name,
+			DeliveryID: delivery, Decision: "ignored", Status: http.StatusOK, Detail: ev.ignored, Agent: agentRef(h)})
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ignored", "reason": ev.ignored})
+		return
+	}
+
+	// Where the mention was said must be a channel the hook is bound to
+	// (P8). The list is read per request from plane custody, like the
+	// signing secret; unreadable fails closed. The signature proved the
+	// event came from the workspace; this proves it came from the room
+	// the demo agreed to be in.
+	if h.SlackChannelsFile != "" {
+		channels, err := readSlackChannels(h.SlackChannelsFile)
+		if err != nil {
+			slog.Error("inbound: slack channel allowlist unavailable", "hook", name, "file", h.SlackChannelsFile, "err", err)
+			b.deny(w, r, name, h, delivery, http.StatusServiceUnavailable, "hook channel allowlist unavailable")
+			return
+		}
+		if !channels[ev.slack.channel] {
+			b.deny(w, r, name, h, delivery, http.StatusForbidden,
+				"channel "+ev.slack.channel+" is not one this hook is bound to")
+			return
+		}
 	}
 
 	// Budget preview on the credential the triggered agent spends under.
