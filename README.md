@@ -94,7 +94,7 @@ port-forwards the controller, and invokes the agent.
 | 5b | Cluster portability + a real managed-cluster run | **demonstrated once** — the plane, a governed Copilot chat, a ledger row, a budget denial and a governed tool call, all on a real AKS cluster, which was then deleted ([docs/aks.md](docs/aks.md)) |
 | 7a | Network policy around the plane | **runs** — default-deny NetworkPolicy in both directions, proven by a probe on every PR ([docs/egress.md](docs/egress.md)) |
 | 7b | Inbound hooks (webhooks → agent), governed | **runs** — auth before any work, budget checked at the door, a bounded grant consumed per event, probed keyless in CI; rate limiter and queue are in-memory, single replica ([docs/inbound.md](docs/inbound.md)) |
-| — | `kaimahi create` CLI | proposed — [docs/CLI-PROPOSAL.md](docs/CLI-PROPOSAL.md) |
+| — | `kaimahi agent create` CLI | **runs** — scaffolds governed agent-as-code; not published to npm (D19), internal via `npx github:` ([docs/CLI-PROTOTYPE.md](docs/CLI-PROTOTYPE.md)) |
 
 **Limitations, stated plainly.** Governance is opt-in per agent: an
 *ungoverned* preset still bills with no ledger, and an ungoverned tools wiring
@@ -142,8 +142,9 @@ these controls are collected in `docs/SCENARIOS.md` (proposed separately).
 
 ## Command reference
 
-Commands that exist today. `kaimahi create` is deliberately **not** in this
-table — it is a proposal.
+Commands that exist today. `kaimahi agent create` is the CLI's only
+command — reading, updating and deleting agents stay with `kubectl` and the
+kagent CLI.
 
 | Command | Does |
 |---|---|
@@ -157,6 +158,8 @@ table — it is a proposal.
 | `make copilot-secret` | GitHub device login → short-lived Copilot token → Secret |
 | `make tools-agent` | apply the MCP tools-enabled agent |
 | `make model MODEL=<tag>` | pull another Ollama model (also edit `model:` in the YAML) |
+| `make scenario-billing` | scaffold + apply the billing scenario agent via the CLI |
+| `make cli-test` | CLI unit tests (no cluster) |
 | `make aks-cluster` / `make aks-down` | create / **delete** an ephemeral AKS cluster + private ACR |
 
 Overridable: `KIND_CLUSTER`, `KAGENT_VERSION`, `MODEL`, `AGENT`, `TASK`,
@@ -231,32 +234,50 @@ server is locked down at three layers: k8s tools only, `--read-only`, and a
 get/list/watch ClusterRole that **cannot read Secrets**, with a single-tool
 allowlist on top. Details: [docs/tools.md](docs/tools.md).
 
-## Proposed CLI direction
+## The CLI: `kaimahi agent create`
 
 CLI before UI, deliberately. A command has an exit code, runs in CI, works
 over SSH, pipes into other commands, and can be read in a code review. Every
 step of the journey — provision, deploy, converse, switch models, add tools,
-tear down — is one today, from a clone, via make. The direction being chased
-is the same journey without a clone:
+tear down — is one.
+
+Scaffolding an agent is the one step the Makefile could not do without a
+clone, so it is the one command the CLI owns:
 
 ```bash
-npx kaimahi create agent support-triage \
-  --model anthropic \
+npx github:kaimahi-agents/kaimahi#<commit-sha> agent create support-triage \
   --instructions ./triage.md \
-  --tools kagent-tool-server:k8s_get_resources \
+  --tools kaimahi-tools:k8s_get_resources \
   --out k8s/
 ```
 
-It would generate the agent-as-code YAML — Agent, ModelConfig, tool wiring,
-and the Secret *references* to go with them — validate it (server-side
-dry-run when a cluster is reachable), and print the next command. The
-artifact is the same YAML you would have hand-written, and it is yours from
-that point on.
+It generates the agent-as-code YAML — Agent, model preset reference, tool
+wiring with a mandatory allowlist, and Secret *references* rather than
+secrets — checks it locally, and prints the next command. Add `--dry-run` to
+validate against a cluster's live CRDs, or `--apply` to send it. The artifact
+is the same YAML you would have hand-written, and it is yours from that point
+on.
 
-> **`kaimahi create` is proposed, not built.** No package is published and
-> the name is unclaimed. The design, a survey of what already exists, and
-> the security model are in [docs/CLI-PROPOSAL.md](docs/CLI-PROPOSAL.md) —
-> including the honest case *against* building it.
+With no `--model` it defaults to a **governed** preset, so a scaffolded agent
+is metered, budgeted and audited from its first call.
+
+```bash
+make scenario-billing    # the SCENARIOS.md billing journey, scaffolded and applied
+make cli-test            # unit tests, no cluster needed
+```
+
+> **Built, not published.** Per D19 the CLI is internal for now — run it from
+> the repo as above; npm publication waits on D9's naming gates. `agent
+> create` is the only command: reading, updating and deleting agents stay
+> with `kubectl` and the kagent CLI, which already do them.
+>
+> **Pin the ref.** A bare `github:` spec resolves to whatever the default
+> branch holds at that moment and executes it locally, with your kubeconfig
+> in reach. Substitute a reviewed commit SHA; CI rejects an unpinned spec in
+> the docs.
+>
+> Design and survey: [docs/CLI-PROPOSAL.md](docs/CLI-PROPOSAL.md). What it
+> does and what is verified: [docs/CLI-PROTOTYPE.md](docs/CLI-PROTOTYPE.md).
 
 ## Development
 
