@@ -117,7 +117,9 @@ prefix.
 | CI flake: agent-readiness race (P5b finding) | coordinator — PR #20 MERGED (73917e9) after a review round: retry anchored to the controller's whole error line; slack-post retries only unambiguous failures | User ruling 2026-09-01: fold into the next phase rather than a standalone micro-lane — as its **FIRST commit, before feature work**, so the lane's own CI is not reddened by someone else's race | retry predicate covers `connection refused` but not `EOF`; main went red once then green on re-run. Widen narrowly (EOF, connection-reset) so it cannot mask a real outage — see P5b delta sheet |
 | ~~NetworkPolicy egress (promoted 2026-09-01)~~ | — | BUILT as P7a (PR #23) and enforced on AKS by W15 (PR #30) | row kept for the promotion record |
 | ~~P6: inbound connectors (webhooks/user APIs)~~ | — | BUILT as P7b (PR #24); public edge + Slack loop as P8a (PR #35) | row kept for the sequencing record |
-| CLI: `kaimahi agent create` (Tatsinnit, PR #16) | teammate | checks green at 6b952fa, every review point addressed; NOT mergeable — conflicts with #32–#35 in ci.yml/.gitignore/Makefile/README; one coordinator finding outstanding (see open items) | not published; internal via pinned npx github: |
+| CLI: `kaimahi agent create` (Tatsinnit, PR #16) | teammate | CLOSED by the author 2026-09-02 (unmerged; checks were green at 6b952fa, conflicts with #32–#35 unresolved). Nothing under `cli/` is on main; D19's rulings stand for whenever the CLI returns | if reopened: rebase (README text under "Proposed CLI direction"), add scripts/kube-guard.sh to package.json `files`, `--yes` in scenario-billing, `cli` job into protect-main |
+| Status output + host preflight (davidgamero, PR #37) | teammate | OPEN; coordinator review in progress | Makefile `preflight-kind` + `scripts/status.py`; not a board lane |
+| Development guide + Python 3.9 fix (Tatsinnit, PR #38) | teammate | OPEN; coordinator fact-check in progress | docs/development.md; not a board lane |
 | Docs: CLI-first framing + naming record | teammate (Tatsinnit) | PR #10 MERGED (ratifies D12) | staleness fixes folded into reconciliation lane |
 | Docs: agent-first scenarios | teammate (Tatsinnit) | PR #11 MERGED (authors' public credit ratified by user merge) | lane closed |
 | Post-merge reconciliation | coordinator | PR #13 MERGED (0ce72ca, main CI green incl. hardened secret scan) | lane closed |
@@ -990,29 +992,19 @@ the Makefile comment for `AKS_NETWORK_POLICY` (W15 deviation 3).
 
 ## Open items after P8a (2026-09-02)
 
-- **#16 (Tatsinnit's CLI)** — checks green at 6b952fa and every review
-  point addressed (entry point committed, `.gitignore` anchored, root
-  `package.json`, guard delegated to `scripts/kube-guard.sh`, presets test
-  reads `k8s/models/`, CWE-74 tool-name validation, pinned `npx github:`
-  invocations + CI gate, `SCENARIO_MODEL` follows `GOVERNED_PRESET`,
-  `scenario-model` prerequisite). Coordinator re-verified on the PR head:
-  28 tests pass locally against main's `k8s/models/` (no drift since the
-  branch base), `npm pack` carries zero dependencies, `private: true`.
-  Outstanding before merge: (1) conflicts with #32–#35 in ci.yml,
-  .gitignore, Makefile, README — and #34's front-door checker now pins the
-  README's section order, so the CLI text must land under "Proposed CLI
-  direction"; (2) coordinator finding: `package.json`'s `files` omits
-  `scripts/kube-guard.sh`, so from the D19 `npx github:` install `--apply`
-  can only ever print "refused by the context guard" (fails closed, but
-  the documented invocation cannot apply) — add the script to `files` and
-  make the CI install step exercise the guard; (3) minor: `scenario-billing`
-  runs make's guard and then the CLI's, so off-kind it asks twice unless
-  `KAIMAHI_CONFIRM` is exported — pass `--yes` in the recipe the way `govern`
-  hands the confirmation down to `use`; (4) user/admin: add the `cli` job to
-  the `protect-main` required checks so D19(4) is enforced, not advisory;
-  (5) one CodeRabbit thread open (the `#<commit-sha>` placeholder in
-  copy-paste examples) — cosmetic, the text already says to substitute a
-  reviewed SHA.
+- **#16 (Tatsinnit's CLI)** — CLOSED by the author on 2026-09-02, after
+  every review point had been addressed at 6b952fa but before the
+  conflicts with #32–#35 were resolved. Nothing under `cli/` is on main.
+  D19's four rulings stand for whenever the CLI comes back. If it does:
+  rebase with the README text under "Proposed CLI direction" (#34's
+  checker pins the section order); add `scripts/kube-guard.sh` to
+  `package.json`'s `files` (from the `npx github:` install `--apply` can
+  only print "refused by the context guard" — `npm pack --dry-run`
+  confirmed); pass `--yes` in `scenario-billing` so off-kind it does not
+  ask twice; add the `cli` job to `protect-main`'s required checks.
+- **Teammate PRs #37 (status output + preflight) and #38 (development
+  guide)** — opened 2026-09-02 outside the board's prompt set;
+  coordinator review owed (comments need the user's sign-off).
 - **D9 naming gates** — cultural read + trademark counsel; npm publish and
   the `cli` package name wait on them (org exists → more urgent).
 - **User-side Slack follow-ups from P8a**: the app configuration token used
