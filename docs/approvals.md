@@ -140,12 +140,14 @@ the inbound hook) and **audited** like any agent's: `make tool-audit
 CRED_TOOLS=kaimahi-plane` shows a row per attempt. The message carries
 the request id, the credential, the kind and subject, and the command to
 type. It is asynchronous and a convenience: a post that fails never
-un-files the request. A refusal the plane can see (the gateway or the
-MCP server refused, the upstream was unreachable, Slack said no) is
-retried three times; a failure after the request went out (a timeout,
-a reset) is recorded and **not** retried, because a notification posted
-twice is the double-post the rest of this repo is careful to avoid, and
-`make approvals` is always there.
+un-files the request. A refusal the plane can see (the gateway refused
+before forwarding, the gateway could not be dialled, Slack said no) is
+retried, three attempts in all; anything that may have happened after
+the post went out (a timeout, a reset, the gateway's own 502, which it
+answers for a dial failure and for a reset after delivery alike) is
+recorded and **not** retried, because a notification posted twice is
+the double-post the rest of this repo is careful to avoid, and `make
+approvals` is always there.
 
 **The command.** `@kaimahi approve <id> [uses=N] [ttl=D] [amount=N]` or
 `@kaimahi deny <id>`, as an `app_mention` on the existing `slack-events`
@@ -196,8 +198,9 @@ On a kind cluster there is no Slack to type into; `make slack-mention
 SLACK_USER=U0EXAMPLE COMMAND='approve 3f1c9a2e'` fires a correctly signed
 synthetic mention at the hook the way `make inbound-fire` does, which is
 how CI asserts the whole path keyless. The notification's post then
-answers 502 (the Slack upstream does not exist there) and its audit row
-under `kaimahi-plane` is the proof it went through the governed path.
+answers 502 (the Slack upstream does not exist there), once, and its
+audit row under `kaimahi-plane` is the proof it went through the
+governed path.
 
 ## Operational notes
 

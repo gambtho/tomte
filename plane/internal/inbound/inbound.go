@@ -358,8 +358,8 @@ func (b *Bridge) receive(w http.ResponseWriter, r *http.Request) {
 	// a request must not itself need a grant, and never runs the agent.
 	// Anything that is not a command continues exactly as before.
 	if h.Auth == config.AuthSlack {
-		if c, ok, perr := parseCommand(ev.slack.text); ok {
-			b.command(w, r, name, h, delivery, cred, ev, c, perr)
+		if c, ok := parseCommand(ev.slack.text); ok {
+			b.handleCommand(w, r, name, h, delivery, cred, ev, c)
 			return
 		}
 	}

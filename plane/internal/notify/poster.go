@@ -28,7 +28,6 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -54,7 +53,10 @@ type Deps struct {
 	// queue drops the post with a log line — a notification the plane
 	// cannot get out is not worth holding a request handler for.
 	QueueSize int
-	Sleep     func(time.Duration) // nil = time.Sleep (tests inject)
+	// Sleep waits out a backoff, returning early when ctx is done (a
+	// shutdown must not wait on a retry). Nil takes the default; tests
+	// inject a recorder.
+	Sleep func(context.Context, time.Duration)
 }
 
 const (
@@ -75,7 +77,6 @@ type Post struct {
 type Poster struct {
 	d    Deps
 	jobs chan Post
-	wg   sync.WaitGroup
 }
 
 func New(d Deps) *Poster {
@@ -89,7 +90,14 @@ func New(d Deps) *Poster {
 		d.QueueSize = defaultQueueSize
 	}
 	if d.Sleep == nil {
-		d.Sleep = time.Sleep
+		d.Sleep = func(ctx context.Context, d time.Duration) {
+			t := time.NewTimer(d)
+			defer t.Stop()
+			select {
+			case <-ctx.Done():
+			case <-t.C:
+			}
+		}
 	}
 	if d.Client == nil {
 		d.Client = &http.Client{
@@ -119,8 +127,6 @@ func (p *Poster) Enqueue(post Post) bool {
 // notifications are rare and ordering in the channel should follow
 // filing order.
 func (p *Poster) Run(ctx context.Context) {
-	p.wg.Add(1)
-	defer p.wg.Done()
 	for {
 		select {
 		case <-ctx.Done():
@@ -131,16 +137,16 @@ func (p *Poster) Run(ctx context.Context) {
 	}
 }
 
-// Wait blocks until Run has returned.
-func (p *Poster) Wait() { p.wg.Wait() }
-
 // outcome classifies one attempt. Only "refused" is retried: it means
 // the message is KNOWN not to have reached Slack (the gateway refused
-// or could not be dialled, the upstream was unreachable, or Slack said
-// no). "ambiguous" means the request went out and the answer was lost
-// (timeout, reset, EOF, an unparseable success, an upstream 5xx) — the
-// post may have landed, and posting again is the double-post the
-// slack-post retry rule exists to prevent, so it is recorded and left.
+// before forwarding or could not be dialled, or Slack said no).
+// "ambiguous" means the request may have gone out and the answer was
+// lost (timeout, reset, EOF, an unparseable success, a 5xx from beyond
+// the gateway — including the gateway's own 502, which it answers for
+// ANY failure on its hop to the MCP server, a dial refusal and a reset
+// after the post was delivered alike) — the post may have landed, and
+// posting again is the double-post the slack-post retry rule exists to
+// prevent, so it is recorded and left.
 type outcome int
 
 const (
@@ -177,12 +183,11 @@ func (p *Poster) send(ctx context.Context, post Post) {
 			return
 		}
 		slog.Warn("notify: post refused; retrying", "kind", post.Kind, "attempt", attempt+1, "err", err)
-		select {
-		case <-ctx.Done():
+		p.d.Sleep(ctx, p.d.Backoff[attempt])
+		if ctx.Err() != nil {
+			slog.Warn("notify: shutting down mid-retry; post not sent (the request stays filed)", "kind", post.Kind)
 			return
-		default:
 		}
-		p.d.Sleep(p.d.Backoff[attempt])
 	}
 }
 
@@ -226,6 +231,13 @@ func (p *Poster) attempt(ctx context.Context, post Post) (outcome, error) {
 		slog.Warn("notify: initialize failed; sending tools/call regardless", "err", err)
 	}
 
+	// A handshake that ate the whole budget (an upstream holding a
+	// stream open) means the post was never sent: refused, not
+	// ambiguous — the deadline error the call below would return says
+	// nothing about which.
+	if ctx.Err() != nil {
+		return refused, fmt.Errorf("handshake exhausted the call budget before tools/call: %w", ctx.Err())
+	}
 	args := map[string]any{"channel_id": channel, "payload": post.Text}
 	if post.ThreadTS != "" {
 		args["thread_ts"] = post.ThreadTS
@@ -298,18 +310,23 @@ func classifyErr(err error) outcome {
 
 // classifyResponse reads the gateway's answer to tools/call.
 //   - 200 with a JSON-RPC result and no isError: posted.
-//   - 200 with a JSON-RPC error or isError: Slack (or the server) refused
-//     the post — nothing landed; refused.
-//   - 4xx, 502, 503: the gateway refused pre-forward, the upstream was
-//     unreachable or redirected, or its credential was unreadable — all
-//     before Slack saw anything; refused.
-//   - anything else (an upstream 500 relayed, a 200 that does not parse):
-//     the request reached the server and the answer is unusable;
-//     ambiguous.
+//   - 200 with a JSON-RPC error or isError: the gateway denied it, or
+//     Slack (or the server) refused the post — nothing landed; refused.
+//   - 4xx and 503: the gateway refused before forwarding, or the
+//     upstream's credential was unreadable — before Slack saw anything;
+//     refused. So is the one 502 the gateway issues itself before any
+//     bytes reach the server: a redirect it refused to follow.
+//   - any other 502 (the gateway's "unreachable", which it answers for a
+//     dial failure AND for a reset after the post was delivered), a
+//     relayed 5xx, a 200 that does not parse: the post may have reached
+//     the server; ambiguous. On a kind cluster, where no Slack upstream
+//     exists, that means one audited attempt per notification, not
+//     three.
 func classifyResponse(status int, contentType string, body []byte) (outcome, error) {
 	switch {
 	case status == http.StatusOK:
-	case status >= 400 && status < 500, status == http.StatusBadGateway, status == http.StatusServiceUnavailable:
+	case status >= 400 && status < 500, status == http.StatusServiceUnavailable,
+		status == http.StatusBadGateway && strings.Contains(string(body), "redirected (refused)"):
 		return refused, fmt.Errorf("gateway answered HTTP %d: %s", status, strings.TrimSpace(string(body)))
 	default:
 		return ambiguous, fmt.Errorf("gateway answered HTTP %d: %s", status, strings.TrimSpace(string(body)))

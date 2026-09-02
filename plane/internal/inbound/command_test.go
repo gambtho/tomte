@@ -102,29 +102,29 @@ func (f *fixture) mention(hook, id, user, text string) (int, string) {
 }
 
 func TestParseCommand(t *testing.T) {
-	c, ok, err := parseCommand("approve " + reqA + " uses=2 ttl=30m")
+	c, ok := parseCommand("approve " + reqA + " uses=2 ttl=30m")
 	require.True(t, ok)
-	require.NoError(t, err)
+	require.NoError(t, c.err)
 	require.Equal(t, "approve", c.verb)
 	require.Equal(t, reqA, c.prefix)
 	require.Equal(t, int32(2), *c.uses)
 	require.Equal(t, 30*time.Minute, *c.ttl)
 	require.Nil(t, c.amount)
 
-	c, ok, err = parseCommand("APPROVE `00000000-0000` amount=5000")
+	c, ok = parseCommand("APPROVE `00000000-0000` amount=5000")
 	require.True(t, ok)
-	require.NoError(t, err)
+	require.NoError(t, c.err)
 	require.Equal(t, "00000000-0000", c.prefix, "backticks are stripped, the verb is case-insensitive")
 	require.Equal(t, int64(5000), *c.amount)
 
-	c, ok, err = parseCommand("deny 00000000")
+	c, ok = parseCommand("deny 00000000")
 	require.True(t, ok)
-	require.NoError(t, err)
+	require.NoError(t, c.err)
 	require.Equal(t, "deny", c.verb)
 
 	// Not commands: the mention goes to the agent as before.
 	for _, text := range []string{"what is the weather?", "please approve my leave", "approved!", "", "denying it"} {
-		_, ok, _ := parseCommand(text)
+		_, ok := parseCommand(text)
 		require.False(t, ok, text)
 	}
 	// Commands with bad arguments are still commands — answered as such,
@@ -132,9 +132,9 @@ func TestParseCommand(t *testing.T) {
 	for _, text := range []string{"approve", "approve 0000", "approve " + reqA + " uses=0", "approve " + reqA + " ttl=31d",
 		"approve " + reqA + " amount=-1", "approve " + reqA + " bogus=1", "approve " + reqA + " uses", "deny " + reqA + " uses=1",
 		"approve not-an-id"} {
-		_, ok, err := parseCommand(text)
+		c, ok := parseCommand(text)
 		require.True(t, ok, text)
-		require.Error(t, err, text)
+		require.Error(t, c.err, text)
 	}
 }
 

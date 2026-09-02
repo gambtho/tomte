@@ -135,11 +135,12 @@ func main() {
 	// path gets the store wrapped so the ONE filing function notifies
 	// once per fresh filing, whichever site filed it; with no notifier
 	// the wrapper is the store.
-	filing := notify.Store{Store: st}
+	filing := notify.Store{Store: st, Filer: st}
 	var poster *notify.Poster
+	gatewayURL := "http://127.0.0.1" + portOf(mcpAddr)
 	if n := cfg.ApprovalNotifier; n != nil {
 		poster = notify.New(notify.Deps{
-			GatewayURL:     "http://127.0.0.1" + portOf(mcpAddr),
+			GatewayURL:     gatewayURL,
 			Upstream:       n.ToolUpstream,
 			Tool:           n.Tool,
 			CredentialFile: n.CredentialFile,
@@ -171,9 +172,13 @@ func main() {
 	bridgeCtx, stopBridge := context.WithCancel(context.Background())
 	bridgeDone := make(chan struct{})
 	go func() { bridge.Run(bridgeCtx); close(bridgeDone) }()
+	// The poster outlives the bridge: a filing during the servers' drain
+	// still gets its post, and shutdown then bounds the poster like it
+	// bounds the bridge.
+	posterCtx, stopPoster := context.WithCancel(context.Background())
 	posterDone := make(chan struct{})
 	if poster != nil {
-		go func() { poster.Run(bridgeCtx); close(posterDone) }()
+		go func() { poster.Run(posterCtx); close(posterDone) }()
 	} else {
 		close(posterDone)
 	}
@@ -196,7 +201,7 @@ func main() {
 	go func() { errCh <- adminSrv.ListenAndServe() }()
 	slog.Info("kaimahi-proxy up", "data", dataAddr, "mcp", mcpAddr, "inbound", inboundAddr, "admin", adminAddr,
 		"upstreams", len(cfg.Upstreams), "tool_upstreams", len(cfg.ToolUpstreams), "inbound_hooks", len(cfg.InboundHooks),
-		"approval_notifier", cfg.ApprovalNotifier != nil)
+		"approval_notifier", cfg.ApprovalNotifier != nil, "notifier_gateway", gatewayURL)
 
 	select {
 	case <-ctx.Done():
@@ -214,7 +219,12 @@ func main() {
 		case <-shutdownCtx.Done():
 			slog.Warn("inbound workers did not drain before shutdown; queued events are lost (their admitted rows stand without an outcome)")
 		}
-		<-posterDone
+		stopPoster()
+		select {
+		case <-posterDone:
+		case <-shutdownCtx.Done():
+			slog.Warn("notifier did not drain before shutdown; queued posts are lost (the requests stay filed)")
+		}
 	case err := <-errCh:
 		// Any listener stopping before a shutdown signal is abnormal —
 		// even ErrServerClosed — so exit nonzero and let Kubernetes

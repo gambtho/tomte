@@ -1011,10 +1011,10 @@ notify-slack: guard
 ## slack-mention: deliver ONE synthetic, correctly signed app_mention to
 ## the slack-events hook as Slack would (kind: the keyless stand-in for
 ## typing in the channel; CI's tool). Unguarded like inbound-fire.
-##   make slack-mention SLACK_USER=U0EXAMPLE COMMAND='approve <id> uses=1' [EXPECT=200]
+##   make slack-mention SLACK_USER=U0EXAMPLE COMMAND='approve <id> uses=1' [EXPECT=200] [WANT='approved request']
 slack-mention:
 	@test -n "$(SLACK_USER)" && test -n "$(COMMAND)" || \
-		{ echo "usage: make slack-mention SLACK_USER=U… COMMAND='approve <id> [uses=N] [ttl=D]' [EXPECT=200]" >&2; exit 1; }
+		{ echo "usage: make slack-mention SLACK_USER=U… COMMAND='approve <id> [uses=N] [ttl=D]' [EXPECT=200] [WANT=...]" >&2; exit 1; }
 	@KUBECTL="$(KUBECTL)" bash scripts/slack-mention-probe.sh "$(SLACK_USER)" "$(COMMAND)"
 
 ## ---- P8: the public edge (docs/inbound.md, "Putting it on the internet") ----

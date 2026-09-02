@@ -924,9 +924,14 @@ jobs:
           done
           cat plane-audit.out
           grep -E 'kaimahi-plane +slack +tools/call +conversations_add_message +allowed +502 *$' plane-audit.out
-          # A refused post is retried a bounded number of times (3) and
-          # never more: the notification is once per filing.
-          test "$(grep -cE 'kaimahi-plane +slack +tools/call +conversations_add_message +allowed +502' plane-audit.out)" = 3
+          # Exactly ONE attempt: the gateway's 502 cannot say whether the
+          # post reached the server (a dial refusal and a reset after
+          # delivery answer alike), so it is recorded and NOT retried —
+          # a notification posted twice is the double-post this repo
+          # avoids. The notification is once per filing.
+          sleep 5
+          KUBECTL="kubectl --context kind-kaimahi-p1" bash scripts/plane-admin.sh tool-audit kaimahi-plane > plane-audit.out
+          test "$(grep -cE 'kaimahi-plane +slack +tools/call +conversations_add_message +allowed +502' plane-audit.out)" = 1
       - name: "Approvals from Slack: a non-approver is refused 403 and audited; the request stays pending"
         if: steps.changes.outputs.docs_only != 'true'
         run: |
@@ -943,8 +948,7 @@ jobs:
         run: |
           id=$(cat p8b-request-id)
           # The first block of the id is what a human types.
-          bash scripts/slack-mention-probe.sh U0CIAPPROVER "approve ${id%%-*} uses=1 ttl=10m" | tee mention-approve.out
-          grep -q "approved request $id" mention-approve.out
+          WANT="approved request $id" bash scripts/slack-mention-probe.sh U0CIAPPROVER "approve ${id%%-*} uses=1 ttl=10m"
           make grants | tee grants-p8b.out
           grep -E "hello-tools +tool +k8s_get_events +yes .* 0/1 .* slack:U0CIAPPROVER" grants-p8b.out
           make approval-audit | tee approval-audit-p8b.out
@@ -956,8 +960,7 @@ jobs:
           make inbound-audit HOOK=slack-events | tee inbound-audit-p8b-2.out
           grep -E "slack-events +inbound-slack +Ev[0-9A-F]+ +command +200 +.*approve ${id%%-*} by slack:U0CIAPPROVER: approved request $id" inbound-audit-p8b-2.out
           # The same command again: a decided request is immutable.
-          bash scripts/slack-mention-probe.sh U0CIAPPROVER "approve ${id%%-*} uses=9" | tee mention-again.out
-          grep -q "already approved by slack:U0CIAPPROVER" mention-again.out
+          WANT="already approved by slack:U0CIAPPROVER" bash scripts/slack-mention-probe.sh U0CIAPPROVER "approve ${id%%-*} uses=9"
           # The admin path still records the admin bearer as the decider.
           grep -E 'hello-tools +tool +k8s_get_events +approved +admin ' approval-audit-p8b.out
       - name: "Approvals from Slack: deny works and carries the identity"
@@ -966,8 +969,7 @@ jobs:
           make approvals | tee approvals-deny.out
           id=$(awk '$3=="hello-tools" && $4=="tool" && $5=="k8s_get_pods" {print $1}' approvals-deny.out)
           test -n "$id"
-          bash scripts/slack-mention-probe.sh U0CIAPPROVER "deny $id" | tee mention-deny.out
-          grep -q "denied request $id" mention-deny.out
+          WANT="denied request $id" bash scripts/slack-mention-probe.sh U0CIAPPROVER "deny $id"
           make approval-audit | tee approval-audit-deny.out
           grep -E 'hello-tools +tool +k8s_get_pods +denied +slack:U0CIAPPROVER' approval-audit-deny.out
           # A command reply also rides the governed path: more plane rows,

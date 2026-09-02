@@ -14,7 +14,7 @@ type Filing struct {
 }
 
 // Notifier is told about fresh filings. *Poster satisfies it via
-// Notify; the bridge and the tests use the narrower interface.
+// Notify; Store below depends on the interface, not the Poster.
 type Notifier interface {
 	Notify(f Filing)
 }
@@ -58,25 +58,17 @@ type Filer interface {
 // denial, the inbound door, the admin's explicit filing) notifies once
 // per fresh filing. Deduped refilings (filed=false) notify nothing; a
 // failed filing notifies nothing and is the caller's denial regardless.
-// Every other method is the embedded store's own. With N nil it is the
-// store.
+// Every other method is the embedded store's own; Filer is where
+// filings go (the same store in main; a fake without a database in
+// tests). With N nil it is the store.
 type Store struct {
 	*store.Store
-	N Notifier
-	// Filer is where filings go; nil means the embedded store (tests
-	// substitute a fake without a database).
 	Filer Filer
-}
-
-func (s Store) filer() Filer {
-	if s.Filer != nil {
-		return s.Filer
-	}
-	return s.Store
+	N     Notifier
 }
 
 func (s Store) FileApprovalRequest(ctx context.Context, credential, kind, subject, detail string) (bool, error) {
-	id, filed, err := s.filer().FileRequest(ctx, credential, kind, subject, detail)
+	id, filed, err := s.Filer.FileRequest(ctx, credential, kind, subject, detail)
 	if err != nil || !filed {
 		return filed, err
 	}

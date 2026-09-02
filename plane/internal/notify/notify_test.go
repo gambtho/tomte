@@ -100,7 +100,7 @@ func newFixture(t *testing.T, url string, opts ...func(*Deps)) *fixture {
 	d := Deps{GatewayURL: url, Upstream: "slack", Tool: "conversations_add_message",
 		CredentialFile: filepath.Join(dir, "token"), ChannelFile: filepath.Join(dir, "channel"),
 		CallTimeout: 2 * time.Second, Backoff: []time.Duration{time.Millisecond, time.Millisecond},
-		Sleep: func(d time.Duration) { f.sleeps = append(f.sleeps, d) }}
+		Sleep: func(_ context.Context, d time.Duration) { f.sleeps = append(f.sleeps, d) }}
 	for _, o := range opts {
 		o(&d)
 	}
@@ -145,8 +145,10 @@ func TestPostGoesThroughTheGatewayUnderThePlanesCredential(t *testing.T) {
 
 func TestRefusalsAreRetriedBounded(t *testing.T) {
 	for name, answer := range map[string]func(w http.ResponseWriter, _ *http.Request){
-		"upstream unreachable (502)": func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "tool upstream unreachable", 502) },
-		"pre-forward 503":            func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "tool audit unavailable", 503) },
+		"redirect refused (502 before any byte went out)": func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "tool upstream redirected (refused)", 502)
+		},
+		"pre-forward 503": func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "tool audit unavailable", 503) },
 		"not allowlisted (JSON-RPC error)": func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":2,"error":{"code":-32001,"message":"tool not permitted"}}`)
 		},
@@ -168,8 +170,11 @@ func TestRefusalsAreRetriedBounded(t *testing.T) {
 
 func TestAmbiguousFailuresAreNotRetried(t *testing.T) {
 	for name, answer := range map[string]func(w http.ResponseWriter, _ *http.Request){
-		"upstream 500 relayed": func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "boom", 500) },
-		"unparseable 200":      func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "<html>") },
+		// The gateway's 502 covers a dial refusal AND a reset after the
+		// post was delivered; it cannot say which, so neither is retried.
+		"upstream unreachable (502)": func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "tool upstream unreachable", 502) },
+		"upstream 500 relayed":       func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "boom", 500) },
+		"unparseable 200":            func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "<html>") },
 		"timeout": func(w http.ResponseWriter, r *http.Request) {
 			select {
 			case <-r.Context().Done():
@@ -226,13 +231,20 @@ func TestUnreadableCustodyPostsNothing(t *testing.T) {
 func TestInitializeFailureStillSendsTheCall(t *testing.T) {
 	// The tools/call is what the gateway audits; it is sent whatever the
 	// handshake answered, so every attempt is on record.
+	var calls []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var m struct {
+			Method string `json:"method"`
+		}
+		_ = json.Unmarshal(raw, &m)
+		calls = append(calls, m.Method)
 		http.Error(w, "tool upstream unreachable", 502)
 	}))
 	t.Cleanup(srv.Close)
 	f := newFixture(t, srv.URL)
 	f.drain(t, Post{Kind: "test", Text: "x"})
-	require.Len(t, f.sleeps, 2)
+	require.Equal(t, []string{"initialize", "tools/call"}, calls)
 }
 
 func TestQueueFullDropsRatherThanBlocks(t *testing.T) {

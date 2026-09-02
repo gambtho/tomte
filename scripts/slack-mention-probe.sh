@@ -8,8 +8,13 @@
 # on a live cluster the real thing is typing it.
 #
 # Fail closed like inbound-probe.sh: passes ONLY when the HTTP status
-# equals $EXPECT (default 200 — a handled command; a question is 202).
-# For 200 the body must be the plane's well-formed command outcome.
+# equals $EXPECT (default 200 — a handled command or an ignored event;
+# a question is 202). For 200 the body must be the plane's well-formed
+# answer, and when WANT is set it must be a command whose outcome
+# contains it ("approved request", "denied request", "already
+# approved") — a 200 is a HANDLED command, which includes "invalid" and
+# "no such request"; WANT is what says the decision went the way the
+# caller meant.
 #
 # The user id given here is whatever the caller chooses; on a kind
 # cluster it is a synthetic one (CI uses U0CIAPPROVER). Never paste a
@@ -17,6 +22,7 @@
 #
 # Usage: slack-mention-probe.sh <slack user id> <text>
 #   env: EXPECT=200|202|403|503 (default 200)
+#        WANT=<substring>     require the command outcome to contain it
 #        SLACK_EVENT_ID=<id>  reuse an event id (a replay)
 #        INBOUND_PORT=<local port> (default 18085)
 set -euo pipefail
@@ -30,6 +36,7 @@ INBOUND_PORT="${INBOUND_PORT:-18085}"
 SIGNING_SECRET="${INBOUND_SIGNING_SECRET:-kaimahi-inbound-signing}"
 BOT_SECRET="${SLACK_BOT_SECRET:-kaimahi-slack-bot}"
 EXPECT="${EXPECT:-200}"
+WANT="${WANT:-}"
 
 user="${1:?usage: slack-mention-probe.sh <slack user id> <text>}"
 text="${2:?usage: slack-mention-probe.sh <slack user id> <text>}"
@@ -103,13 +110,17 @@ if [ "$status" != "$EXPECT" ]; then
 fi
 case "$status" in
   200)
-    python3 - "$workdir/resp" "$user" "$event_id" <<'EOF'
+    python3 - "$workdir/resp" "$user" "$event_id" "$WANT" <<'EOF'
 import json, sys
 d = json.load(open(sys.argv[1]))
 assert d.get("status") in ("command", "ignored"), f"malformed answer: {d}"
 if d["status"] == "command":
     print(f"COMMAND by {sys.argv[2]} (event {sys.argv[3]}) handled: {d.get('outcome')}")
+    if sys.argv[4] and sys.argv[4] not in (d.get("outcome") or ""):
+        sys.exit(f"outcome does not contain WANT={sys.argv[4]!r}")
 else:
+    if sys.argv[4]:
+        sys.exit(f"the mention was ignored, not handled as a command (WANT={sys.argv[4]!r})")
     print(f"IGNORED (event {sys.argv[3]}): {d.get('reason')}")
 EOF
     ;;

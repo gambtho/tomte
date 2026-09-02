@@ -21,7 +21,7 @@ ALTER TABLE permit_grant ADD COLUMN decided_by text NOT NULL DEFAULT 'admin';
 ALTER TABLE approval_audit ADD COLUMN decided_by text NOT NULL DEFAULT '';
 UPDATE approval_audit SET decided_by = 'admin' WHERE action IN ('approved', 'denied');
 
--- A Slack command (approve/deny) is a fourth kind of inbound outcome: not
+-- A Slack command (approve/deny) is a new kind of inbound decision: not
 -- a denial, not an admission (no agent runs, no grant use is burned), and
 -- not merely ignored (the plane acted on it). Recorded as 'command' with
 -- the outcome in detail, so the inbound trail shows every decision taken

@@ -25,13 +25,16 @@ import (
 	"github.com/kaimahi-agents/kaimahi/plane/internal/store"
 )
 
-// command is a parsed approval command.
+// command is a parsed approval command. err is set when the text is
+// recognisably a command with a bad argument: still a command (answered
+// as "invalid …"), never handed to the agent as a question.
 type command struct {
 	verb   string // "approve" | "deny"
 	prefix string // request id or a prefix of it, lowercase
 	uses   *int32
 	ttl    *time.Duration
 	amount *int64
+	err    error
 }
 
 const (
@@ -53,59 +56,64 @@ var (
 
 // parseCommand recognises a command in a mention's text (mention tokens
 // already stripped). ok=false means "not a command" — the mention keeps
-// today's behaviour and goes to the agent. A recognisable command with a
-// bad argument is a command (ok=true) with err set, so it is answered as
-// a command ("invalid …") rather than handed to the agent as a question.
-func parseCommand(text string) (c command, ok bool, err error) {
+// today's behaviour and goes to the agent.
+func parseCommand(text string) (c command, ok bool) {
 	fields := strings.Fields(text)
 	if len(fields) == 0 {
-		return command{}, false, nil
+		return command{}, false
 	}
 	verb := strings.ToLower(fields[0])
 	if verb != "approve" && verb != "deny" {
-		return command{}, false, nil
+		return command{}, false
 	}
 	c.verb = verb
 	if len(fields) < 2 {
-		return c, true, fmt.Errorf("usage: %s <request id> [uses=N] [ttl=15m] [amount=N]", verb)
+		c.err = fmt.Errorf("usage: %s <request id> [uses=N] [ttl=15m] [amount=N]", verb)
+		return c, true
 	}
 	c.prefix = strings.ToLower(strings.Trim(fields[1], "`<>"))
 	if !prefixRe.MatchString(c.prefix) || len(strings.ReplaceAll(c.prefix, "-", "")) < minPrefix {
-		return c, true, fmt.Errorf("request id must be at least the first %d characters of the id shown in the notification or `make approvals`", minPrefix)
+		c.err = fmt.Errorf("request id must be at least the first %d characters of the id shown in the notification or `make approvals`", minPrefix)
+		return c, true
 	}
 	for _, f := range fields[2:] {
 		k, v, found := strings.Cut(strings.ToLower(f), "=")
 		if !found || v == "" {
-			return c, true, fmt.Errorf("unrecognised argument %q (want uses=N, ttl=D, amount=N)", f)
+			c.err = fmt.Errorf("unrecognised argument %q (want uses=N, ttl=D, amount=N)", f)
+			return c, true
 		}
 		switch k {
 		case "uses":
 			n, err := strconv.ParseInt(v, 10, 32)
 			if err != nil || n < 1 || n > maxUses {
-				return c, true, fmt.Errorf("uses must be an integer in [1, %d]", maxUses)
+				c.err = fmt.Errorf("uses must be an integer in [1, %d]", maxUses)
+				return c, true
 			}
 			u := int32(n)
 			c.uses = &u
 		case "ttl":
 			d, err := config.ParseTTL(v)
 			if err != nil {
-				return c, true, fmt.Errorf("ttl: %v", err)
+				c.err = fmt.Errorf("ttl: %v", err)
+				return c, true
 			}
 			c.ttl = &d
 		case "amount":
 			n, err := strconv.ParseInt(v, 10, 64)
 			if err != nil || n < 1 || n > maxAmount {
-				return c, true, fmt.Errorf("amount must be an integer in [1, %d]", maxAmount)
+				c.err = fmt.Errorf("amount must be an integer in [1, %d]", maxAmount)
+				return c, true
 			}
 			c.amount = &n
 		default:
-			return c, true, fmt.Errorf("unrecognised argument %q (want uses=N, ttl=D, amount=N)", f)
+			c.err = fmt.Errorf("unrecognised argument %q (want uses=N, ttl=D, amount=N)", f)
+			return c, true
 		}
 	}
 	if verb == "deny" && (c.uses != nil || c.ttl != nil || c.amount != nil) {
-		return c, true, errors.New("deny takes no bounds")
+		c.err = errors.New("deny takes no bounds")
 	}
-	return c, true, nil
+	return c, true
 }
 
 var errApproversUnusable = errors.New("approver list unusable")
@@ -133,12 +141,12 @@ func readSlackApprovers(path string) (map[string]bool, error) {
 	return out, nil
 }
 
-// command handles a recognised command. Its record is an inbound row
-// with decision 'command' (the outcome in detail); the decision itself
-// is in the approvals trail with the approver's identity; the reply
-// goes to the thread through the governed posting path.
-func (b *Bridge) command(w http.ResponseWriter, r *http.Request, name string, h config.InboundHook,
-	delivery string, cred store.Credential, ev event, c command, parseErr error) {
+// handleCommand handles a recognised command. Its record is an inbound
+// row with decision 'command' (the outcome in detail); the decision
+// itself is in the approvals trail with the approver's identity; the
+// reply goes to the thread through the governed posting path.
+func (b *Bridge) handleCommand(w http.ResponseWriter, r *http.Request, name string, h config.InboundHook,
+	delivery string, cred store.Credential, ev event, c command) {
 	// Who may decide: the approver file, read per request; unreadable or
 	// empty refuses the command (503) and nothing else — a question
 	// asked a moment later is still answered.
@@ -161,7 +169,8 @@ func (b *Bridge) command(w http.ResponseWriter, r *http.Request, name string, h 
 	// made because the request context went away mid-transaction.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
 	defer cancel()
-	detail := c.verb + " " + c.prefix + " by " + who + ": " + b.decide(ctx, h, c, parseErr, who)
+	outcome := b.decide(ctx, h, c, who)
+	detail := c.verb + " " + c.prefix + " by " + who + ": " + outcome
 
 	// The row first, the acknowledgement second (the ignored/challenge
 	// rule): an outcome the trail cannot record is not acknowledged, so
@@ -172,21 +181,19 @@ func (b *Bridge) command(w http.ResponseWriter, r *http.Request, name string, h 
 		http.Error(w, "inbound audit unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	reply := detail[strings.Index(detail, ": ")+2:]
 	if b.d.Replier != nil {
-		b.d.Replier.Reply(reply, ev.slack.threadTS)
+		b.d.Replier.Reply(outcome, ev.slack.threadTS)
 	} else {
-		slog.Warn("inbound: no replier configured; command outcome not posted back", "outcome", reply)
+		slog.Warn("inbound: no replier configured; command outcome not posted back", "outcome", outcome)
 	}
-	w.Header().Set("Content-Type", "application/json")
-	writeJSON(w, map[string]string{"status": "command", "outcome": reply})
+	writeJSON(w, map[string]string{"status": "command", "outcome": outcome})
 }
 
 // decide resolves the request and applies the verb, returning the
 // human-readable outcome (what is replied and audited).
-func (b *Bridge) decide(ctx context.Context, h config.InboundHook, c command, parseErr error, who string) string {
-	if parseErr != nil {
-		return "invalid: " + parseErr.Error()
+func (b *Bridge) decide(ctx context.Context, h config.InboundHook, c command, who string) string {
+	if c.err != nil {
+		return "invalid: " + c.err.Error()
 	}
 	req, err := b.d.Store.RequestByPrefix(ctx, c.prefix)
 	switch {
@@ -256,7 +263,7 @@ func (b *Bridge) decide(ctx context.Context, h config.InboundHook, c command, pa
 		bounds += fmt.Sprintf(" amount=%d", *g.Amount)
 	}
 	return "approved request " + req.ID + " (" + req.CredentialName + " " + req.Kind + "/" + req.Subject +
-		"): grant " + g.ID + strings.TrimSuffix(bounds, "")
+		"): grant " + g.ID + bounds
 }
 
 // raced re-reads a request another decision beat this one to.
