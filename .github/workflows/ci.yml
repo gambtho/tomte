@@ -354,6 +354,14 @@ jobs:
           grep -q 'ok  .*internal/kmx/scaffold' kmx-test.out
           grep -q 'ok  .*internal/kmx/kagentcli' kmx-test.out
           grep -q 'ok  .*internal/kmx/delegation' kmx-test.out
+          # The generated-manifest check is the only test that hands the
+          # scaffolder's output to a REAL YAML parser, and it skips itself
+          # when python3/PyYAML are missing — right on a laptop, a green
+          # no-op here. Assert it ran. (The runner has PyYAML; the "All YAML
+          # parses" step above imports it too.)
+          go test ./internal/kmx/scaffold/ -v \
+            -run TestGeneratedManifestParsesAndKeepsInstructionsInsideTheScalar 2>&1 | tee parse.out
+          grep -q -- '--- PASS: TestGeneratedManifestParsesAndKeepsInstructionsInsideTheScalar' parse.out
       - name: Makefile does not re-implement what kmx owns
         run: |
           python3 scripts/check-kmx-delegation.py --selftest

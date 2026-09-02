@@ -1,12 +1,14 @@
 package scaffold
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func mustGenerate(t *testing.T, spec Spec) string {
@@ -250,8 +252,15 @@ func TestQuotesAndBackslashesSurviveQuoting(t *testing.T) {
 // altogether. The explicit `|2` indicator is what fixes it, and only a parser
 // can confirm that.
 func TestGeneratedManifestParsesAndKeepsInstructionsInsideTheScalar(t *testing.T) {
+	// python3 AND PyYAML: without the second, every case below fails with
+	// "the generated manifest does not parse", which would be a lie about the
+	// generator. Skipping is right on a laptop; in CI it would hide the only
+	// test that uses a real parser, so the workflow asserts this test RAN.
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 is not installed; the structural checks still run in the other tests")
+	}
+	if err := exec.Command("python3", "-c", "import yaml").Run(); err != nil {
+		t.Skip("python3 has no PyYAML; install it to run the parser check (CI asserts this test runs)")
 	}
 	for _, tc := range []struct{ name, instructions string }{
 		{"ordinary", "Answer briefly.\nNever ask questions.\n"},
@@ -280,7 +289,11 @@ print(json.dumps({"keys": sorted(d.keys()),
                   "systemMessage": d.get("systemMessage"),
                   "tools": d.get("tools")}))
 `
-			cmd := exec.Command("python3", "-c", script)
+			// Bounded: a parser that blocks on our stdin would otherwise hang
+			// the whole package until go test's own timeout.
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "python3", "-c", script)
 			cmd.Stdin = strings.NewReader(doc)
 			out, err := cmd.Output()
 			if err != nil {

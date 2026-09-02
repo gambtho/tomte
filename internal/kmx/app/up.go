@@ -249,8 +249,11 @@ func (a *App) liveModelConfig(agent string) (string, error) {
 		// does not exist, so kubectl says "the server doesn't have a resource
 		// type", not NotFound — and applying an Agent to that cluster would
 		// fail a moment later anyway. Name the likely cause; do not guess.
+		// The hint is on its own line, as every other operator-facing refusal
+		// in this package is: these are printed to a terminal, not wrapped by
+		// a caller.
 		return "", fmt.Errorf("cannot read %s's live modelConfig (refusing to risk un-governing it): %w\n"+
-			"  If kagent is not installed on this cluster yet, that is `kmx up`.", agent, err)
+			"  if kagent is not installed on this cluster yet, that is `kmx up`", agent, err)
 	}
 	return strings.TrimSpace(out), nil
 }
