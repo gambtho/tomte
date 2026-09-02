@@ -62,7 +62,7 @@ private report flow; the profile and shared security policy link to it.
 ```markdown
 <p align="center">
   <img src="https://raw.githubusercontent.com/kaimahi-agents/kaimahi/main/brand/hero.png"
-       alt="Kaimahi's night worker tending guarded paths for AI agents"
+       alt="Kaimahi night worker guarding paths for AI agents"
        width="100%">
 </p>
 
@@ -70,24 +70,25 @@ private report flow; the profile and shared security policy link to it.
 
 **Governance for AI agents running on Kubernetes.**
 
-Kaimahi is an incubation project built on [kagent](https://kagent.dev). It puts
-budgets and spend metering in front of model calls, keeps real provider
-credentials away from agents, constrains and audits tool calls, and lets humans
-approve consequential actions with bounded permits.
+Kaimahi is an incubation project built on [kagent](https://kagent.dev). It adds
+model-call budgets and metering, keeps provider credentials away from agents,
+constrains and audits tool calls, and supports bounded human approval for
+consequential actions.
 
-The project is worked out in the open and labels capabilities precisely as
-built, demonstrated once, proposed, or unbuilt.
+Work happens in public. Capability labels say what is built, demonstrated once,
+proposed, or unbuilt.
 
 ## Start here
 
-- **[Run the working quickstart](https://github.com/kaimahi-agents/kaimahi/blob/main/docs/getting-started.md)**
-- [Read the capability documentation](https://github.com/kaimahi-agents/kaimahi/blob/main/docs/README.md)
-- [See current status and limitations](https://github.com/kaimahi-agents/kaimahi#status)
+- **[Run the quickstart](https://github.com/kaimahi-agents/kaimahi/blob/main/docs/getting-started.md)**
+- [Capability documentation](https://github.com/kaimahi-agents/kaimahi/blob/main/docs/README.md)
+- [Status and limitations](https://github.com/kaimahi-agents/kaimahi#status)
 - [Contribute](https://github.com/kaimahi-agents/kaimahi/blob/main/CONTRIBUTING.md)
 - [Report a security issue privately](https://github.com/kaimahi-agents/kaimahi/security/advisories/new)
 
-The name is still provisional; its history and remaining checks are recorded in
-[the naming record](https://github.com/kaimahi-agents/kaimahi/blob/main/docs/NAMING.md).
+The name is provisional; see the
+[naming record](https://github.com/kaimahi-agents/kaimahi/blob/main/docs/NAMING.md)
+for its history and remaining checks.
 ```
 
 - [ ] **Step 3: Check links and commit**
@@ -115,9 +116,9 @@ git commit -m "docs: establish Kaimahi organization profile"
 ```markdown
 # Contributing
 
-Thank you for helping improve Kaimahi. The project is incubating in public, so
-focused bug reports, documentation corrections, design feedback, and small
-well-tested changes are especially useful.
+Kaimahi is an incubation project developed in public. Useful contributions
+include focused bug reports, documentation fixes, design feedback, and small,
+well-tested changes.
 
 Before opening a pull request:
 
@@ -127,9 +128,9 @@ Before opening a pull request:
 4. Run every check relevant to the files you changed.
 5. Distinguish what you verified directly from what you inferred.
 
-Kaimahi builds on existing agent and Kubernetes projects rather than replacing
-them. New components should explain why the capability does not already exist
-upstream and why configuration or integration is insufficient.
+Kaimahi builds on existing agent and Kubernetes projects. Proposals for new
+components should explain why upstream capabilities, configuration, or
+integration are insufficient.
 
 Never include credentials, tokens, private cluster names, tenant identifiers,
 or unsanitized logs in an issue or pull request.
@@ -142,8 +143,7 @@ or unsanitized logs in an issue or pull request.
 
 ## Reporting a vulnerability
 
-Do not open a public issue for a suspected vulnerability or include exploitable
-details in a discussion.
+Do not report suspected vulnerabilities or exploitable details publicly.
 
 Use the affected repository's **Security** tab and choose **Report a
 vulnerability** to open a private GitHub security advisory. For Kaimahi, use:
@@ -151,12 +151,12 @@ vulnerability** to open a private GitHub security advisory. For Kaimahi, use:
 https://github.com/kaimahi-agents/kaimahi/security/advisories/new
 
 Include the affected commit or version, deployment assumptions, reproduction
-steps, impact, and any suggested mitigation. Remove real credentials, tenant
-identifiers, cluster addresses, and user data.
+steps, impact, and suggested mitigation. Remove credentials, tenant identifiers,
+cluster addresses, and user data.
 
-Kaimahi is an incubation project and does not currently publish a formal
-support-window or response-time SLA. Maintainers will acknowledge actionable
-reports through the private advisory and coordinate disclosure there.
+Kaimahi is an incubation project with no formal support window or response-time
+SLA. Maintainers will acknowledge actionable reports and coordinate disclosure
+through the private advisory.
 ```
 
 - [ ] **Step 3: Create `SUPPORT.md`**
@@ -164,15 +164,15 @@ reports through the private advisory and coordinate disclosure there.
 ```markdown
 # Support
 
-Kaimahi is an incubation project, not a supported production service.
+Kaimahi is an incubation project without production support.
 
 - Use the target repository's bug form for reproducible defects.
-- Use a feature request for a concrete user problem or missing capability.
+- Use the feature form for a concrete user problem or missing capability.
 - Start with the [documentation index](https://github.com/kaimahi-agents/kaimahi/blob/main/docs/README.md)
   and [FAQ](https://github.com/kaimahi-agents/kaimahi/blob/main/docs/FAQ.md)
   for setup and usage questions.
-- Report vulnerabilities through [GitHub private vulnerability reporting](https://github.com/kaimahi-agents/kaimahi/security/advisories/new),
-  never through a public issue.
+- [Report vulnerabilities privately](https://github.com/kaimahi-agents/kaimahi/security/advisories/new),
+  not in a public issue.
 
 Sanitize logs before sharing them. Do not post API keys, tokens, tenant or
 subscription identifiers, private registry names, cluster addresses, or user
@@ -202,15 +202,15 @@ git commit -m "docs: add organization community defaults"
 
 ```yaml
 name: Bug report
-description: Report a reproducible problem without including secrets
+description: Report a reproducible problem without secrets
 title: "[Bug]: "
 labels: [bug]
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for helping improve Kaimahi. Sanitize every log before attaching it.
-        Report suspected vulnerabilities through private vulnerability reporting instead.
+        Sanitize logs before attaching them.
+        Use private vulnerability reporting for suspected vulnerabilities.
   - type: input
     id: version
     attributes:
@@ -239,7 +239,7 @@ body:
     id: reproduction
     attributes:
       label: Reproduction
-      description: List the smallest exact sequence that reproduces the problem.
+      description: Give the shortest exact sequence that reproduces the problem.
     validations:
       required: true
   - type: textarea
@@ -267,9 +267,9 @@ body:
     attributes:
       label: Safety checks
       options:
-        - label: I removed credentials, private endpoints, tenant or subscription identifiers, and user data.
+        - label: I removed credentials, private endpoints, tenant or subscription IDs, and user data.
           required: true
-        - label: I searched existing issues and reproduced this against a current commit or release.
+        - label: I searched existing issues and reproduced this on a current commit or release.
           required: true
 ```
 
@@ -277,7 +277,7 @@ body:
 
 ```yaml
 name: Feature request
-description: Describe a user problem before proposing a component
+description: Describe the user problem before proposing a component
 title: "[Feature]: "
 labels: [enhancement]
 body:
@@ -285,36 +285,36 @@ body:
     id: problem
     attributes:
       label: User problem
-      description: Who is blocked, and what are they unable to do safely or simply today?
+      description: Who is blocked, and what can they not do safely or simply today?
     validations:
       required: true
   - type: textarea
     id: outcome
     attributes:
       label: Desired outcome
-      description: Describe observable success without prescribing an implementation.
+      description: Define observable success without prescribing an implementation.
     validations:
       required: true
   - type: textarea
     id: alternatives
     attributes:
       label: Alternatives and current workaround
-      description: Include relevant kagent, Kubernetes, or MCP capabilities considered.
+      description: Include relevant kagent, Kubernetes, or MCP capabilities you considered.
     validations:
       required: true
   - type: textarea
     id: governance
     attributes:
-      label: Governance and blast-radius effect
-      description: Explain effects on credentials, spend, tools, approvals, network boundaries, or audit.
+      label: Governance impact
+      description: Note effects on credentials, spend, tools, approvals, network boundaries, audit, or blast radius.
     validations:
       required: true
   - type: checkboxes
     id: survey
     attributes:
-      label: Existing-capability check
+      label: Existing capability check
       options:
-        - label: I checked whether kagent, Kubernetes, or an existing MCP component already provides this capability.
+        - label: I checked whether kagent, Kubernetes, or an MCP component already provides this capability.
           required: true
 ```
 
@@ -325,10 +325,10 @@ blank_issues_enabled: false
 contact_links:
   - name: Documentation and FAQ
     url: https://github.com/kaimahi-agents/kaimahi/blob/main/docs/README.md
-    about: Check setup guidance, capability docs, and known limitations.
+    about: Setup, capability documentation, and known limitations.
   - name: Private security report
     url: https://github.com/kaimahi-agents/kaimahi/security/advisories/new
-    about: Report suspected vulnerabilities privately; do not open a public issue.
+    about: Report suspected vulnerabilities privately, not in a public issue.
 ```
 
 - [ ] **Step 4: Validate YAML and required fields**
@@ -364,15 +364,15 @@ git commit -m "chore: add organization issue forms"
 ```markdown
 ## Problem
 
-What user or maintainer problem does this change solve?
+What problem does this change solve for users or maintainers?
 
 ## Approach
 
-What changed, and why is this the smallest sufficient approach?
+What changed? Why is this the smallest sufficient approach?
 
 ## Verification
 
-List the exact commands or manual checks performed and their results.
+List exact commands or manual checks and their results.
 
 - [ ] Relevant automated tests pass.
 - [ ] Documentation and examples match the implemented behavior.
@@ -380,12 +380,12 @@ List the exact commands or manual checks performed and their results.
 
 ## Security and governance
 
-Describe any effect on credential custody, spend, tool access, approvals,
-network boundaries, audit, or blast radius. Write `No change` when none applies.
+Note effects on credential custody, spend, tool access, approvals, network
+boundaries, audit, or blast radius. Write `No change` if there are none.
 
 ## Claim quality
 
-Mark each new capability claim as continuously tested, verified manually,
+Label each new capability claim as continuously tested, verified manually,
 demonstrated once, schema-valid only, proposed, or unbuilt.
 ```
 

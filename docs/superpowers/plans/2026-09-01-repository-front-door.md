@@ -135,26 +135,25 @@ commands, status table, and detailed sections beneath it:
 ```markdown
 <p align="center">
   <img src="brand/hero.png"
-       alt="Kaimahi's night worker tending guarded paths for AI agents"
+       alt="Kaimahi night worker guarding paths for AI agents"
        width="100%">
 </p>
 
 # Kaimahi
 
-> **Incubation project.** Kaimahi is being worked out in the open. The README
-> and documentation distinguish capabilities that run in CI, were demonstrated
-> once, are schema-valid only, remain proposed, or are not built.
+> **Incubation project.** Kaimahi is built in public. The README and
+> documentation label capabilities as running in CI, demonstrated once,
+> schema-valid only, proposed, or unbuilt.
 
 **Governance for AI agents running on Kubernetes.**
 
-Kaimahi builds on [kagent](https://kagent.dev) rather than replacing its agent
-runtime. It mounts at the model and MCP seams to add the controls teams need
-before delegating consequential work.
+Kaimahi builds on [kagent](https://kagent.dev) rather than replacing it. It adds
+controls at the model and MCP boundaries for consequential agent work.
 
 ### Control model spend
 
-Meter model calls, fail closed on monthly budgets, ledger every request, and
-keep real provider credentials away from agent pods.
+Meter model calls, fail closed on monthly budgets, write every request to a
+ledger, and keep real provider credentials away from agent pods.
 
 ### Constrain tool calls
 
@@ -163,31 +162,30 @@ per-credential tool allowlists, and an audit trail that includes denials.
 
 ### Approve consequential actions
 
-Turn a denied model or tool action into a pending request. Human approval mints
-a grant bounded by expiry and/or use count; when the bound is reached, the
-exception lapses.
+Turn a denied model or tool action into a pending request. Human approval issues
+a grant limited by expiry, use count, or both. The exception lapses when its
+limit is reached.
 
 <p align="center">
   <img src="docs/assets/architecture.svg"
-       alt="A Kubernetes-hosted agent routes governed model calls through Kaimahi's LLM proxy and governed tool calls through its MCP gateway; bounded approvals can temporarily widen either path">
+       alt="A Kubernetes agent routes model calls through the Kaimahi LLM proxy and tool calls through its MCP gateway; bounded approvals can widen either path temporarily">
 </p>
 
-Kaimahi remains explicit about its boundary: governance is opt-in per agent,
-and the documentation names the ungoverned paths and remaining limitations.
+Governance is opt-in per agent. The documentation identifies ungoverned paths
+and current limitations.
 
 ## Quickstart
 
-The working path today is intentionally plain:
+The working path today:
 
 ```bash
 make up     # kind cluster + local model + kagent + agents (~5–10 minutes)
 make chat   # talk to the default agent
 ```
 
-No API key is required for the default path. It uses an in-cluster Ollama model
-and exercises a real agent conversation. Continue with the
-[getting-started guide](docs/getting-started.md), or use the
-[documentation index](docs/README.md) to choose a capability.
+The default path needs no API key. It uses an in-cluster Ollama model for a real
+agent conversation. Continue with the [getting-started guide](docs/getting-started.md)
+or choose a capability from the [documentation index](docs/README.md).
 ```
 
 - [ ] **Step 2: Move the proposed CLI section below working capability**
@@ -246,15 +244,15 @@ git commit -m "docs: lead README with Kaimahi governance outcomes"
 ```markdown
 # Contributing to Kaimahi
 
-Kaimahi is an incubation project. Focused fixes, documentation corrections,
-tests, and small capability changes are welcome. Start with the organization
+Kaimahi is an incubation project. Focus contributions on fixes, documentation
+corrections, tests, and small capability changes. Start with the organization
 [contribution expectations](https://github.com/kaimahi-agents/.github/blob/main/CONTRIBUTING.md).
 
 ## Before building something new
 
-Kaimahi builds on kagent, Kubernetes, and existing MCP servers. Survey those
-projects first and explain in the pull request why the requested behavior is
-not already available through configuration or integration.
+Kaimahi builds on kagent, Kubernetes, and existing MCP servers. Check those
+projects first. In the pull request, explain why configuration or integration
+cannot provide the requested behavior.
 
 ## Local verification
 
@@ -268,17 +266,17 @@ bash scripts/kube-guard-test.sh
 (cd plane && test -z "$(gofmt -l .)" && go vet ./... && go test ./...)
 ```
 
-Changes to cluster behavior should also use the repository's documented kind
-path and a dedicated `KIND_CLUSTER` name when another lane owns the shared
-cluster. See [`docs/COORDINATION.md`](docs/COORDINATION.md) for current process
-and [`docs/getting-started.md`](docs/getting-started.md) for prerequisites.
+For cluster changes, use the documented kind path and a dedicated `KIND_CLUSTER`
+name when another lane owns the shared cluster. See
+[`docs/COORDINATION.md`](docs/COORDINATION.md) for the process and
+[`docs/getting-started.md`](docs/getting-started.md) for prerequisites.
 
 ## Pull requests
 
-- Keep each pull request focused and explain the user problem.
+- Keep each pull request focused on a user problem.
 - List exact verification commands and results.
-- Distinguish continuously tested behavior from a one-time demonstration,
-  schema validation, proposal, or unbuilt direction.
+- Label behavior as continuously tested, demonstrated once, schema-valid,
+  proposed, or unbuilt.
 - Update the capability documentation and status language with the code.
 - Never include API keys, tokens, private endpoints, tenant/subscription IDs,
   registry names, cluster addresses, or unsanitized user data.
@@ -349,7 +347,7 @@ values in the PR or implementation notes. Do not create a second ruleset while
 Use this description:
 
 ```text
-Governance for AI agents running on Kubernetes: budgets, credential custody, governed tools, audit, and bounded approvals.
+Governance for AI agents running on Kubernetes. Budgets, credential custody, tool controls, audit, and bounded approvals.
 ```
 
 Set topics exactly to:
