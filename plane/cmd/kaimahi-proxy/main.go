@@ -126,7 +126,7 @@ func main() {
 	defer pool.Close()
 
 	st := store.New(pool)
-	mtr := &meter.Meter{Usage: st, Grants: st, Headroom: st}
+	mtr := &meter.Meter{Store: st}
 
 	// P8b: the approval notifier and the Slack command replier are one
 	// poster: a governed post through the plane's OWN gateway listener

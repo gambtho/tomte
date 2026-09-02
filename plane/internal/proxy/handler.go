@@ -51,10 +51,10 @@ func NewDataMux(d Deps) *http.ServeMux {
 // record appends a ledger row on a cancel-free context: a client
 // disconnect must not drop the record of a call the proxy already made
 // (ported audit rule). Bounded so a stalled pool cannot hang the response.
-func (h *handler) record(r *http.Request, e store.LedgerEntry) {
+func (h *handler) record(r *http.Request, e store.LedgerEntry, reservation string) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
 	defer cancel()
-	if err := h.d.Store.RecordLedger(ctx, e); err != nil {
+	if err := h.d.Store.RecordLedger(ctx, e, reservation); err != nil {
 		h.ledgerDegraded.Store(true)
 		slog.Error("proxy: ledger append failed; denying traffic until a write succeeds",
 			"credential", e.CredentialName, "upstream", e.Upstream, "status", e.Status, "err", err)
@@ -64,16 +64,19 @@ func (h *handler) record(r *http.Request, e store.LedgerEntry) {
 }
 
 // deny is the single exit for every pre-forward refusal: the denial is
-// ledgered (zero usage, cost_source=denied), then answered.
+// ledgered (zero usage, cost_source=denied), then answered. reservation
+// is the hold an already-admitted call took (P9) — a refusal after
+// admission (no upstream credential, an unbuildable request) releases
+// it through the same ledger write; empty before admission.
 func (h *handler) deny(w http.ResponseWriter, r *http.Request, cred store.Credential,
-	upstream, model string, status int, msg string) {
+	upstream, model string, status int, msg string, reservation string) {
 	h.record(r, store.LedgerEntry{
 		CredentialName: cred.Name,
 		Upstream:       upstream,
 		Model:          model,
 		CostSource:     "denied",
 		Status:         status,
-	})
+	}, reservation)
 	http.Error(w, msg, status)
 }
 
@@ -104,17 +107,17 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	up, ok := h.d.Config.Upstreams[name]
 	if !ok {
-		h.deny(w, r, cred, name, "", http.StatusForbidden, "unknown upstream")
+		h.deny(w, r, cred, name, "", http.StatusForbidden, "unknown upstream", "")
 		return
 	}
 	if r.PathValue("path") != up.Path {
-		h.deny(w, r, cred, name, "", http.StatusForbidden, "path not allowed")
+		h.deny(w, r, cred, name, "", http.StatusForbidden, "path not allowed", "")
 		return
 	}
 
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequestBody))
 	if err != nil {
-		h.deny(w, r, cred, name, "", http.StatusBadRequest, "request body unreadable or too large")
+		h.deny(w, r, cred, name, "", http.StatusBadRequest, "request body unreadable or too large", "")
 		return
 	}
 	var req struct {
@@ -122,7 +125,7 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request) {
 		Stream bool   `json:"stream"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
-		h.deny(w, r, cred, name, "", http.StatusBadRequest, "request body is not valid JSON")
+		h.deny(w, r, cred, name, "", http.StatusBadRequest, "request body is not valid JSON", "")
 		return
 	}
 
@@ -133,7 +136,7 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request) {
 	price, priced := up.Prices[req.Model]
 	if up.Classification == config.ClassMetered && cred.CapCents != nil && !priced {
 		h.deny(w, r, cred, name, req.Model, http.StatusForbidden,
-			"model has no configured price; a cents budget requires one (set a price or use a token budget)")
+			"model has no configured price; a cents budget requires one (set a price or use a token budget)", "")
 		return
 	}
 
@@ -141,12 +144,16 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request) {
 	// ledger sums, so spend that cannot be recorded must not happen. The
 	// denial's own record attempt is the recovery probe.
 	if h.ledgerDegraded.Load() {
-		h.deny(w, r, cred, name, req.Model, http.StatusServiceUnavailable, "spend ledger unavailable")
+		h.deny(w, r, cred, name, req.Model, http.StatusServiceUnavailable, "spend ledger unavailable", "")
 		return
 	}
 
-	// Budget check, fail closed.
-	if err := h.d.Meter.Check(r.Context(), cred); err != nil {
+	// Budget admission, fail closed and exact (P9): one locked store
+	// transaction decides and, under a cap, holds the least this call
+	// can spend until its ledger row lands. Everything past this point
+	// carries the reservation to the ledger write that consumes it.
+	res, err := h.d.Meter.Reserve(r.Context(), cred, up.Classification == config.ClassMetered && priced)
+	if err != nil {
 		status := http.StatusForbidden
 		msg := err.Error()
 		var d meter.Denial
@@ -167,7 +174,7 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request) {
 			}
 			cancel()
 		}
-		h.deny(w, r, cred, name, req.Model, status, msg)
+		h.deny(w, r, cred, name, req.Model, status, msg, "")
 		return
 	}
 
@@ -181,7 +188,7 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request) {
 		if err != nil || secret == "" {
 			slog.Error("proxy: upstream credential unavailable", "upstream", name, "err", err)
 			h.deny(w, r, cred, name, req.Model, http.StatusServiceUnavailable,
-				"upstream credential unavailable")
+				"upstream credential unavailable", res.ID)
 			return
 		}
 	}
@@ -191,7 +198,7 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request) {
 	outBody := body
 	if req.Stream {
 		if outBody, err = withIncludeUsage(body); err != nil {
-			h.deny(w, r, cred, name, req.Model, http.StatusBadRequest, "request body is not a JSON object")
+			h.deny(w, r, cred, name, req.Model, http.StatusBadRequest, "request body is not a JSON object", res.ID)
 			return
 		}
 	}
@@ -199,7 +206,7 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request) {
 	outReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost,
 		strings.TrimSuffix(up.BaseURL, "/")+"/"+up.Path, bytes.NewReader(outBody))
 	if err != nil {
-		h.deny(w, r, cred, name, req.Model, http.StatusBadGateway, "upstream request build failed")
+		h.deny(w, r, cred, name, req.Model, http.StatusBadGateway, "upstream request build failed", res.ID)
 		return
 	}
 	copyRequestHeaders(outReq.Header, r.Header)
@@ -222,7 +229,7 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request) {
 		// The attempt is ledgered even though it failed — spend is
 		// recorded before failures are honored (standing guidance); a
 		// transport failure has no usage to bill, so tokens are zero.
-		h.record(r, ledgerFor(cred, name, req.Model, up, priced, price, usage{}, http.StatusBadGateway))
+		h.record(r, ledgerFor(cred, name, req.Model, up, priced, price, usage{}, http.StatusBadGateway), res.ID)
 		http.Error(w, "upstream unreachable", http.StatusBadGateway)
 		return
 	}
@@ -241,7 +248,7 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("proxy: no usage in upstream response; ledgering zero tokens",
 			"upstream", name, "model", req.Model, "stream", req.Stream)
 	}
-	h.record(r, ledgerFor(cred, name, req.Model, up, priced, price, u, resp.StatusCode))
+	h.record(r, ledgerFor(cred, name, req.Model, up, priced, price, u, resp.StatusCode), res.ID)
 }
 
 type usage struct {
