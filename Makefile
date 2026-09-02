@@ -361,8 +361,8 @@ endif
 # and an absent NON-kind context is precisely what the guard refuses as a
 # typo. The first step (`cluster`) is what brings that context into
 # existence; every step after it is guarded, by which time there is a real
-# context to check. (`kind` is unaffected either way: its first step is
-# `cluster: guard`, so the guard still runs before anything is touched.)
+# context to check. (On kind the whole journey is one `kmx up`, which runs
+# the same guard once, in-process, before it touches anything.)
 ifeq ($(TARGET),kind)
 up: $(KMX)
 	@$(KMX_ENV) $(KMX) up
