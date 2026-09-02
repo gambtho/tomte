@@ -34,6 +34,8 @@ repository boundaries.
 ## Non-goals
 
 - Creating a governance model or `GOVERNANCE.md` at this stage.
+- Publishing a code of conduct before a private conduct-reporting channel is
+  available.
 - Splitting the CLI, governance plane, manifests, or documentation into
   separate repositories.
 - Creating a marketing or documentation website.
@@ -162,7 +164,6 @@ cannot be served well from the repository and docs.
 ├── CONTRIBUTING.md
 ├── SECURITY.md
 ├── SUPPORT.md
-├── CODE_OF_CONDUCT.md
 ├── ISSUE_TEMPLATE/
 │   ├── bug.yml
 │   ├── feature.yml
@@ -261,10 +262,11 @@ warning not to file exploitable details publicly.
 Route usage questions and reproducible bugs to the appropriate place. Do not
 promise production support for an incubation project.
 
-### `CODE_OF_CONDUCT.md`
+### Deferred code of conduct
 
-Use Contributor Covenant with project-specific contact information and a clear
-enforcement path.
+Do not add `CODE_OF_CONDUCT.md` until the project has a private, monitored
+conduct-reporting channel. GitHub private vulnerability reporting is reserved
+for security reports and must not be repurposed for conduct complaints.
 
 ### Issue forms
 
@@ -313,6 +315,7 @@ continuously tested.
 - The main README continues to distinguish built, demonstrated-once,
   schema-valid, proposed, and unbuilt capabilities.
 - No `GOVERNANCE.md` is added.
+- No `CODE_OF_CONDUCT.md` is added until a private reporting channel is chosen.
 
 ## Risks and mitigations
 
