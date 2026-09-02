@@ -762,7 +762,7 @@ scenario-billing: guard
 
 ## cli-test: unit tests for the generator (no cluster needed)
 cli-test:
-	cd cli && npm test
+	npm test
 
 status:
 	$(KUBECTL) -n kagent get agents,modelconfigs
