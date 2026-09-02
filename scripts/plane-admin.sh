@@ -75,7 +75,7 @@ test -s "$workdir/token" || { echo "kaimahi-admin secret missing/empty (run make
 $KUBECTL -n "$NAMESPACE" port-forward --address 127.0.0.1 \
   deploy/kaimahi-proxy "$ADMIN_PORT:9091" >/dev/null 2>&1 &
 pf_pid=$!
-for _ in $(seq 1 50); do
+for _ in $(seq 1 150); do
   curl -fsS -o /dev/null "http://127.0.0.1:$ADMIN_PORT/healthz" 2>/dev/null && break
   sleep 0.2
 done
