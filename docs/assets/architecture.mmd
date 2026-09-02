@@ -40,11 +40,13 @@ flowchart TB
 
     A["Kubernetes-hosted<br/>agent"]
 
-    subgraph K["Kaimahi&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;governance plane"]
+    subgraph K[" "]
       direction TB
+      H["Kaimahi<br/>governance plane"]
       P["Bounded approvals<br/>expiry and/or use count"]
       L["LLM proxy<br/>auth · budgets<br/>credential custody<br/>spend ledger"]
-      T["MCP gateway<br/>tool allowlists<br/>upstream bounds<br/>audit"]
+      T["MCP gateway<br/>request auth · allowlists<br/>upstream bounds · audit<br/>proxy-side credential custody"]
+      H ~~~ P
       P -. "temporary grant" .-> L
       P -. "temporary grant" .-> T
     end
@@ -58,7 +60,7 @@ flowchart TB
     A -->|"governed<br/>model call"| L
     A -->|"governed<br/>tool call"| T
     L --> M
-    T --> X
+    T -->|"injects upstream<br/>credential"| X
     A -. "plain preset<br/>ungoverned" .-> M
     A -. "direct MCP<br/>ungoverned" .-> X
 
@@ -66,13 +68,16 @@ flowchart TB
     classDef control fill:#F7F4E8,color:#071827,stroke:#60A5FA,stroke-width:3px,font-size:20px;
     classDef approval fill:#FFF1B3,color:#071827,stroke:#FFB547,stroke-width:3px,font-size:20px;
     classDef target fill:#F7F4E8,color:#071827,stroke:#60A5FA,stroke-width:3px,font-size:20px,font-weight:bold;
+    classDef heading fill:transparent,color:#F7F4E8,stroke:transparent,font-size:20px,font-weight:bold;
     class A agent;
     class L,T control;
     class P approval;
+    class H heading;
     class M,X target;
     style K fill:#0D2947,stroke:#24D6D9,stroke-width:3px,color:#F7F4E8
     style E fill:transparent,stroke:transparent
-    linkStyle 0,1 stroke:#FFB547,color:#FFF1B3,stroke-width:3px,stroke-dasharray:7 5;
-    linkStyle 2,3 stroke:#24D6D9,color:#F7F4E8,stroke-width:4px;
-    linkStyle 4,5 stroke:#60A5FA,color:#F7F4E8,stroke-width:4px;
-    linkStyle 6,7 stroke:#FFB547,color:#FFF1B3,stroke-width:3px,stroke-dasharray:9 6;
+    linkStyle 0 stroke:transparent,fill:none;
+    linkStyle 1,2 stroke:#FFB547,color:#FFF1B3,stroke-width:3px,stroke-dasharray:7 5;
+    linkStyle 3,4 stroke:#24D6D9,color:#F7F4E8,stroke-width:4px;
+    linkStyle 5,6 stroke:#60A5FA,color:#F7F4E8,stroke-width:4px;
+    linkStyle 7,8 stroke:#FFB547,color:#FFF1B3,stroke-width:3px,stroke-dasharray:9 6;

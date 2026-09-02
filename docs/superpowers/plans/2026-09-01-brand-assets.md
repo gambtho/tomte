@@ -418,7 +418,7 @@ Run:
 npx -y @mermaid-js/mermaid-cli@11.12.0 \
   -i docs/assets/architecture.mmd \
   -o docs/assets/architecture.svg \
-  -b transparent
+  -b '#071827'
 ```
 
 Add `<title>Kaimahi governance architecture</title>` and a concise `<desc>` as
