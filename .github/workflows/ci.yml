@@ -323,6 +323,35 @@ jobs:
               sys.exit(1)
           print(f"{len(steps)} e2e steps: all guarded")
           EOF
+      # P11: kmx's own module. It lives in the REQUIRED hygiene job rather
+      # than a job of its own, because the guard port, the scaffolder's
+      # refusals and the checksum verification are the parts of kmx that
+      # decide whether someone's cluster gets written to or a credential
+      # gets committed — they gate merges or they are decoration. Keyless
+      # and clusterless: every one of these tests runs on fixtures.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: kmx — gofmt clean
+        run: test -z "$(gofmt -l cmd internal embed.go)"
+      - name: kmx — vet
+        run: go vet ./...
+      - name: kmx — build
+        run: go build ./...
+      - name: kmx — test (guard port, scaffolder, kagent checksum, make delegation)
+        run: |
+          go test ./... 2>&1 | tee kmx-test.out
+          # The guard port and the scaffolder's refusals are the reason this
+          # job is required; a silently skipped package would be a green
+          # no-op. Assert they ran.
+          grep -q 'ok  .*internal/kmx/guard' kmx-test.out
+          grep -q 'ok  .*internal/kmx/scaffold' kmx-test.out
+          grep -q 'ok  .*internal/kmx/kagentcli' kmx-test.out
+          grep -q 'ok  .*internal/kmx/delegation' kmx-test.out
+      - name: Makefile does not re-implement what kmx owns
+        run: |
+          python3 scripts/check-kmx-delegation.py --selftest
+          python3 scripts/check-kmx-delegation.py
 
   # P4a: the governance plane's Go module — build, vet, gofmt, tests.
   # A separate quick job so proxy logic failures surface in seconds, not
@@ -456,6 +485,17 @@ jobs:
         run: |
           curl -sSfLo kind https://kind.sigs.k8s.io/dl/v0.33.0/kind-linux-amd64
           chmod +x kind && sudo mv kind /usr/local/bin/kind
+      # P11: `make up` and every other target below now runs THROUGH kmx, so
+      # this job is what proves the binary a developer installs. Building it
+      # as its own step keeps a compile error legible instead of surfacing
+      # halfway through a cluster bring-up.
+      - uses: actions/setup-go@v5
+        if: steps.changes.outputs.docs_only != 'true'
+        with:
+          go-version-file: go.mod
+      - name: Build kmx (the Makefile's kind path delegates to it)
+        if: steps.changes.outputs.docs_only != 'true'
+        run: make bin/kmx
       - name: Cluster + Ollama + model + kagent + agent
         if: steps.changes.outputs.docs_only != 'true'
         run: make up
