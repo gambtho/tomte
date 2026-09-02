@@ -1509,8 +1509,11 @@ Build:
   immutability, notification once-per-filing) is DB-exact — prove each
   by a concurrent test, not by argument.
 - Deployment shape: `replicas: 2`, RollingUpdate with maxUnavailable 0,
-  a liveness probe distinct from readiness (a wedged DB pool must fail
-  liveness, a slow upstream must not), a PodDisruptionBudget of 1,
+  a liveness probe distinct from readiness: liveness reports only a
+  LOCAL unrecoverable fault (a deadlocked pool, a wedged listener) so a
+  Postgres outage or a slow upstream never restarts the proxy — those
+  drop readiness only, and a kind test restarts Postgres and asserts
+  the proxy's restart count does not move; a PodDisruptionBudget of 1,
   requests that still fit the CI runner next to everything else (the
   node is at its request ceiling — read the ci.yml comments). Postgres
   untouched except `make backup` / `make restore` (pg_dump to a local
@@ -1521,10 +1524,14 @@ Build:
   agent reaches, under the namespace default-deny with exactly the
   allowance a scraper needs (document it; nothing scrapes in CI).
   Expose: decisions by seam and reason (allowed/denied/granted for
-  proxy, gateway, inbound), ledger totals by credential, live grants,
-  queue depths, upstream latency histograms, build info. No credential,
-  token, channel or user id may ever be a label value — a test asserts
-  the label set. CI's policy-shape check must learn the new port.
+  proxy, gateway, inbound), ledger totals by credential NAME (a
+  credential's name — `hello-world`, `kaimahi-plane` — is public in the
+  repo and already printed by every audit command; its token is not),
+  live grants, queue depths, upstream latency histograms, build info.
+  Label values are drawn only from the fixed vocabularies (seam, reason,
+  upstream, credential name); a token, a channel id, a user id, a
+  request id or any free text is never a label value — a test in
+  go-plane asserts the label set and the allowed value shapes. CI's policy-shape check must learn the new port.
 - Docs: the "single replica" and "in-memory" sentences in
   docs/inbound.md, spend.md, FAQ.md and getting-started.md become what
   runs; docs/README.md's governed table gains the replica row; a short
@@ -1636,7 +1643,12 @@ so every attempt leaves an audit row — the record of whether the human
 was told; (6) prefix minimum 8 chars — a human types the first block;
 (7) `make slack-mention` unguarded like `inbound-fire` (the probe
 guards its own context); (8) loopback HTTP with the plane's bearer —
-accepted, in-process call carried forward; (9) the bot's display name is
+accepted on the stated scope: the hop is trusted only inside the pod's
+own network namespace (one non-root container, no sidecar, no
+hostNetwork, the listener bound to loopback for that call), and it is
+still authenticated and audited like any client; if that boundary ever
+changes (a sidecar, a mesh), the hop becomes an in-process call first —
+carried forward; (9) the bot's display name is
 not known to the plane — the text says "mention the bot"; (10) the MCP
 server's `isError` semantics assumed from live behaviour — carried
 forward. Found-and-fixed during the run (port-forward readiness 30 s on
