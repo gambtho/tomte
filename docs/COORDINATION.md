@@ -1601,10 +1601,19 @@ Build:
   first of all), and connects to the address it checked — a hostname
   whose record changes after the check must not get through (DNS
   rebinding). https only, port 443 only, no redirects (already), bounded
-  connect and response-header timeouts, a response-size cap. In-cluster
-  upstreams keep the plain in-cluster dial: the hardened dialer applies
-  to upstreams marked `internet: true` in the table, and an upstream
-  whose URL is not https or whose host resolves private is refused at
+  connect and response-header timeouts, a response-size cap AND a
+  bounded body lifetime — a stalled upstream body is cut at a deadline
+  and the call fails closed (audited) rather than holding a worker. An
+  optional per-upstream `ca_file` (mounted) lets the CI stand-in
+  present a test certificate; absent, the system roots apply.
+  In-cluster upstreams keep the plain in-cluster dial: the hardened
+  dialer applies to upstreams marked `internet: true` in the table —
+  LLM upstreams included: `upstreams.copilot` gains `internet: true`,
+  and main.go builds the ONE hardened client and injects it into both
+  the proxy's and the gateway's deps, so nothing about Copilot's
+  hardening is implicit (CI asserts the copilot entry carries the
+  marker and that both handlers share the client). An upstream whose
+  URL is not https or whose host resolves private is refused at
   CONFIG LOAD, loudly, not at first use.
 - The GitHub upstream: `tool_upstreams.github` = GitHub's hosted MCP
   endpoint, `internet: true`, `credential_file` naming (never carrying)
@@ -1619,8 +1628,11 @@ Build:
 - Egress (D25): ONE opt-in NetworkPolicy for the gateway, the exact
   shape of the Copilot allowance (TCP 443 to 0.0.0.0/0 minus the
   private ranges), applied by the make target that configures a hosted
-  upstream and removed by its inverse; never applied on kind by default
-  and never in CI's cluster steps except the negative test. The doc
+  upstream and removed by its inverse; never applied on kind by
+  default. In CI the positive synthetic-upstream step applies it (kind
+  enforces policy, so the gateway cannot reach the stand-in without
+  it), the step after removes it, and the negative step then proves
+  the dial fails closed without it. The doc
   says the honest sentence: "443 to any public host; the upstream table
   pins the host, the dialer refuses private addresses" — not "only
   api.github.com".
@@ -1638,12 +1650,18 @@ CI stays keyless (D14): unit tests for the dialer — private/loopback/
 link-local/metadata/carrier-NAT/multicast/IPv6-mapped refusals, the
 rebinding case (a resolver that answers public then private), https
 and port enforcement, the size cap; config-load refusals; on kind: a
-SYNTHETIC external upstream (a tiny MCP echo server on the runner host,
-reached through a public-looking hostname that resolves to it — say
-how) is dialed through the gateway under a credential, audited
-`allowed 200`, while the same server reached via a private address or
-a redirecting stand-in is refused and audited; the negative policy
-test: with the allowance absent the dial fails closed; the agent-side
+SYNTHETIC external upstream: a tiny MCP echo server on the runner host
+serving https with a test certificate, exposed at a PUBLIC-LOOKING
+address the dialer accepts — a DNAT rule inside the kind node (e.g.
+203.0.113.10:443 → the runner's echo port) plus a hostname the cluster
+resolves to that address (a CoreDNS hosts entry); the dialer's refusal
+list is NOT relaxed for it (a documentation range is neither private
+nor routable, which is the point), and the gateway trusts the test CA
+only through that upstream's `ca_file`. Dialed through the gateway
+under a credential with the allowance applied → audited `allowed 200`;
+the same server named by its private runner address, and a
+redirecting stand-in, are refused and audited; then the allowance is
+removed and the negative step proves the dial fails closed; the agent-side
 Secret holds only kmh_; CI's policy-shape check accepts the new file as
 the second 443-only allowance and nothing wider. No GitHub token exists
 in CI.
