@@ -259,7 +259,9 @@ func TestGeneratedManifestParsesAndKeepsInstructionsInsideTheScalar(t *testing.T
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 is not installed; the structural checks still run in the other tests")
 	}
-	if err := exec.Command("python3", "-c", "import yaml").Run(); err != nil {
+	probe, cancelProbe := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancelProbe()
+	if err := exec.CommandContext(probe, "python3", "-c", "import yaml").Run(); err != nil {
 		t.Skip("python3 has no PyYAML; install it to run the parser check (CI asserts this test runs)")
 	}
 	for _, tc := range []struct{ name, instructions string }{

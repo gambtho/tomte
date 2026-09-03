@@ -85,12 +85,17 @@ func (a *App) Up(step string) error {
 
 // ---- cluster --------------------------------------------------------------
 
-// stepCluster creates the kind cluster if it is not already there.
+// stepCluster brings up the kind cluster: create it, or on Podman recover it.
 //
 // `kind get clusters` failing is NOT "no clusters": a broken or absent kind,
 // or a docker socket the user cannot reach, would otherwise read as "the
 // cluster is missing" and send us straight into a create that fails later
 // and less clearly.
+//
+// The Podman half is #53's, carried across when this recipe became a
+// delegation so the fix is not lost: on that engine "listed" does not mean
+// "running", and a cluster whose nodes were stopped has to be started rather
+// than re-created.
 func (a *App) stepCluster() error {
 	if err := run.MustExist("kind", "to create the local Kubernetes cluster",
 		"https://kind.sigs.k8s.io/docs/user/quick-start/#installation"); err != nil {
@@ -133,13 +138,11 @@ func (a *App) stepCluster() error {
 		if err != nil {
 			return fmt.Errorf("cannot list podman's nodes for kind cluster %q: %w", a.Cfg.KindCluster, err)
 		}
-		if strings.TrimSpace(nodes) == "" {
-			// Fail closed rather than proceed into a cluster that cannot be
-			// reached: kind's record and podman's reality disagree.
-			return fmt.Errorf("kind lists cluster %q, but podman has no nodes for it", a.Cfg.KindCluster)
+		names, err := podmanNodes(nodes, a.Cfg.KindCluster)
+		if err != nil {
+			return err
 		}
-		args := append([]string{"start"}, strings.Fields(nodes)...)
-		if err := a.Run.Run("podman", args...); err != nil {
+		if err := a.Run.Run("podman", append([]string{"start"}, names...)...); err != nil {
 			return err
 		}
 	} else if err := a.Run.Run("kind", "create", "cluster", "--name", a.Cfg.KindCluster); err != nil {
@@ -156,6 +159,22 @@ func (a *App) stepCluster() error {
 		return fmt.Errorf("kind cluster %q API did not become ready after 120s", a.Cfg.KindCluster)
 	}
 	return a.kubectlRun("-n", "kube-system", "rollout", "status", "deployment/coredns", "--timeout=180s")
+}
+
+// podmanNodes turns `podman ps -a --format {{.Names}}` output into the node
+// list to start, and refuses an empty one.
+//
+// Empty is the case worth naming: kind still lists the cluster, so something
+// exists as far as kind is concerned, but Podman has no containers for it —
+// kind's record and Podman's reality disagree. Starting nothing and carrying
+// on would walk into a cluster nothing can reach, so it fails closed here
+// instead.
+func podmanNodes(listing, cluster string) ([]string, error) {
+	names := strings.Fields(listing)
+	if len(names) == 0 {
+		return nil, fmt.Errorf("kind lists cluster %q, but podman has no nodes for it", cluster)
+	}
+	return names, nil
 }
 
 // ---- ollama ---------------------------------------------------------------
