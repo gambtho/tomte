@@ -72,12 +72,13 @@ func (a *App) Up(step string) error {
 		if err := a.Status(); err != nil {
 			return err
 		}
-		// One line, per D27: `kmx up` is the runtime, and the governance
-		// plane is not part of milestone 1. Saying nothing here would leave
-		// an operator to infer it from an empty ledger.
-		a.notef("\nRuntime only: the Kaimahi governance plane is NOT deployed (kmx milestone 1).\n" +
-			"Budgets, the spend ledger, the tool gateway and approvals come from the\n" +
-			"Makefile for now: `make plane` then `make govern` (docs/spend.md).")
+		// One line: `kmx up` is the RUNTIME. Governance is a deliberate
+		// second step, and saying nothing here would leave an operator to
+		// infer it from an empty ledger.
+		a.notef("\nRuntime only: the Kaimahi governance plane is NOT deployed yet.\n" +
+			"Nothing is metered, budgeted or ledgered until it is:\n" +
+			"  kmx plane       # the proxy and its ledger\n" +
+			"  kmx govern " + config.DefaultCredential + "  # put " + config.DefaultAgent + " behind it (docs/spend.md)")
 		a.notef("\nTalk to the agent:  kmx agent chat %s \"%s\"", config.DefaultAgent, config.DefaultTask)
 	}
 	return nil

@@ -19,14 +19,24 @@ import (
 // Pinned versions and defaults. These are the Makefile's, and
 // TestDefaultsMatchTheMakefile refuses to let them drift.
 const (
-	DefaultKindCluster     = "kaimahi-p1"
-	DefaultKagentVersion   = "0.9.12"
-	DefaultModel           = "qwen2.5:3b"
-	DefaultChatPort        = "8083"
-	DefaultAgent           = "hello-world"
-	DefaultTask            = "Hello! Who are you and where are you running?"
-	DefaultNamespace       = "kagent"
-	KeylessModelConfig     = "hello-world-model"
+	DefaultKindCluster   = "kaimahi-p1"
+	DefaultKagentVersion = "0.9.12"
+	DefaultModel         = "qwen2.5:3b"
+	DefaultChatPort      = "8083"
+	// DefaultAdminPort is the local side of the plane's admin port-forward —
+	// scripts/plane-admin.sh's ADMIN_PORT, so a stale forward left by either
+	// implementation is noticed by the other rather than talked through.
+	DefaultAdminPort   = "19091"
+	DefaultAgent       = "hello-world"
+	DefaultTask        = "Hello! Who are you and where are you running?"
+	DefaultNamespace   = "kagent"
+	KeylessModelConfig = "hello-world-model"
+	// DefaultCredential is the Makefile's CRED: the credential `govern`
+	// issues and the ledger is read for by default.
+	DefaultCredential = "hello-world"
+	// GovernedSecret is the agent-side Secret the issued token is stored in
+	// (the Makefile's GOVERNED_SECRET default), in the kagent namespace.
+	GovernedSecret         = "kaimahi-governed-token"
 	GovernedModelConfig    = "governed-ollama"
 	GuardNamespaces        = "kagent, kaimahi, ollama"
 	DefaultContainerEngine = "docker"
@@ -40,6 +50,8 @@ type Config struct {
 	KagentVersion   string
 	Model           string
 	ChatPort        string
+	AdminPort       string
+	Credential      string
 	Confirm         string
 	// KagentBin, when set, is an existing kagent binary to use instead of
 	// the cached download. The Makefile points it at bin/kagent so a
@@ -75,6 +87,8 @@ func Load(contextFlag string) (*Config, error) {
 		KagentVersion:   env("KAGENT_VERSION", DefaultKagentVersion),
 		Model:           env("MODEL", DefaultModel),
 		ChatPort:        env("CHAT_PORT", DefaultChatPort),
+		AdminPort:       env("ADMIN_PORT", DefaultAdminPort),
+		Credential:      env("CRED", DefaultCredential),
 		Confirm:         os.Getenv("KAIMAHI_CONFIRM"),
 		KagentBin:       strings.TrimSpace(os.Getenv("KAGENT")),
 	}
@@ -143,6 +157,22 @@ func CacheDir() (string, error) {
 	}
 	return filepath.Join(dir, "bin"), nil
 }
+
+// PlaneCacheDir is where the proxy binary built for the plane's image is put
+// on the clone-free path. It is kmx's own directory rather than the
+// operator's GOBIN, so building the plane never lands a binary on top of
+// something they installed themselves.
+func PlaneCacheDir() (string, error) {
+	dir, err := stateDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "plane-bin"), nil
+}
+
+// PlaneCacheDir is the method form, so callers already holding a Config do
+// not have to reach for the package.
+func (c *Config) PlaneCacheDir() (string, error) { return PlaneCacheDir() }
 
 // ReadSelectedContext returns the context chosen by `kmx ctx`, or "".
 func ReadSelectedContext() (string, error) {

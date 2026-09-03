@@ -66,7 +66,9 @@ KMX          ?= bin/kmx
 KMX_SOURCES  := go.mod embed.go $(shell find cmd/kmx internal/kmx -name '*.go' 2>/dev/null)
 # The manifests are embedded in the binary (kmx runs outside a clone), so a
 # manifest edit has to relink it.
-KMX_ASSETS   := k8s/ollama.yaml k8s/kagent-values.yaml k8s/hello-world.yaml k8s/tools-agent.yaml
+KMX_ASSETS   := k8s/ollama.yaml k8s/kagent-values.yaml k8s/hello-world.yaml k8s/tools-agent.yaml \
+		$(wildcard k8s/plane/*.yaml) \
+		k8s/models/governed-ollama.yaml k8s/models/governed-copilot.yaml
 # kmx reads the Makefile's own variable names, so delegation passes them
 # through rather than translating. KAIMAHI_CONFIRM rides along so a
 # confirmation given to make is not asked for again by kmx.
@@ -667,6 +669,17 @@ use-ollama: guard
 
 ## ---- P4a: the governance plane (docs/spend.md) ----
 
+ifeq ($(TARGET),kind)
+## plane: build + deploy the Kaimahi proxy and its Postgres ledger
+# kmx owns the kind path (D28): it builds the proxy image at its own
+# revision — from this checkout, because `--source .` is passed — bootstraps
+# the plane's secrets, applies k8s/plane/ UNRENDERED, and always restarts the
+# proxy, since a rebuilt image under the same tag leaves the spec unchanged.
+# Passing the checkout is what keeps CI proving the code a PR changes rather
+# than whatever the public Go proxy last published.
+plane: $(KMX)
+	@$(KMX_ENV) $(KMX) plane --source .
+else
 ## plane: build + deploy the Kaimahi proxy and its Postgres ledger
 plane: guard plane-image plane-secrets
 	@KUBECTL="$(KUBECTL)" PLANE_TARGET=$(PLANE_TARGET) \
@@ -680,6 +693,8 @@ plane: guard plane-image plane-secrets
 	$(KUBECTL) -n kaimahi rollout restart deploy/kaimahi-proxy
 	$(KUBECTL) -n kaimahi rollout status deploy/kaimahi-proxy --timeout=300s
 
+endif
+
 ifeq ($(TARGET),kind)
 # `kind load docker-image` does not work against podman here: kind reports
 # "image not present locally" for images podman demonstrably has (verified
@@ -688,16 +703,10 @@ ifeq ($(TARGET),kind)
 # for non-docker providers, so podman saves and kind loads the archive.
 # Docker keeps the direct load: it works, and it skips writing a ~19MB
 # tarball on every build.
-plane-image:
-	$(CONTAINER_ENGINE) build --build-arg VERSION=$(PLANE_VERSION) -t $(PLANE_IMAGE) plane/
-ifeq ($(CONTAINER_ENGINE),podman)
-	@tar=$$(mktemp -t kaimahi-plane-XXXXXX); \
-	trap 'rm -f "$$tar"' EXIT; \
-	podman save -o "$$tar" $(PLANE_IMAGE) && \
-	$(KIND_CMD) load image-archive "$$tar" --name $(KIND_CLUSTER)
-else
-	$(KIND_CMD) load docker-image $(PLANE_IMAGE) --name $(KIND_CLUSTER)
-endif
+# kmx builds the image and side-loads it, engine-aware (the podman archive
+# path above moved into internal/kmx/app/plane.go with its reason).
+plane-image: $(KMX)
+	@$(KMX_ENV) $(KMX) plane --step image --source .
 else
 ## plane-image (TARGET=aks): build IN Azure with ACR Tasks. No local docker
 ## build and no `docker push`: the source is uploaded and built by the
@@ -710,8 +719,13 @@ plane-image:
 		--image $(PLANE_IMAGE_REPO):$(PLANE_IMAGE_TAG) plane/
 endif
 
+ifeq ($(TARGET),kind)
+plane-secrets: $(KMX)
+	@$(KMX_ENV) $(KMX) plane --step secrets
+else
 plane-secrets: guard
 	@KUBECTL="$(KUBECTL)" bash scripts/plane-secrets.sh
+endif
 
 ## govern: issue the Kaimahi credential (opaque token -> agent-side
 ## Secret), apply the governed presets, switch hello-world through the
@@ -724,6 +738,10 @@ plane-secrets: guard
 # managed cluster governance is stood up BEFORE the agents, because the
 # agents have no keyless model to start on. On kind the agent always
 # exists by this point, so the path taken is the one it always was.
+ifeq ($(TARGET),kind)
+govern: $(KMX)
+	@$(KMX_ENV) $(KMX) govern $(CRED) --agent hello-world --preset $(GOVERNED_PRESET)
+else
 govern: guard
 	@KUBECTL="$(KUBECTL)" bash scripts/plane-admin.sh issue $(CRED)
 	$(KUBECTL) apply -f k8s/models/governed-ollama.yaml
@@ -741,6 +759,7 @@ govern: guard
 	else \
 		echo "cannot tell whether hello-world exists (refusing to leave it ungoverned): $$out" >&2; exit 1; \
 	fi
+endif
 
 ## budget: set monthly caps for a credential, e.g.
 ##   make budget CAP_CENTS=100 CAP_TOKENS=-     (- or empty = no cap)
@@ -749,8 +768,13 @@ budget: guard
 		"$(if $(CAP_CENTS),$(CAP_CENTS),-)" "$(if $(CAP_TOKENS),$(CAP_TOKENS),-)"
 
 ## ledger: show the spend ledger (newest first) + month-to-date totals
+ifeq ($(TARGET),kind)
+ledger: $(KMX)
+	@$(KMX_ENV) $(KMX) ledger $(CRED)
+else
 ledger:
 	@KUBECTL="$(KUBECTL)" bash scripts/plane-admin.sh ledger $(CRED)
+endif
 
 ## ---- P9: running it for real (docs/operations.md) ----
 
@@ -817,8 +841,13 @@ tool-allowlist:
 	@KUBECTL="$(KUBECTL)" bash scripts/plane-admin.sh tool-allowlist $(CRED_TOOLS)
 
 ## tool-audit: show the tool-call audit trail (newest first)
+ifeq ($(TARGET),kind)
+tool-audit: $(KMX)
+	@$(KMX_ENV) $(KMX) audit tool $(CRED_TOOLS)
+else
 tool-audit:
 	@KUBECTL="$(KUBECTL)" bash scripts/plane-admin.sh tool-audit $(CRED_TOOLS)
+endif
 
 ## ---- P4c: approvals and time-boxed permits (docs/approvals.md) ----
 
@@ -854,12 +883,22 @@ request: guard
 REQ_CRED = $(if $(filter command line,$(origin CRED)),$(CRED),$(if $(filter tool,$(KIND)),$(CRED_TOOLS),$(CRED)))
 
 ## grants: list grants with liveness (an expired grant is not a grant)
+ifeq ($(TARGET),kind)
+grants: $(KMX)
+	@$(KMX_ENV) $(KMX) grants
+else
 grants:
 	@KUBECTL="$(KUBECTL)" bash scripts/plane-admin.sh grants
+endif
 
 ## approval-audit: the approvals' own audit trail (filed/approved/denied)
+ifeq ($(TARGET),kind)
+approval-audit: $(KMX)
+	@$(KMX_ENV) $(KMX) audit approval
+else
 approval-audit:
 	@KUBECTL="$(KUBECTL)" bash scripts/plane-admin.sh approval-audit
+endif
 
 ## plane-copilot-secret: mint the Copilot token into the PROXY's
 ## namespace (real-key custody: the agent-side governed preset never
