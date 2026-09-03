@@ -58,7 +58,12 @@ and current limitations.
 
 ## Quickstart
 
-The working path today — one binary, no clone:
+**[`kmx`](docs/kmx.md) is the entry point** — one Go binary that drives
+`kind`, `helm`, `kubectl` and the kagent CLI so a first agent takes minutes
+instead of a prerequisite list. It carries the whole journey — `up`, `agent create`,
+`agent chat`, `plane`, `govern`, `ledger`, `status`, `down` — and needs no
+clone, because it fetches the plane at its own revision from the public Go
+proxy.
 
 ```bash
 go install github.com/kaimahi-agents/kaimahi/cmd/kmx@main
@@ -71,13 +76,13 @@ kmx agent chat hello-world "Who are you?"
 kmx ledger            # what that answer cost, and to whom it was attributed
 ```
 
-The default path needs no API key. It uses an in-cluster Ollama model for a real
-agent conversation, and the governed half is keyless too. Continue with the
-[getting-started guide](docs/getting-started.md) or choose a capability from the
-[documentation index](docs/README.md). [`kmx`](docs/kmx.md) is the whole journey:
-`up`, `agent create`, `agent chat`, `plane`, `govern`, `ledger`, `status`,
-`down` — and it needs no clone, because it fetches the plane at its own
-revision from the public Go proxy.
+That is a real agent conversation with **no API key**: `kmx up` brings up a
+kind cluster running an in-cluster Ollama model, and the governed half is
+keyless too. Create your own agent with `kmx agent create <name>`, which
+writes reviewable YAML and applies it.
+
+Continue with the [getting-started guide](docs/getting-started.md), or choose
+a capability from the [documentation index](docs/README.md).
 
 From a clone, `make` runs the same binary:
 
