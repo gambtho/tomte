@@ -36,9 +36,9 @@ config:
 ---
 flowchart TB
     accTitle: Kaimahi governance architecture
-    accDescr: The kmx developer entry point provisions the cluster and scaffolds agents, sitting outside every request path. A Kubernetes-hosted agent then reaches models and tools through Kaimahi's governed paths, and external events reach the agent through Kaimahi's governed inbound bridge, while dashed direct paths are explicitly ungoverned.
+    accDescr: The kmx developer entry point provisions the cluster, scaffolds agents and deploys the governance plane, sitting outside every request path. A Kubernetes-hosted agent then reaches models and tools through Kaimahi's governed paths, and external events reach the agent through Kaimahi's governed inbound bridge, while dashed direct paths are explicitly ungoverned.
 
-    D["kmx · developer entry point<br/>provision · scaffold · converse<br/>not in any request path"]
+    D["kmx · developer entry point<br/>provision · scaffold · govern · read<br/>not in any request path"]
     W["External event<br/>webhook"]
     A["Kubernetes-hosted<br/>agent"]
 
@@ -62,6 +62,7 @@ flowchart TB
     end
 
     D -. "creates the cluster,<br/>applies the agent" .-> A
+    D -. "deploys the plane,<br/>issues credentials" .-> H
     W -->|"governed<br/>trigger"| N
     N -->|"invoke"| A
     A -->|"governed<br/>model call"| L
@@ -88,7 +89,7 @@ flowchart TB
     style E fill:transparent,stroke:transparent
     linkStyle 0 stroke:transparent,fill:none;
     linkStyle 1,2,3 stroke:#FFB547,color:#FFF1B3,stroke-width:3px,stroke-dasharray:7 5;
-    linkStyle 4 stroke:#F7F4E8,color:#F7F4E8,stroke-width:3px,stroke-dasharray:6 4;
-    linkStyle 5,6,7,8 stroke:#24D6D9,color:#F7F4E8,stroke-width:4px;
-    linkStyle 9,10 stroke:#60A5FA,color:#F7F4E8,stroke-width:4px;
-    linkStyle 11,12 stroke:#FFB547,color:#FFF1B3,stroke-width:3px,stroke-dasharray:9 6;
+    linkStyle 4,5 stroke:#F7F4E8,color:#F7F4E8,stroke-width:3px,stroke-dasharray:6 4;
+    linkStyle 6,7,8,9 stroke:#24D6D9,color:#F7F4E8,stroke-width:4px;
+    linkStyle 10,11 stroke:#60A5FA,color:#F7F4E8,stroke-width:4px;
+    linkStyle 12,13 stroke:#FFB547,color:#FFF1B3,stroke-width:3px,stroke-dasharray:9 6;
