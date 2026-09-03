@@ -126,6 +126,7 @@ prefix.
 | W28: ship it — version, release, a published install path, a documented upgrade (D34, D35) | W28 worker | PR #85 MERGED (8e08603) — ran from the prompt handed over directly, because THIS ROW and D34/D35 were stranded on a squash-merged branch (see the recovery note in the open items) | coordinator verification owed |
 | W29: govern your own agent — the generic onboarding path (D35) | unassigned | SHAPED 2026-09-03 — prompt below; runs ALONE | the product-defining gap: nothing documents adding your own MCP server or governing an agent you already run |
 | W30: identity on the call, and credentials that expire (D35) | W30 worker | PR #86 MERGED (5f49235) — same: built from the handed-over prompt while its board record was stranded | coordinator verification owed |
+| W33: the lift — local agent to AKS in one path, with managed observability (D41) | unassigned | SHAPED 2026-09-03 — prompt below | mostly wiring, not building; must not put /metrics on a Service; teardown + spend mandatory |
 | Brand assets + architecture diagram + org/front-door plans | user-run lane (outside the board's prompt set) | PR #33 MERGED (+ kaimahi-agents/.github#1); main CI green | brand validator in the hygiene job |
 | README front door + CONTRIBUTING.md | user-run lane (outside the board's prompt set) | PR #34 MERGED; main CI green | anchored front-door checker in hygiene: section order enforced, no `npx kaimahi create` mention before the quickstart ends — PR #16's README hunk must land under "A scaffolder CLI: considered, not built" (was "Proposed CLI direction" until D23) |
 | CLI decisions + PR #16 review | user + coordinator | D19 ruled; coordinator review rounds done (2026-09-01/02) | not a build lane; parallelises with everything |
@@ -184,6 +185,7 @@ prefix.
 | D38 | 2026-09-03 | **First real use: the user's own aks-desktop release process, as a dogfood (W32).** The user cuts releases regularly — create a release branch, collate notes from merged PRs, run several Azure DevOps builds, publish the binaries to a GitHub release — and this becomes the first thing Kaimahi is used FOR rather than demonstrated with. Ruled as a dogfood, not as release automation: a script or a GitHub Action could do much of it, and the point is the feedback loop and the sentence "we use it ourselves", which no fixture demo buys. Findings from the coordinator's survey, which shape the lane: **(a) Azure DevOps is configuration, not build work** — Microsoft ships an official MCP server (microsoft/azure-devops-mcp) with a REMOTE hosted endpoint over streamable HTTP, covering builds and releases, which is exactly the P10 hosted-upstream shape we already run GitHub's through; **(b) the binaries cannot pass through us** — the gateway caps request bodies at 4MB (gateway.go), and an MCP gateway moving build artifacts is the wrong tool anyway, so the agent TELLS systems to move bytes and never carries them; **(c) this is our first real WRITE under a grant** — the P10 delta sheet records that the GitHub write tool was never exercised, so creating a branch and publishing a release are a genuine step up in blast radius, on a real repo with a real token; **(d) long-running builds do not fit `kagent invoke`'s request/response shape**, making polling versus the P7b inbound bridge the lane's biggest architectural unknown. Rulings: (1) **the agent is narrow** — it drafts the notes and PROPOSES; a human approves; CI moves the bytes. The agent earns its place on judgement (collating notes, handling a failed build or a PR with no useful description) and nowhere else; (2) **every consequential call is approved and call-bound (P12)** — approving "publish release v1.2.3" must not authorize the next release, which is exactly what the digest binding buys and the first time it will matter to a real person; (3) **tokens are fine-grained and single-repo, in plane custody**, following scripts/github-secret.sh's read-only precedent but with write scope, and revocable the same way; (4) **it runs BEFORE W31, not after** — the friction the user hits IS the deliverable, and W31 should be shaped by a real workflow rather than by benchmarks | "i had an idea for a first personal use case we could try to really make work — i regularly need to create new releases for the aks-desktop project…"; ruled via option: "Dogfood Kaimahi on a real task (Recommended)" |
 | D39 | 2026-09-03 | **D36/D37 reconciled against the planning meeting itself.** Until now the DX pivot reached the board by relay; the coordinator has since read the meeting transcript (auto-captioned and lossy, so this records themes, not quotations). **Deliberately recorded without attributing positions to named individuals: this board is public, and who argued what in an internal meeting is not ours to publish.** The transcript stays out of the repository (`tmp/` is ignored). What it CONFIRMS: developer tooling as the bet; start local and lift to AKS when the agent proves worth it; and a tool that gets out of the way once it has helped. What it NARROWS: "do not worry as much about governance up front" is about SEQUENCING, not dropping it — end-to-end auditability was named in the meeting as something an agent needs, so D36(2) means governance arrives after the first success rather than being optional. What it ADDS, and neither D36 nor the board captured: (a) the differentiator discussed was an **opinionated Azure-native experience** — Helm packaging, Azure managed observability, a gateway, best practice baked in — a real and unbuilt direction rather than a restatement of what we have; (b) the driver is that there is **no answer today to "how do our customers build agents"**, which is the gap this project exists to fill and a better framing than any feature list. What it TEMPERS: the plain "a developer just wants an agent out via their existing harness" case was called, in the meeting and by the user, **very hard to win** — that developer reaches for kagent directly. W31 stays worth doing, but "fastest path to an agent" is not by itself a winning position and must not be sold as one. **What it OPENS, and this is the important one: whether Kaimahi should expose kagent as the primitive at all, or abstract over it** so the user's language is "deploy an agent" and a change of direction by kagent does not strand us — against the counter-argument that abstracting means new CRDs and building an entire platform beside a project with thousands of contributors. The meeting left it open. **This board has already answered it implicitly**: D27 made `kmx` deliberately thin, `kmx agent chat` is a passthrough to `kagent invoke`, there is no `kmx install`, and the README names a second control plane as the failure to avoid. That answer was never a decision; **it became one in D40** | the user supplied the meeting transcript; ruled by "Sure" to recording the reconciliation |
 | D40 | 2026-09-03 | **Kaimahi stays THIN over kagent, and this is now a decision rather than an accident.** The planning meeting left open whether to expose kagent as the primitive or abstract over it so a change of direction there could not strand us (D39). The board had already answered implicitly — D27 made `kmx` thin, `kmx agent chat` is a passthrough to `kagent invoke`, there is no `kmx install`, reading/updating/deleting agents stay with `kubectl`, and the README names a second control plane as the failure to avoid — but an implicit answer is not a defensible one, and this question is load-bearing enough that inheriting it was the wrong way to hold it. Ruled: **kagent is the runtime and its CRDs are the artifact; developer tooling and the governance plane are ours.** Consequences, stated so they are not rediscovered: (1) we do NOT introduce a Kaimahi agent CRD, a reconciler, or any resource that duplicates what kagent already owns — the prime directive stands and this decision is now one of its concrete applications; (2) the counter-argument from the meeting is recorded rather than dismissed — abstracting would mean building a platform beside a project with thousands of contributors, which is why we are not doing it; (3) **the risk is accepted explicitly: if kagent changes direction, we feel it directly.** The mitigation is not an abstraction layer, it is that our value sits in the seams kagent does not own — the governed proxy, the MCP gateway, approvals, audit, egress, and the entry point — none of which depend on kagent's internal shape; (4) if kagent's direction ever does force this, the reversal is a decision to take deliberately with this row as its starting point, not a refactor to start quietly. Not chosen, and worth remembering as live options rather than rejected ones: contributing upstream instead of wrapping, and keeping a seam for a future backend | ruled via option: "Stay thin over kagent, and say so out loud (Recommended)" |
+| D41 | 2026-09-03 | **The opinionated Azure-native experience starts with THE LIFT, observability inside it (W33) — and Kaimahi ships no Helm chart.** D39 recorded that the meeting named an Azure-native, opinionated experience as the differentiator, and that it was unbuilt. Surveyed before shaping: `scripts/aks-up.sh` already provisions the resource group, a PRIVATE ACR, the cluster with a policy engine that genuinely enforces NetworkPolicy (the P7a finding — `az aks create` without `--network-policy` yields policies that are present and inert), AcrPull and tag-gated teardown; the demo has run there end to end (P14). What is absent, and it maps onto the deck's migrate-to-AKS slide: **observability is nothing at all** — no Azure Monitor, no managed Prometheus, no Container Insights, just `/metrics` on a cluster-internal port; **identity is nothing** — no workload identity, no Entra, no Key Vault, so the plane holds provider tokens in Secrets; no generated CI/CD; a Caddy LoadBalancer edge rather than Application Gateway. Rulings: (1) **the first lane is the LIFT — one guided path from a working local agent to the same agent on AKS — with Azure-managed observability wired inside it.** The lift is the experience and the observability is what makes it feel Azure-native rather than "kubectl, but on Azure"; it also matches the meeting's start-local-then-lift framing and D36's DX priority. (2) **No Helm chart. `kmx` is the install path and we defend that.** The objection is recorded rather than waved away — "you cannot `helm install` it" is a real thing to hear in an enterprise review — and so is the defence: D27 allows ONE implementation of the journey, a chart would be a second one to keep in step, `kmx` already emits reviewable YAML a platform team can commit or wrap in its own chart, and the meeting itself contained pushback on the premise that Helm gets out of your way. If this objection ever costs us an actual adopter, that is the signal to revisit, and this row is where the reversal starts. **Constraint the lane must not break (D24(3)):** the ops port carrying `/metrics` is deliberately on NO Service — reaching it needs cluster credentials — and the fix for a scraper is the explicit NetworkPolicy allowance the design already anticipates, NOT putting metrics on a Service to make a dashboard easier. Deferred, and live rather than rejected: workload identity (the strongest enterprise story, and now pointed since W30 landed credential expiry), Application Gateway, and generated CI/CD | ruled via options: "The lift, with observability inside it (Recommended)", "No Helm; kmx is the install path, and we defend that" |
 | D14 | 2026-09-01 | P5 direction: the **undeniable demo** — not a new capability arc but making the built one legible and credible. Rulings: (1) outbound connector platform is **Slack** (via existing MCP servers, no connector code); (2) AKS work goes all the way — cluster portability AND a real AKS deployment with evidence (accepts Azure spend + credentials in a worker session); (3) demos run on the **Copilot** preset while **CI stays keyless on ollama** (public fork-exposed repo — no repo secrets in CI, ever). Rationale on the board: everything governed so far protects an agent that lists ConfigMaps; posting to a channel humans read is the first consequential action, and it makes the approval gate the point rather than the plumbing | "sure, that's undeniable demo makes sense" — then ruled via options: "Slack (Recommended)", "Portability + real AKS run (Recommended)", "Copilot for demo, ollama for CI (Recommended)" |
 | D13 | 2026-09-01 | P4c approval model: TIME-BOXED PERMITS — a denied action files a pending request; approval grants it bounded (expiry by duration and/or use count) and compiles into the existing allowlist/budget rows; deny-and-retry mechanics, no held-open calls. Demo scenarios: tool-access widening (k8s_get_events, read-only) AND budget overage; the P3 tool-server read-only posture stays untouched (write-tool demo deferred) | ruled via options: "Time-boxed permits (Recommended)"; "Widen tool access (Recommended), Budget overage (Recommended)" |
 
@@ -3174,6 +3176,84 @@ and visibly so, and a credential that expires and is then refused with
 the message an operator would need. Branch from current main; PR targets
 main; no stacked bases; lane ends at PR-open-with-checks-green — do not
 merge. Report deviations in the PR.
+```
+
+### W33 — the lift: your local agent, running on AKS, with dashboards you did not ask for (UNASSIGNED — paste into a fresh CLI session)
+
+```
+You are a worker session for the Kaimahi project (repo root: this
+checkout, remote kaimahi-agents/kaimahi). Read docs/COORDINATION.md
+first — **D41 above all**, then D15, D24, D36, D39, D40, the P5b, P8a,
+W15 and P14 delta sheets, the security standing guidance and the
+"Considered and rejected" list. Your lane: an agent that works locally
+should reach AKS in ONE guided path, and arrive with Azure-managed
+observability already wired. Today the AKS path exists but is several
+steps, and observability is nothing at all.
+
+Survey first, and this lane is mostly wiring rather than building
+(prime directive): `scripts/aks-up.sh` already provisions the resource
+group, a PRIVATE ACR, the cluster with a policy engine that genuinely
+enforces NetworkPolicy, AcrPull and tag-gated teardown — do not rewrite
+it. `make plane-image` on TARGET=aks builds IN Azure with `az acr
+build`. P14 gave the demo ERP the same road. P8a put a TLS edge on the
+internet. docs/aks.md is the guide you are extending. Read them and say
+what you reused rather than rebuilt.
+
+Build:
+- **One guided path from a working local agent to the same agent on
+  AKS.** Bring-your-own cluster must be first-class — plenty of adopters
+  have one — and creating a new one is the other branch. The path names
+  what it will do and where before it does it (the context guard is not
+  optional when the target is a cloud subscription), and it is
+  resumable: a step that fails should be re-runnable without unpicking
+  the ones before it.
+- **Azure-managed observability, wired by default.** Managed Prometheus
+  scrapes the plane's `/metrics`, Container Insights collects the logs,
+  and the operator gets something to LOOK at without composing a query —
+  ship the dashboard or the workbook, do not merely enable the data.
+  **The constraint you must not break (D24(3)): the ops port is
+  deliberately on NO Service.** The design already anticipates a scraper
+  reaching the pod through an explicit NetworkPolicy allowance — that is
+  the seam. Do NOT put `/metrics` on a Service to make a dashboard
+  easier; that would trade a security property for convenience, and the
+  comment in k8s/plane/proxy.yaml explains why it is there.
+- **Say what the opinion IS.** "Opinionated" means we made choices so the
+  adopter does not have to — node size, policy engine, observability
+  wiring, where the image lives. Every one of those belongs in
+  docs/aks.md with the reason and the escape hatch. An opinion nobody
+  can find is just a default, and an opinion nobody can override is a
+  cage.
+- **No Helm chart (D41(2)).** `kmx` is the install path. If you find
+  yourself wanting a chart, that is the objection D41 already recorded —
+  note it in the PR as evidence rather than acting on it.
+
+Guardrails, all hard: **teardown is mandatory** and the PR reports a
+spend figure (the precedent is ~US$0.35 for a demo-length run); the
+Azure identifier scanner must pass — cluster names, workspace IDs, ACR
+names and public IPs are identifiers and never land in the tree
+(scripts/check-no-azure-ids.sh, and its self-test); **kind must keep
+working exactly as it does now** and you must prove it, because a lane
+that improves AKS by changing shared manifests is the regression this
+one is most likely to cause; nothing published; no repo secrets in CI;
+no credential material accepted by kmx (D27).
+
+CI stays keyless (D14) and cannot reach Azure, so CI proves the shape:
+the rendered manifests, the NetworkPolicy allowance for the scraper, the
+refusals when a required parameter is missing, and the kind path
+unchanged. The real run is manual, and its transcript is the proof.
+
+Out of scope, and deferred deliberately (D41): workload identity and
+Key Vault — the strongest enterprise story, and a lane of its own now
+that W30 has landed credential expiry; Application Gateway; generated
+CI/CD. If the lift makes any of those obviously next, say which and why.
+
+Verification is real: a transcript in the PR of a local agent lifted to
+a REAL AKS cluster in one path — the agent answering there, the
+dashboard showing its traffic, the `az group list` proving teardown, and
+the spend figure. Then the same path against a cluster you did NOT
+create, because bring-your-own is the case most adopters are in. Branch
+from current main; PR targets main; no stacked bases; lane ends at
+PR-open-with-checks-green — do not merge. Report deviations in the PR.
 ```
 
 ## Delta sheets from finished lanes
