@@ -1,6 +1,11 @@
 package app
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/kaimahi-agents/kaimahi/internal/kmx/planebuild"
+)
 
 // The exact stderr from the failure this retry exists for: main's post-merge
 // job on f9914d4, twice, before the same command succeeded unchanged.
@@ -10,7 +15,21 @@ const proxyRaceErr = `go: github.com/kaimahi-agents/kaimahi/plane/cmd/kaimahi-pr
 
 func TestProxyRaceIsRecognised(t *testing.T) {
 	if !planeNotOnProxyYet.MatchString(proxyRaceErr) {
-		t.Error("the proxy race must be retried — it self-heals within a minute")
+		t.Error("this failure must trigger the explicit module resolve")
+	}
+}
+
+// The priming step must name the module that actually provides the binary,
+// not the package and not the repo root — asking for either is what fails.
+func TestNestedModuleIsThePlanesOwnModule(t *testing.T) {
+	if planebuild.NestedModule != "github.com/kaimahi-agents/kaimahi/plane" {
+		t.Errorf("nested module is %q", planebuild.NestedModule)
+	}
+	if !strings.HasPrefix(planebuild.ModulePath, planebuild.NestedModule+"/") {
+		t.Errorf("%q must live inside %q", planebuild.ModulePath, planebuild.NestedModule)
+	}
+	if planebuild.NestedModule == "github.com/kaimahi-agents/kaimahi" {
+		t.Error("the root module is exactly what Go already falls back to")
 	}
 }
 
@@ -25,7 +44,7 @@ func TestRealBuildFailuresAreNotRetried(t *testing.T) {
 		"empty":               "",
 	} {
 		if planeNotOnProxyYet.MatchString(out) {
-			t.Errorf("%s must fail on the first attempt, not be retried: %q", name, out)
+			t.Errorf("%s must not trigger the resolve path: %q", name, out)
 		}
 	}
 }
