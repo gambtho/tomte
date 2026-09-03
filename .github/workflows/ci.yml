@@ -397,7 +397,16 @@ jobs:
                       assert urlparse(up.get("url") or up.get("base_url")).scheme == "https", (name, host)
                       continue
                   assert host.endswith((".kaimahi", ".kagent", ".svc.cluster.local")), (name, host)
-          # The agent-side seam: one Secret-resolved header, no inline value.
+          # The agent-side seam: one Secret-resolved header, no inline
+          # value — asserted on EVERY Kaimahi seam manifest, so a new one
+          # cannot be added with a key pasted into it. (W32 added two.)
+          for seam in sorted(pathlib.Path("k8s").glob("kaimahi-*.yaml")):
+              doc = yaml.safe_load(seam.read_text())
+              if not isinstance(doc, dict) or doc.get("kind") != "RemoteMCPServer":
+                  continue
+              for header in doc["spec"]["headersFrom"]:
+                  assert "value" not in header, (seam.name, header)
+                  assert header["valueFrom"]["type"] == "Secret", (seam.name, header)
           rms = yaml.safe_load(pathlib.Path("k8s/kaimahi-github.yaml").read_text())
           h = rms["spec"]["headersFrom"]
           assert len(h) == 1 and "value" not in h[0] and h[0]["valueFrom"] == {
@@ -1974,7 +1983,7 @@ jobs:
           rc=$?
           set -e
           test "$rc" -eq 1 || { echo "possible Slack token committed (or scanner failed: exit $rc)"; exit 1; }
-      - name: Gateway upstream table — three in-cluster entries, GitHub the one hosted one (marked)
+      - name: Gateway upstream table — three in-cluster entries, three hosted ones (all marked, all naming a credential)
         if: steps.changes.outputs.docs_only != 'true'
         run: |
           kubectl --context kind-kaimahi-p1 -n kaimahi get configmap kaimahi-upstreams \
@@ -1983,17 +1992,44 @@ jobs:
           import json, sys
           from urllib.parse import urlparse
           t = json.load(open("upstreams.json"))["tool_upstreams"]
-          assert set(t) == {"kagent-tools", "slack", "erp", "github"}, t
-          # P10: an internet-facing entry exists now, and ONLY under the
-          # marker that routes it through the hardened dialer; every
-          # unmarked entry is still in-cluster (the plane refuses the
-          # config otherwise — this asserts the same on the deployed table).
+          # A CLOSED SET, deliberately: a new tool upstream is a new place
+          # the gateway may send a credential, so adding one has to be a
+          # decision made here as well as in the table.
+          hosted = {"github", "github-release", "ado"}
+          in_cluster = {"kagent-tools", "slack", "erp"}
+          assert set(t) == hosted | in_cluster, t
+          # P10: an internet-facing entry is reached ONLY under the marker
+          # that routes it through the hardened dialer; every unmarked
+          # entry is still in-cluster (the plane refuses the config
+          # otherwise — this asserts the same on the deployed table).
           for name, up in t.items():
               host = urlparse(up["url"]).hostname
               if up.get("internet"):
-                  assert name == "github" and urlparse(up["url"]).scheme == "https", (name, up)
+                  assert name in hosted and urlparse(up["url"]).scheme == "https", (name, up)
+                  # W32: every hosted entry NAMES its credential from the
+                  # custody mount and never carries one. A hosted server
+                  # reached with no credential at all would be a new
+                  # unauthenticated egress, which is not a thing this
+                  # table is allowed to grow quietly.
+                  assert up["credential_file"].startswith("/etc/kaimahi/upstream-creds/"), up
+                  assert not any(k in up for k in ("credential", "token", "api_key")), up
                   continue
+              assert name in in_cluster, (name, up)
               assert host.endswith((".kaimahi", ".kagent", ".svc.cluster.local")), (name, host)
+          # W32: committed headers are the OUTER ring on the two release
+          # seams — they narrow what the server offers before discovery.
+          # Asserted on the deployed table so a seam that quietly lost its
+          # narrowing fails here rather than at a tool nobody expected.
+          assert t["ado"]["extra_headers"]["X-MCP-Toolsets"] == "pipelines", t["ado"]
+          ghr = t["github-release"]["extra_headers"]
+          for destructive in ("delete_repository", "delete_file", "push_files"):
+              assert destructive in ghr["X-MCP-Exclude-Tools"], ghr
+              assert destructive not in ghr["X-MCP-Tools"], ghr
+          # And no committed header may occupy a credential slot.
+          for name, up in t.items():
+              for k in (up.get("extra_headers") or {}):
+                  assert k.lower() != "authorization", (name, k)
+                  assert k.lower() != (up.get("credential_header") or "authorization").lower(), (name, k)
           # The Slack upstream is keyed from plane custody, and the table
           # names the file without ever carrying a value.
           slack = t["slack"]

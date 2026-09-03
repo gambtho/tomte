@@ -225,3 +225,52 @@ therefore covers `mcp.dev.azure.com` unchanged. The coupling to note:
 `make github-revoke` deletes that shared allowance, so revoking GitHub
 also closes ADO's route out. The lane adds `make release-revoke` which
 removes both tokens and the allowance together.
+
+## Findings from building it (the FINDINGS section's raw material)
+
+### G1 — the tool seam had no way to narrow a server it does not own
+
+The LLM seam has had `extra_headers` since P4a. The tool seam had none, so
+there was no way to tell a hosted MCP server "offer only the pipelines
+toolset". Added in this lane, with two rules the LLM seam does not have:
+a header naming the credential slot is refused at LOAD, and the
+credential is injected last. (The LLM seam applies extra headers AFTER
+the credential and could therefore overwrite it — noticed here, not
+changed here, because that seam's only extra headers are Copilot's two
+and changing the ordering is a separate decision.)
+
+### G2 — P15 merged mid-lane, and it was the right home for the binding
+
+The repository binding was patching the committed ConfigMap in place,
+with a documented "re-run after `make plane`". P15's overlay landed and
+made that unnecessary. Also forced a decision this lane owed: `extra_headers`
+is DENIED to an overlay.
+
+Cost of the mid-lane merge: a rebase, one moved test, and one CI failure
+(`TestEveryToolUpstreamFieldIsClassifiedAsSafeOrDenied`) that was
+*exactly* the guard doing its job — a field added to `ToolUpstream` in a
+branch that never saw the overlay was refused by a test written to catch
+that. Worth recording as a thing that worked.
+
+### G3 — verifying against a stale cluster nearly produced a false pass
+
+The one-repository constraint appeared not to be enforced. It was: the
+cluster was running the pre-rebase proxy, which has no overlay mount.
+`make plane` from the rebased tree fixed it. The lesson is small and
+sharp: verify against the tree you are shipping, and a pod that predates
+your change will lie to you convincingly.
+
+### G4 — `plane-admin.sh issue` needs the `kagent` namespace to exist
+
+A plane-only bring-up (no `make up`) fails at the Secret write with
+`namespaces "kagent" not found`, AFTER the credential row is created —
+so the retry then reports "exists in the plane but Secret is missing" and
+tells you to delete the row. Two commands where one would do. Minor, and
+exactly the kind of thing a first-time user hits.
+
+### G5 — the driver's intent check earned its place immediately
+
+The stub that proposes a different branch than the one asked for was
+refused, with the pending list printed and nothing approved. That check
+is ~15 lines and it is the difference between "a human approved a call"
+and "a human approved THE call".
