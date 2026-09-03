@@ -1438,7 +1438,8 @@ release-allow: guard
 	@KUBECTL="$(KUBECTL)" bash scripts/plane-admin.sh tool-allow $(CRED_RELEASE) "$(RELEASE_TOOLS)"
 
 ## release-bind: constrain the release credential's READ tools to ONE
-## repository, at the plane. Re-run after `make plane`.
+## repository, at the plane. Written as a P15 overlay fragment, so
+## `make plane` keeps it.
 ##   make release-bind GITHUB_REPO=owner/name
 ##   make release-bind GITHUB_REPO=-          (remove the binding)
 release-bind: guard

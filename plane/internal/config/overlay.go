@@ -61,7 +61,17 @@ var mergeableBlocks = []string{"tool_upstreams", "standing_constraints"}
 // The list exists so a field added to ToolUpstream must be classified
 // deliberately (TestEveryToolUpstreamFieldIsClassifiedAsSafeOrDenied) —
 // a denial that drifts open is worse than none.
-var custodyFields = []string{"credential_file", "credential_header", "internet", "ca_file"}
+//
+// W32 added extra_headers and it is DENIED, not safe. An overlay is a
+// hand-edited ConfigMap; extra_headers decides what the proxy SENDS on a
+// call it makes under a credential the proxy holds. On a keyed upstream
+// that is credential-adjacent (Load already refuses a header naming the
+// credential slot, but "safe" here means a field that says nothing about
+// the proxy's custody or reach, and this one is entirely about what the
+// proxy sends). On a keyless in-cluster one it would let an overlay
+// forge whatever header that server trusts. Narrowing a hosted server is
+// an operator decision that belongs in the committed table.
+var custodyFields = []string{"credential_file", "credential_header", "internet", "ca_file", "extra_headers"}
 
 // Fragment is one operator-added overlay file: its name (for error
 // messages and ordering) and its bytes.

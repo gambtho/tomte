@@ -183,10 +183,18 @@ the command says so.
 2. `make release-bind GITHUB_REPO=owner/name` adds a P12 **standing
    constraint** so the read tools are callable only with that `owner` and
    `repo`. A read naming another repository is denied at the plane and
-   files a request. (Only the reads: a standing constraint *admits*, and
+   files a request. Only the reads: a standing constraint *admits*, and
    admitting a branch creation without a human would be the opposite of
-   the design. Re-run it after `make plane`, which restores the committed
-   table.)
+   the design.
+
+   It is written as a P15 **overlay fragment**
+   (`kaimahi-upstreams-extra/release-bind.json`), not as a patch to the
+   committed table, so `make plane` keeps it — a repository binding that
+   silently disappeared on the next deploy would be worse than none. The
+   overlay merges per name and refuses collisions, so it sits beside the
+   accounts-payable agent's constraint without touching it, and it is
+   written with a single-key merge patch because other operators'
+   fragments live in the same ConfigMap.
 3. The consequential calls bind `owner` and `repo` in their digest, so an
    approval for one repository cannot be spent on another.
 
@@ -315,7 +323,7 @@ make govern
 make release-secret GITHUB_REPO=owner/name      # paste the fine-grained token
 make ado-secret ADO_ORG=<organization>          # paste the Entra access token
 make govern-release                             # credential, read allowlist, both seams, the agent
-make release-bind GITHUB_REPO=owner/name        # the reads may reach only that repository
+make release-bind GITHUB_REPO=owner/name        # the reads may reach only that repository (survives make plane)
 make release GITHUB_REPO=owner/name VERSION=v1.2.3 DRY_RUN=1
 ```
 
