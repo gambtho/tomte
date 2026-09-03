@@ -102,11 +102,7 @@ func summarize(tool string, args map[string]any, fields []string, declared bool)
 	if len(parts) == 0 {
 		return tool + ": (no declared argument present)"
 	}
-	line := tool + ": " + strings.Join(parts, ", ")
-	if len(line) > maxSummary {
-		line = line[:maxSummary-1] + "…"
-	}
-	return line
+	return clipTo(tool+": "+strings.Join(parts, ", "), maxSummary)
 }
 
 // renderValue prints one declared value for a human. Scalars only:
@@ -148,11 +144,23 @@ func sanitize(s string) string {
 	}, s)
 }
 
-func clip(s string) string {
-	if len(s) <= maxSummaryValue {
+func clip(s string) string { return clipTo(s, maxSummaryValue) }
+
+// clipTo bounds a string to n BYTES, cutting on rune boundaries and
+// counting the ellipsis against the bound. Slicing by byte index would
+// cut a multibyte rune in half — the summary lands in an approval
+// request, an audit row and a Slack message, none of which should carry
+// invalid UTF-8 — and would also overrun n, since "…" is three bytes.
+func clipTo(s string, n int) string {
+	if len(s) <= n {
 		return s
 	}
-	return s[:maxSummaryValue-1] + "…"
+	const ellipsis = "…"
+	r := []rune(s)
+	for len(r) > 0 && len(string(r))+len(ellipsis) > n {
+		r = r[:len(r)-1]
+	}
+	return string(r) + ellipsis
 }
 
 // BindArguments computes a binding from raw JSON arguments — the admin

@@ -1430,7 +1430,8 @@ jobs:
       - name: "Argument policy: a call inside the standing constraint proceeds with NO approval"
         if: steps.changes.outputs.docs_only != 'true'
         run: |
-          before=$(make approvals | grep -c pay_invoice || true)
+          make approvals > constraint-approvals-before.out
+          before=$(grep -c pay_invoice constraint-approvals-before.out || true)
           # Just under the bound, and AT it: both proceed, audited allowed
           # with the constraint named — no request filed, no human asked.
           for amount in 999999 1000000; do
@@ -1441,7 +1442,8 @@ jobs:
           make github-audit | tee constraint-audit.out
           grep -E 'hello-github +mcp-echo +tools/call +pay_invoice +allowed +200 +within standing constraint .*amount_cents 999999' constraint-audit.out
           grep -E 'hello-github +mcp-echo +tools/call +pay_invoice +allowed +200 +within standing constraint .*amount_cents 1000000' constraint-audit.out
-          after=$(make approvals | grep -c pay_invoice || true)
+          make approvals > constraint-approvals-after.out
+          after=$(grep -c pay_invoice constraint-approvals-after.out || true)
           test "$before" = "$after"
       - name: "Argument policy: a cent outside it is denied and files a request carrying the call"
         if: steps.changes.outputs.docs_only != 'true'

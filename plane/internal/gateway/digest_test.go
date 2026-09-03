@@ -3,6 +3,7 @@ package gateway
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -102,6 +103,21 @@ func TestSummaryIsOneBoundedPrintableLine(t *testing.T) {
 	// Declared-but-absent fields are simply not there.
 	assert.Equal(t, "pay: amount_cents 1", Bind("pay", argsOf(t, `{"amount_cents":1}`), payFields, true).Summary)
 	assert.Equal(t, "pay: (no declared argument present)", Bind("pay", argsOf(t, `{"memo":"x"}`), payFields, true).Summary)
+}
+
+// Truncation must not cut a rune in half: the summary lands in an
+// approval request, an audit row and a Slack message.
+func TestSummaryTruncationIsRuneSafe(t *testing.T) {
+	long := `"` + strings.Repeat("kōrero", 200) + `"`
+	b := Bind("pay", argsOf(t, `{"invoice_id":`+long+`,"amount_cents":1,"payee_id":`+long+`}`), payFields, true)
+	assert.True(t, utf8.ValidString(b.Summary), "summary must be valid UTF-8")
+	assert.LessOrEqual(t, len(b.Summary), maxSummary)
+	assert.True(t, strings.HasSuffix(b.Summary, "…"))
+
+	// One value's own bound holds too, ellipsis included.
+	v := clip(strings.Repeat("ā", 100))
+	assert.True(t, utf8.ValidString(v))
+	assert.LessOrEqual(t, len(v), maxSummaryValue)
 }
 
 // BindArguments is the admin surface's path: the operator names the call

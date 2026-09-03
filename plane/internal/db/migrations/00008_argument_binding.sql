@@ -45,6 +45,23 @@ ALTER TABLE tool_audit ADD COLUMN arg_digest text NOT NULL DEFAULT '';
 ALTER TABLE tool_audit ADD COLUMN arg_summary text NOT NULL DEFAULT '';
 
 -- +goose Down
+-- The Up direction allows several pending requests that differ only by
+-- arg_digest — the point of the lane. Recreating the verb-level index
+-- over them fails on a unique violation, which reads as a broken
+-- migration rather than as what it is, so say it plainly first.
+-- +goose StatementBegin
+DO $$
+DECLARE n integer;
+BEGIN
+    SELECT count(*) INTO n FROM (
+        SELECT 1 FROM approval_request WHERE status = 'pending'
+        GROUP BY credential_name, kind, subject HAVING count(*) > 1
+    ) AS collisions;
+    IF n > 0 THEN
+        RAISE EXCEPTION 'cannot roll back argument binding: % (credential, kind, subject) group(s) hold pending requests that differ only by the call they name; approve or deny them first', n;
+    END IF;
+END $$;
+-- +goose StatementEnd
 ALTER TABLE tool_audit DROP COLUMN arg_summary;
 ALTER TABLE tool_audit DROP COLUMN arg_digest;
 ALTER TABLE approval_audit DROP COLUMN arg_summary;

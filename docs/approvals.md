@@ -82,7 +82,11 @@ Consequences worth stating plainly:
   is not used here.)
 - **A tool request that names no call cannot be approved.** `make
   request KIND=tool SUBJECT=… ARGS='{"…"}'` names one; without `ARGS` it
-  files the *argument-less* call, never "any call". Grants minted before
+  files the *argument-less* call, never "any call" — with one exception,
+  and it comes from the declaration rather than the request: a tool that
+  declares `policy_fields: []` has said no argument is policy-relevant,
+  so every call to it has the same digest and a grant for one admits any
+  arguments. Grants minted before
   P12 (the migration's closed legacy class) stay verb-level and keep
   working; nothing can create another, and `make grants` labels them
   `verb-level (legacy)`.
@@ -191,7 +195,8 @@ make budget CAP_TOKENS=100      # restore whatever cap you actually want
   with `CRED=`. `ARGS` names the call to pre-approve (the plane computes
   the digest with the gateway's own code, so this request and the
   agent's retry are the same call); omitted, it files the argument-less
-  call.
+  call. A tool declaring `policy_fields: []` is verb-level by
+  declaration, so its grants admit any arguments.
 - **Decide**: `make approvals`, then `make approve ID=… [TTL=…] [USES=…]
   [AMOUNT=…]` or `make deny ID=…`; or, from Slack, `@kaimahi approve <id>`
   ([below](#deciding-from-slack)). A decided request is immutable; fresh
