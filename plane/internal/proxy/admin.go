@@ -105,7 +105,9 @@ const ttlRefusal = "ttl_seconds must be between 60 and 31536000 (a credential wi
 // credentialView is what an operator reads about a credential: name,
 // caps, and the deadline — never the token, and never its hash.
 type credentialView struct {
-	Name      string     `json:"name"`
+	// "credential", not "name": every other admin view keys the
+	// credential that way, and the CLI tables read one shape.
+	Name      string     `json:"credential"`
 	CapCents  *int64     `json:"cap_cents,omitempty"`
 	CapTokens *int64     `json:"cap_tokens,omitempty"`
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`

@@ -302,7 +302,7 @@ func TestIssuedCredentialsCarryADeadlineAndCanBeRenewed(t *testing.T) {
 	require.NotContains(t, w.Body.String(), issued.Token, "the token is shown exactly once, at issue")
 	var listed struct {
 		Credentials []struct {
-			Name         string
+			Name         string     `json:"credential"`
 			ExpiresAt    *time.Time `json:"expires_at"`
 			Expired      bool
 			ExpiringSoon bool `json:"expiring_soon"`
