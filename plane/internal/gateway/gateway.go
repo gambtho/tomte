@@ -266,24 +266,20 @@ func (h *handler) relay(w http.ResponseWriter, r *http.Request) {
 		h.httpDeny(w, r, cred, name, "", "", http.StatusBadRequest, "JSON-RPC batches are not relayed")
 		return
 	}
-	var msg struct {
-		ID     json.RawMessage `json:"id"`
-		Method string          `json:"method"`
-		Params json.RawMessage `json:"params"`
-	}
-	if err := json.Unmarshal(body, &msg); err != nil {
-		h.httpDeny(w, r, cred, name, "", "", http.StatusBadRequest, "request body is not a JSON-RPC message")
+	// Parse ONCE, into the canonical tree every consumer reads: the
+	// policy decision, the argument digest, the audit summary and the
+	// bytes forwarded upstream all come from it, so no parser difference
+	// can put them out of step. A duplicated key at any depth is refused
+	// here (canon.go), not collapsed.
+	body, msg, err := canonicalize(body)
+	if err != nil {
+		h.httpDeny(w, r, cred, name, "", "", http.StatusBadRequest, canonRefusal(err))
 		return
 	}
-	// Forward exactly what was checked: rebuild the message from the
-	// parse so duplicated JSON keys cannot smuggle a different method or
-	// tool past enforcement into a first-key-wins upstream parser.
-	if body, err = canonicalize(body); err != nil {
-		h.httpDeny(w, r, cred, name, msg.Method, "", http.StatusBadRequest, "request body is not a JSON-RPC message")
-		return
-	}
+	method, _ := msg["method"].(string)
+	id := rawID(msg)
 
-	switch msg.Method {
+	switch method {
 	case "initialize", "notifications/initialized":
 		// The mandatory MCP lifecycle handshake, relayed verbatim.
 		h.forward(w, r, name, up, body)
@@ -292,44 +288,42 @@ func (h *handler) relay(w http.ResponseWriter, r *http.Request) {
 		// Answered locally: the spec demands a prompt response, and a
 		// liveness check earns no upstream contact through a governance
 		// gateway.
-		if len(msg.ID) == 0 {
+		if len(id) == 0 {
 			w.WriteHeader(http.StatusAccepted)
 			return
 		}
-		writeRPC(w, map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": map[string]any{}})
+		writeRPC(w, map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{}})
 
 	case "tools/list":
-		allowed, ok := h.allowlist(w, r, cred, name, msg.Method)
+		allowed, ok := h.allowlist(w, r, cred, name, method)
 		if !ok {
 			return
 		}
-		if allowed, ok = h.projectable(w, r, cred, name, msg.Method, allowed); !ok {
+		if allowed, ok = h.projectable(w, r, cred, name, method, allowed); !ok {
 			return
 		}
 		h.forwardProjected(w, r, cred, name, up, body, allowed)
 
 	case "tools/call":
-		var params struct {
-			Name string `json:"name"`
-		}
-		if err := json.Unmarshal(msg.Params, &params); err != nil || params.Name == "" {
-			h.httpDeny(w, r, cred, name, msg.Method, "", http.StatusBadRequest, "tools/call params carry no tool name")
+		tool := toolNameOf(msg)
+		if tool == "" {
+			h.httpDeny(w, r, cred, name, method, "", http.StatusBadRequest, "tools/call params carry no tool name")
 			return
 		}
-		allowed, ok := h.allowlist(w, r, cred, name, msg.Method)
+		allowed, ok := h.allowlist(w, r, cred, name, method)
 		if !ok {
 			return
 		}
 		detail := ""
-		if !slices.Contains(allowed, params.Name) {
+		if !slices.Contains(allowed, tool) {
 			// Outside the static allowlist: a live time-boxed grant
 			// (P4c) can still admit the call, consuming one use — the
 			// use is consumed before the forward, so an upstream
 			// failure burns it (conservative direction).
-			grantID, ok, err := h.d.Store.ConsumeToolGrant(r.Context(), cred.Name, params.Name)
+			grantID, ok, err := h.d.Store.ConsumeToolGrant(r.Context(), cred.Name, tool)
 			if err != nil {
-				slog.Error("gateway: grant check failed", "credential", cred.Name, "tool", params.Name, "err", err)
-				h.httpDeny(w, r, cred, name, msg.Method, params.Name, http.StatusServiceUnavailable, "grant check unavailable")
+				slog.Error("gateway: grant check failed", "credential", cred.Name, "tool", tool, "err", err)
+				h.httpDeny(w, r, cred, name, method, tool, http.StatusServiceUnavailable, "grant check unavailable")
 				return
 			}
 			if !ok {
@@ -338,11 +332,11 @@ func (h *handler) relay(w http.ResponseWriter, r *http.Request) {
 				// kind/subject). A filing failure never un-denies and
 				// never trips the breaker — denial is the safe state.
 				denyMsg := "tool not permitted by the Kaimahi allowlist"
-				if h.fileRequest(r, cred.Name, "tool", params.Name,
+				if h.fileRequest(r, cred.Name, "tool", tool,
 					"denied tools/call via upstream "+name) {
 					denyMsg += "; approval request filed — run 'make approvals'"
 				}
-				h.rpcDeny(w, r, cred, name, msg.Method, params.Name, msg.ID,
+				h.rpcDeny(w, r, cred, name, method, tool, id,
 					codeToolNotPermitted, denyMsg)
 				return
 			}
@@ -373,37 +367,42 @@ func (h *handler) relay(w http.ResponseWriter, r *http.Request) {
 			detail += out.note
 		}
 		h.audit(r, store.ToolAuditEntry{CredentialName: cred.Name, Upstream: name,
-			Method: msg.Method, Tool: params.Name, Decision: "allowed", Status: out.status, Detail: detail})
+			Method: method, Tool: tool, Decision: "allowed", Status: out.status, Detail: detail})
 
 	default:
-		h.rpcDeny(w, r, cred, name, msg.Method, "", msg.ID,
+		h.rpcDeny(w, r, cred, name, method, "", id,
 			codeMethodNotAllowed, "method not relayed by the Kaimahi gateway (tools only)")
 	}
 }
 
-// canonicalize re-marshals a JSON-RPC message (and one level of params)
-// from Go's last-key-wins parse — the same parse enforcement decisions
-// were made on — collapsing any duplicated keys before the bytes go
-// upstream.
-func canonicalize(body []byte) ([]byte, error) {
-	var top map[string]json.RawMessage
-	if err := json.Unmarshal(body, &top); err != nil {
-		return nil, err
+// rawID re-renders the message id for a JSON-RPC response. It comes
+// from the canonical tree, so the id echoed back is the one enforcement
+// was decided on. Absent (a notification) yields nil, which the deny
+// paths answer with the spec's 202.
+func rawID(msg map[string]any) json.RawMessage {
+	raw, ok := msg["id"]
+	if !ok || raw == nil {
+		return nil
 	}
-	if raw, ok := top["params"]; ok {
-		if t := bytes.TrimSpace(raw); len(t) > 0 && t[0] == '{' {
-			var params map[string]json.RawMessage
-			if err := json.Unmarshal(t, &params); err != nil {
-				return nil, err
-			}
-			rebuilt, err := json.Marshal(params)
-			if err != nil {
-				return nil, err
-			}
-			top["params"] = rebuilt
-		}
+	out, err := marshalCanonical(raw)
+	if err != nil {
+		return nil
 	}
-	return json.Marshal(top)
+	return out
+}
+
+// canonRefusal is the client-facing reason a message was refused before
+// any policy ran. Every one starts with "request body" so reasonFor
+// classifies it as a bad request.
+func canonRefusal(err error) string {
+	if errors.Is(err, errDuplicateKey) {
+		// Refused, not collapsed: see canon.go.
+		return "request body carries a duplicate JSON key"
+	}
+	if errors.Is(err, errTooDeep) || errors.Is(err, errTooLarge) {
+		return "request body is nested too deeply or too complex to canonicalize"
+	}
+	return "request body is not a JSON-RPC message"
 }
 
 // allowlist reads the credential's static tool allowlist, failing the

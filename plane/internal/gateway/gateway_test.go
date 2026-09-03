@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -373,10 +372,10 @@ func TestAuditDegradationFailsClosedAndRecovers(t *testing.T) {
 	assert.Equal(t, http.StatusOK, post(h, goodToken, call).Code)
 }
 
-func TestDuplicateKeysCannotSmuggle(t *testing.T) {
-	var sawUpstream []byte
+func TestDuplicateKeysAreRefusedNotCollapsed(t *testing.T) {
+	forwarded := 0
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		sawUpstream, _ = io.ReadAll(r.Body)
+		forwarded++
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{}}`))
 	}))
@@ -385,22 +384,27 @@ func TestDuplicateKeysCannotSmuggle(t *testing.T) {
 		allow: []string{"k8s_get_resources"}}
 	h := newGateway(t, fs, up)
 
-	// A duplicated "method" key: the gateway decides on the LAST value
-	// (initialize) and must forward bytes carrying only that value, so a
-	// first-key-wins upstream cannot execute the smuggled tools/call.
-	rec := post(h, goodToken,
-		[]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"k8s_delete_resource"},"method":"initialize"}`))
-	require.Equal(t, http.StatusOK, rec.Code)
-	assert.NotContains(t, string(sawUpstream), "tools/call")
-	assert.Contains(t, string(sawUpstream), `"method":"initialize"`)
-
-	// A duplicated tool "name" in params: checked last-wins as the
-	// allowed tool, so the forwarded params must carry only that name.
-	rec = post(h, goodToken,
-		[]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"k8s_delete_resource","name":"k8s_get_resources"}}`))
-	require.Equal(t, http.StatusOK, rec.Code)
-	assert.NotContains(t, string(sawUpstream), "k8s_delete_resource")
-	assert.Contains(t, string(sawUpstream), "k8s_get_resources")
+	// P12: a duplicated key is a tampering signal, not a typo — Go reads
+	// last-wins and an upstream may read first-wins, so the message is
+	// refused outright at every depth rather than silently collapsed.
+	// Nothing is forwarded, so enforcement and the forwarded bytes cannot
+	// disagree about what the call was.
+	for _, body := range []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"k8s_delete_resource"},"method":"initialize"}`,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"k8s_delete_resource","name":"k8s_get_resources"}}`,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"k8s_get_resources",` +
+			`"arguments":{"namespace":"default","namespace":"kube-system"}}}`,
+	} {
+		rec := post(h, goodToken, []byte(body))
+		require.Equal(t, http.StatusBadRequest, rec.Code)
+		assert.Contains(t, rec.Body.String(), "duplicate JSON key")
+	}
+	assert.Zero(t, forwarded, "a refused message must never reach the upstream")
+	require.Len(t, fs.audits, 3)
+	for _, a := range fs.audits {
+		assert.Equal(t, "denied", a.Decision)
+		assert.Equal(t, http.StatusBadRequest, a.Status)
+	}
 }
 
 func TestUpstreamRedirectRefused(t *testing.T) {
