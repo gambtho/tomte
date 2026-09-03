@@ -129,18 +129,55 @@ case "${1:-}" in
 import json, sys
 c = json.load(open(sys.argv[1]))
 ca = "/etc/kaimahi/upstream-ca/mcp-echo.crt"
+
+# W32: the release tools are declared by COPYING the committed
+# declaration rather than restating it. A tool name means one thing
+# across the whole table (the plane refuses two upstreams that declare
+# one tool differently), so restating them here would either duplicate
+# the shipped policy or refuse to load - and a copy is the only version
+# that cannot drift away from what ships.
+release_tools = {}
+for up in c["tool_upstreams"].values():
+    for tool, decl in (up.get("tools") or {}).items():
+        if tool in ("list_pull_requests", "create_branch", "actions_run_trigger"):
+            release_tools[tool] = decl
+missing = {"list_pull_requests", "create_branch", "actions_run_trigger"} - set(release_tools)
+if missing:
+    sys.exit("the committed table declares no policy fields for %s" % ", ".join(sorted(missing)))
+
 c["tool_upstreams"]["mcp-echo"] = {
     "url": "https://mcp-echo.kaimahi-ci.test/mcp", "internet": True, "ca_file": ca,
-    "tools": {"pay_invoice": {"policy_fields": ["invoice_id", "amount_cents", "payee_id"]}},
+    "tools": dict(release_tools,
+                  pay_invoice={"policy_fields": ["invoice_id", "amount_cents", "payee_id"]}),
+}
+# W32: the same stand-in, narrowed AT THE SERVER by a committed header -
+# the outer of the two rings. The gateway will admit an allowlisted call
+# here and the server will still refuse it, because the tool is not
+# enabled on it. That is a guarantee an allowlist cannot make, and it is
+# how the real GitHub and Azure DevOps seams exclude their destructive
+# tools.
+c["tool_upstreams"]["mcp-echo-narrowed"] = {
+    "url": "https://mcp-echo.kaimahi-ci.test/mcp", "internet": True, "ca_file": ca,
+    "extra_headers": {"X-MCP-Tools": "echo"},
 }
 # ADD to whatever the committed table already carries, never replace it:
 # since P13 that block holds the AP agent's real constraint, and a patch
 # that dropped it would quietly test a different policy than the one that
 # ships.
-c.setdefault("standing_constraints", {})["hello-github"] = {"pay_invoice": [
-    {"field": "amount_cents", "op": "lte", "value": 1000000},
-    {"field": "payee_id", "op": "in", "values": ["MER-4471"]},
-]}
+c.setdefault("standing_constraints", {})["hello-github"] = {
+    "pay_invoice": [
+        {"field": "amount_cents", "op": "lte", "value": 1000000},
+        {"field": "payee_id", "op": "in", "values": ["MER-4471"]},
+    ],
+    # W32: what `make release-bind` applies against a real repository -
+    # a READ tool bound to ONE of them. A read naming any other is
+    # denied and files a request, which is the one-repository claim made
+    # at the plane rather than only at the token.
+    "list_pull_requests": [
+        {"field": "owner", "op": "eq", "value": "kaimahi-ci"},
+        {"field": "repo", "op": "eq", "value": "the-one-repo"},
+    ],
+}
 c["tool_upstreams"]["mcp-echo-rebind"] = {"url": "https://mcp-echo-rebind.kaimahi-ci.test/mcp", "internet": True, "ca_file": ca}
 c["tool_upstreams"]["mcp-echo-redirect"] = {"url": "https://mcp-echo.kaimahi-ci.test/redirect", "internet": True, "ca_file": ca}
 json.dump(c, sys.stdout, indent=2)

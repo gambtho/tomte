@@ -1067,6 +1067,135 @@ jobs:
           # The refusal happens BEFORE the method is known, so the row
           # carries no method or tool — only that the body was refused.
           grep -E 'hello-github +mcp-echo +denied +400 +request body carries a duplicate JSON key' dup-audit.out
+      # W32, keyless: the release agent's governance, proven against the
+      # same stand-in. Nothing here needs a GitHub or Azure DevOps token —
+      # every decision happens in the gateway before the forward, which is
+      # exactly why the lane could be proven at all in a CI that holds no
+      # credential (D14). The real run is manual and its transcript is in
+      # the PR.
+      #
+      # The stand-in's tools are shaped like the real ones and DECLARED by
+      # copying the committed table (scripts/ci/synthetic-upstream.sh), so
+      # these steps prove the policy that ships rather than a restatement
+      # of it.
+      - name: "Release agent: a read is bound to ONE repository — the right one proceeds with no human"
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          make approvals > release-approvals-before.out
+          before=$(grep -c list_pull_requests release-approvals-before.out || true)
+          KUBECTL="kubectl --context kind-kaimahi-p1" GOVERNED_SECRET=kaimahi-github-token UPSTREAM=mcp-echo \
+            bash scripts/tool-call-probe.sh list_pull_requests \
+            '{"owner": "kaimahi-ci", "repo": "the-one-repo", "state": "closed", "base": "main"}'
+          make github-audit | tee release-read.out
+          grep -E 'hello-github +mcp-echo +tools/call +list_pull_requests +allowed +200 +within standing constraint' release-read.out
+          make approvals > release-approvals-after.out
+          after=$(grep -c list_pull_requests release-approvals-after.out || true)
+          test "$before" = "$after"
+      - name: "Release agent: the SAME read on another repository is denied and files a request"
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          # The one-repository claim made at the PLANE, not only at the
+          # token. `make release-bind` applies this constraint against a
+          # real repository; here the bound repo is a synthetic one.
+          KUBECTL="kubectl --context kind-kaimahi-p1" GOVERNED_SECRET=kaimahi-github-token UPSTREAM=mcp-echo \
+            bash scripts/tool-denial-probe.sh list_pull_requests \
+            '{"owner": "someone-else", "repo": "the-one-repo", "state": "closed", "base": "main"}'
+          make github-audit | tee release-read-denied.out
+          grep -E 'hello-github +mcp-echo +tools/call +list_pull_requests +denied +403 +tool call not permitted: outside the standing constraint' release-read-denied.out
+          make approvals | tee release-read-approvals.out
+          grep -E 'hello-github +tool +list_pull_requests .*owner someone-else' release-read-approvals.out
+      - name: "Release agent: cutting a branch is denied, and what a human is asked is the ARTIFACT"
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          KUBECTL="kubectl --context kind-kaimahi-p1" GOVERNED_SECRET=kaimahi-github-token UPSTREAM=mcp-echo \
+            bash scripts/tool-denial-probe.sh create_branch \
+            '{"owner": "kaimahi-ci", "repo": "the-one-repo", "branch": "release/v9.9.9", "from_branch": "main"}'
+          make approvals | tee branch-approvals.out
+          # Every declared field, in the declared order — the version and
+          # the repository are part of what is bound, which is the whole
+          # point of the declaration.
+          grep -E 'hello-github +tool +create_branch .*owner kaimahi-ci, repo the-one-repo, branch release/v9.9.9, from_branch main' branch-approvals.out
+      - name: "Release agent: the approval is welded to THAT release — the next one is denied again"
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          id=$(awk '$3=="hello-github" && $5=="create_branch" && /release\/v9.9.9/ {print $1}' branch-approvals.out)
+          test -n "$id"
+          make approve ID="$id" USES=1 TTL=10m
+          # The approved cut proceeds.
+          KUBECTL="kubectl --context kind-kaimahi-p1" GOVERNED_SECRET=kaimahi-github-token UPSTREAM=mcp-echo \
+            bash scripts/tool-call-probe.sh create_branch \
+            '{"owner": "kaimahi-ci", "repo": "the-one-repo", "branch": "release/v9.9.9", "from_branch": "main"}'
+          make github-audit | tee branch-audit.out
+          grep -E 'hello-github +mcp-echo +tools/call +create_branch +allowed +200 +granted .*branch release/v9.9.9' branch-audit.out
+          # THE CLAIM D38(2) MAKES: approving "publish v9.9.9" must not
+          # authorize the next release. A different version is denied and
+          # files its own request.
+          KUBECTL="kubectl --context kind-kaimahi-p1" GOVERNED_SECRET=kaimahi-github-token UPSTREAM=mcp-echo \
+            bash scripts/tool-denial-probe.sh create_branch \
+            '{"owner": "kaimahi-ci", "repo": "the-one-repo", "branch": "release/v9.9.10", "from_branch": "main"}'
+          make approvals | tee branch-approvals-2.out
+          grep -E 'hello-github +tool +create_branch .*branch release/v9.9.10' branch-approvals-2.out
+          # And a cut of the SAME version from a different base is a
+          # different call too: from_branch is bound.
+          KUBECTL="kubectl --context kind-kaimahi-p1" GOVERNED_SECRET=kaimahi-github-token UPSTREAM=mcp-echo \
+            bash scripts/tool-denial-probe.sh create_branch \
+            '{"owner": "kaimahi-ci", "repo": "the-one-repo", "branch": "release/v9.9.9", "from_branch": "some-fork"}'
+      - name: "Release agent: a CONSOLIDATED DISPATCHER is governed by its action, not its name"
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          # Both real servers consolidate: one tool whose method/action
+          # argument selects what it does. actions_run_trigger can run a
+          # workflow, re-run one, CANCEL one, or delete its logs. Verb-level
+          # policy cannot tell those apart; this is what P12 buys.
+          KUBECTL="kubectl --context kind-kaimahi-p1" GOVERNED_SECRET=kaimahi-github-token UPSTREAM=mcp-echo \
+            bash scripts/tool-denial-probe.sh actions_run_trigger \
+            '{"method": "run_workflow", "owner": "kaimahi-ci", "repo": "the-one-repo", "workflow_id": "release.yml", "ref": "release/v9.9.9"}'
+          make approvals | tee trigger-approvals.out
+          grep -E 'hello-github +tool +actions_run_trigger .*method run_workflow, owner kaimahi-ci, repo the-one-repo, workflow_id release.yml, ref release/v9.9.9' trigger-approvals.out
+          id=$(awk '$3=="hello-github" && $5=="actions_run_trigger" && /method run_workflow/ {print $1}' trigger-approvals.out)
+          test -n "$id"
+          make approve ID="$id" USES=1 TTL=10m
+          # CANCELLING a run is a different call on the same tool name, and
+          # the approval to START a build cannot be spent on it.
+          KUBECTL="kubectl --context kind-kaimahi-p1" GOVERNED_SECRET=kaimahi-github-token UPSTREAM=mcp-echo \
+            bash scripts/tool-denial-probe.sh actions_run_trigger \
+            '{"method": "cancel_workflow_run", "owner": "kaimahi-ci", "repo": "the-one-repo", "workflow_id": "release.yml", "ref": "release/v9.9.9"}'
+          make approvals | tee trigger-approvals-2.out
+          grep -E 'hello-github +tool +actions_run_trigger .*method cancel_workflow_run' trigger-approvals-2.out
+          # The grant is untouched: the call it was welded to still runs.
+          KUBECTL="kubectl --context kind-kaimahi-p1" GOVERNED_SECRET=kaimahi-github-token UPSTREAM=mcp-echo \
+            bash scripts/tool-call-probe.sh actions_run_trigger \
+            '{"method": "run_workflow", "owner": "kaimahi-ci", "repo": "the-one-repo", "workflow_id": "release.yml", "ref": "release/v9.9.9"}'
+          make github-audit | tee trigger-audit.out
+          grep -E 'hello-github +mcp-echo +tools/call +actions_run_trigger +allowed +200 +granted .*method run_workflow' trigger-audit.out
+      - name: "Release agent: the OUTER ring — a tool the server was told not to offer is not there at all"
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          # mcp-echo-narrowed is the same stand-in reached with a committed
+          # X-MCP-Tools header, the way the real GitHub and Azure DevOps
+          # seams exclude their destructive tools. The gateway ADMITS this
+          # call (the standing constraint is satisfied) and the SERVER
+          # still refuses it, because the tool is not enabled there. That
+          # is a guarantee no allowlist can make.
+          KUBECTL="kubectl --context kind-kaimahi-p1" GOVERNED_SECRET=kaimahi-github-token \
+            UPSTREAM=mcp-echo-narrowed EXPECT=200 EXPECT_BODY='not enabled on this server' \
+            bash scripts/tool-raw-probe.sh \
+            '{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "list_pull_requests", "arguments": {"owner": "kaimahi-ci", "repo": "the-one-repo", "state": "closed", "base": "main"}}}'
+          # And it is not offered on tools/list either, so a discovering
+          # controller never sees it.
+          KUBECTL="kubectl --context kind-kaimahi-p1" GOVERNED_SECRET=kaimahi-github-token \
+            UPSTREAM=mcp-echo-narrowed EXPECT=200 EXPECT_BODY='"echo"' \
+            bash scripts/tool-raw-probe.sh \
+            '{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}' | tee narrowed-list.out
+          if grep -q list_pull_requests narrowed-list.out; then
+            echo 'the narrowed server offered a tool its header excluded' >&2; exit 1
+          fi
+      - name: "Release agent: the audit names who approved which release"
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          make approval-audit | tee release-approval-audit.out
+          grep -E 'hello-github +tool +create_branch +approved +admin .*branch release/v9.9.9' release-approval-audit.out
+          grep -E 'hello-github +tool +actions_run_trigger +approved +admin .*method run_workflow' release-approval-audit.out
       - name: "Hosted upstreams: the record rebinds to the server's private address → the dialer refuses before any byte leaves, audited"
         if: steps.changes.outputs.docs_only != 'true'
         run: |
