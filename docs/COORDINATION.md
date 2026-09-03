@@ -2519,6 +2519,11 @@ Build (D33(5) fixes the scope):
   a flake — kagent reconcile is async, Ready never flips, and the check
   must see ONE pod on the new template. Carry it whole, with its
   reasons, or `kmx use` will look right and return early.
+  `kmx use-ollama` is the same command pinned to the `ollama` preset —
+  say in the PR whether you shipped it as an alias of `kmx use` or as
+  its own verb, and either way it takes the identical `wait_switched`
+  path, because the flake it guards against does not care which name
+  reached it.
 - **The Makefile delegates** these targets the way milestone 2's do, and
   scripts/check-kmx-delegation.py's OWNED map grows to match. One
   implementation per behaviour (D27(1)): say in the PR, per script,
@@ -2546,11 +2551,14 @@ approve-bounds refusals, for the allowlist's sorted read-back and empty
 case, and for the delegation map. `make backup`/`make restore` must
 still round-trip in the e2e.
 
-Guardrails, all hard: no publishing; no credential accepted by kmx in
-any form and no secret capture moved into it (D27); every mutation
-through the guard; no client-go — shell out as the earlier milestones
-do; token bytes only through pipes and 0600 files, never argv, env
-listings or logs; no Azure or Slack identifiers; no repo secrets in CI.
+Guardrails, all hard: no publishing; **kmx accepts no user-supplied
+credential and captures no secret** (D27) — that is a different thing
+from the governed credentials it ISSUES, which it does and must keep
+doing, so the rule is "never take one in", not "never handle one"; the
+bytes it mints travel only through pipes and 0600 files, never argv, env
+listings or logs; every mutation through the guard; no client-go — shell
+out as the earlier milestones do; no Azure or Slack identifiers; no repo
+secrets in CI.
 
 Verification is real: on a clean machine with no checkout,
 `go install …/cmd/kmx@<your sha>`, then up → plane → govern → and each
