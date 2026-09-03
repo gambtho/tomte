@@ -184,6 +184,22 @@ func (a *App) AddUpstream(opt AddUpstreamOptions) error {
 	if opt.DryRun {
 		return a.kubectlRun("apply", "--dry-run=server", "-f", path)
 	}
+	// The manifest carries the overlay's resourceVersion, so a stale
+	// apply is refused — but `kubectl apply -f` applies each document
+	// independently and does not roll back, so a refused ConfigMap still
+	// leaves the two NetworkPolicies behind. For kmx's OWN apply that
+	// window is closable, and closing it is better than explaining it:
+	// re-read the version immediately before applying and refuse here,
+	// where nothing has happened yet.
+	if _, version, err := a.readOverlay(); err != nil {
+		return err
+	} else if version != spec.OverlayVersion {
+		return fmt.Errorf("the overlay changed while this was being scaffolded "+
+			"(read at version %s, now %s) — nothing has been applied.\n"+
+			"  Somebody else onboarded an upstream or edited a fragment. Run the same command again "+
+			"to build on their change:\n    rm %s && kmx tools add %s …",
+			quoteVersion(spec.OverlayVersion), quoteVersion(version), path, opt.Name)
+	}
 	if err := a.kubectlRun("apply", "-f", path); err != nil {
 		return err
 	}
@@ -315,6 +331,15 @@ func (a *App) resolveService(spec *scaffold.UpstreamSpec, override, urlPort int)
 	}
 	return fmt.Errorf("Service %s/%s publishes no port %d (the port in --url)",
 		spec.ServiceNamespace, spec.Service, urlPort)
+}
+
+// quoteVersion renders a resourceVersion for a message, including the
+// absent case, which means the overlay did not exist when it was read.
+func quoteVersion(v string) string {
+	if v == "" {
+		return "(absent)"
+	}
+	return v
 }
 
 // showPolicyBlastRadius names the pods the scaffolded ingress policy will

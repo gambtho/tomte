@@ -164,9 +164,18 @@ not been validated is the thing this command exists to stop you writing.
 A `--no-apply` manifest is a **one-shot** artifact. It carries the
 overlay's `resourceVersion`, so if anyone changes the overlay before you
 apply it — another onboarding, a hand-added standing constraint —
-`kubectl apply` refuses it with a `Conflict` and changes nothing, rather
-than replacing their work with a snapshot taken before it existed.
-Scaffold again to pick their change up.
+`kubectl apply` refuses that document with a `Conflict` rather than
+replacing their work with a snapshot taken before it existed. Scaffold
+again to pick their change up.
+
+Two things to know about that refusal. `kubectl apply -f` applies each
+document **independently and does not roll back**, so a refused ConfigMap
+still leaves the two NetworkPolicies created — an allowance to a server
+that is not in the gateway's table, which nothing can use (the gateway
+relays only to upstreams the table names) but which you should delete
+along with the stale manifest. And it does not apply to kmx's own apply
+path: `kmx tools add` re-reads the version immediately before applying
+and refuses *before* anything is created.
 
 ## Step 3 — issue the credential and point the agent
 

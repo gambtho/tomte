@@ -2336,10 +2336,12 @@ jobs:
           grep -q 'The plane validated the table' add.out
           grep -q 'stock_adjust: an approval binds sku, delta' add.out
           test -f upstreams/warehouse.yaml
-          # The apply is conditional on the version the overlay was read
-          # at, so a manifest applied later cannot prune a fragment
-          # somebody added in the meantime.
-          grep -qE '^  resourceVersion: "[0-9]+"' upstreams/warehouse.yaml
+          # A FIRST onboarding creates the overlay, so there is no
+          # version to condition on and none is emitted. The precondition
+          # is proven on the second one, below.
+          if grep -q 'resourceVersion' upstreams/warehouse.yaml; then
+            echo 'a precondition was emitted for an object that did not exist' >&2; exit 1
+          fi
           # The COMMITTED table is byte-identical to the one in the tree:
           # onboarding never edits this repo's four.
           kubectl --context kind-kaimahi-p1 -n kaimahi get configmap kaimahi-upstreams \
@@ -2356,6 +2358,32 @@ jobs:
           # And the table the proxy is actually enforcing carries the overlay.
           kubectl --context kind-kaimahi-p1 -n kaimahi logs -l app=kaimahi-proxy --tail=200 \
             | grep -q 'operator overlay merged.*warehouse.json'
+      - name: "Onboarding: a SECOND upstream carries the whole overlay and an apply precondition"
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          # The emitted ConfigMap is the whole overlay, and the apply is
+          # conditional on the version it was read at — so a manifest
+          # reviewed today and applied next week cannot prune a fragment
+          # added in between and leave the upstream it constrained
+          # running unbounded.
+          bin/kmx tools add depot --url http://acme-warehouse.acme:8090/mcp \
+            --tool depot_get:sku --out depot.yaml --no-apply 2>&1 | tee depot.out
+          grep -q 'The plane validated the table' depot.out
+          grep -qE '^  resourceVersion: "[0-9]+"' depot.yaml
+          grep -qF '"warehouse.json": |' depot.yaml
+          grep -qF '"depot.json": |' depot.yaml
+          # A stale precondition refuses the ConfigMap and changes it.
+          sed -i 's/resourceVersion: "[0-9]*"/resourceVersion: "1"/' depot.yaml
+          kubectl --context kind-kaimahi-p1 apply -f depot.yaml 2>&1 | tee depot-apply.out || true
+          grep -qi 'conflict' depot-apply.out
+          kubectl --context kind-kaimahi-p1 -n kaimahi get configmap kaimahi-upstreams-extra \
+            -o jsonpath='{.data}' | tee overlay-after.out
+          python3 -c "import json,sys; d=json.load(open('overlay-after.out')); assert sorted(d)==['warehouse.json'], d; print('the stale apply changed nothing')"
+          # kubectl applies each document independently and does not roll
+          # back, so the policies from that file DID land. Documented, and
+          # cleaned up here so nothing after this step inherits them.
+          kubectl --context kind-kaimahi-p1 delete networkpolicy -n acme kaimahi-upstream-depot-ingress --ignore-not-found
+          kubectl --context kind-kaimahi-p1 delete networkpolicy -n kaimahi kaimahi-upstream-depot-egress --ignore-not-found
       - name: "Onboarding: an overlay may not put the proxy's own custody under its control"
         if: steps.changes.outputs.docs_only != 'true'
         run: |
