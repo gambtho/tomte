@@ -26,9 +26,15 @@
 # the filing dedupes on the call.)
 #
 # Usage:  make ap-demo [SLACK_USER=U0EXAMPLE]
-#   SLACK_USER      approve as that Slack user through the signed
-#                   app_mention path (P8b) instead of the admin bearer.
-#                   CI uses U0CIAPPROVER; a live cluster uses a real id.
+#   SLACK_USER      the Slack user id that approves. CI uses the invented
+#                   U0CIAPPROVER and the mention is SYNTHESISED, correctly
+#                   signed, by scripts/slack-mention-probe.sh.
+#   AP_HUMAN=1      with SLACK_USER, do not synthesise anything: print the
+#                   line and WAIT for that person to type it in Slack
+#                   (scripts/ap-await-approval.sh). This is the only
+#                   honest setting against a real workspace — a signed
+#                   event forged in a named colleague's name would prove
+#                   nothing about a human approving a payment.
 #   AP_AGENT_TURN=0 skip the agent's investigation entirely.
 set -euo pipefail
 umask 077
@@ -36,6 +42,7 @@ umask 077
 KUBECTL="${KUBECTL:-kubectl}"
 CRED_AP="${CRED_AP:-ap-agent}"
 SLACK_USER="${SLACK_USER:-}"
+AP_HUMAN="${AP_HUMAN:-0}"
 AP_AGENT_TURN="${AP_AGENT_TURN:-1}"
 # The chat command, handed down by the Makefile so the agent turn lands
 # on the SAME cluster as everything else — a bare `make chat` here would
@@ -99,16 +106,24 @@ request_id() {
     '$3==cred && $4=="tool" && $5==tool && index($0, want) {print $1; exit}' "$work/approvals.out"
 }
 
-# approve <id> — through Slack when an approver is named (the P8b path: a
-# correctly signed app_mention, decided_by slack:<id>), otherwise through
-# the admin bearer. Both mint the same call-bound grant.
+# approve <id> [uses] — three ways in, all minting the same call-bound
+# grant, differing only in who decides and how the decision arrives:
+#
+#   AP_HUMAN=1 + SLACK_USER   a real person types it in a real Slack; this
+#                             script only waits and verifies.
+#   SLACK_USER                a SYNTHETIC, correctly signed app_mention as
+#                             that id (kind and CI, where Slack cannot
+#                             reach the cluster).
+#   neither                   the admin bearer.
 approve() {
-  local id=$1
-  if [ -n "$SLACK_USER" ]; then
+  local id=$1 uses=${2:-1}
+  if [ -n "$SLACK_USER" ] && [ "$AP_HUMAN" = 1 ]; then
+    CRED_AP="$CRED_AP" bash "$here/ap-await-approval.sh" "$id" "$SLACK_USER" "$uses"
+  elif [ -n "$SLACK_USER" ]; then
     WANT="approved request $id" bash "$here/slack-mention-probe.sh" \
-      "$SLACK_USER" "approve ${id%%-*} uses=1 ttl=10m"
+      "$SLACK_USER" "approve ${id%%-*} uses=$uses ttl=10m"
   else
-    admin approve "$id" 10m 1 -
+    admin approve "$id" 10m "$uses" -
   fi
 }
 

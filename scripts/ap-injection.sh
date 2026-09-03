@@ -26,12 +26,16 @@
 #
 # Usage:  make ap-injection [SLACK_USER=U0EXAMPLE]
 #   AP_AGENT_TURN=0 skips the agent's turn.
+#   AP_HUMAN=1      with SLACK_USER, wait for that person to approve in a
+#                   real Slack rather than synthesising the mention — see
+#                   scripts/ap-await-approval.sh and scripts/ap-demo.sh.
 set -euo pipefail
 umask 077
 
 KUBECTL="${KUBECTL:-kubectl}"
 CRED_AP="${CRED_AP:-ap-agent}"
 SLACK_USER="${SLACK_USER:-}"
+AP_HUMAN="${AP_HUMAN:-0}"
 AP_AGENT_TURN="${AP_AGENT_TURN:-1}"
 # The chat command, handed down by the Makefile so the agent turn lands
 # on the SAME cluster as everything else — a bare `make chat` here would
@@ -86,8 +90,10 @@ request_id() {
     '$3==cred && $4=="tool" && $5==tool && index($0, want) {print $1; exit}' "$work/approvals.out"
 }
 
-approve() { # <id> <uses>
-  if [ -n "$SLACK_USER" ]; then
+approve() { # <id> <uses> — see scripts/ap-demo.sh for the three paths
+  if [ -n "$SLACK_USER" ] && [ "$AP_HUMAN" = 1 ]; then
+    CRED_AP="$CRED_AP" bash "$here/ap-await-approval.sh" "$1" "$SLACK_USER" "$2"
+  elif [ -n "$SLACK_USER" ]; then
     WANT="approved request $1" bash "$here/slack-mention-probe.sh" \
       "$SLACK_USER" "approve ${1%%-*} uses=$2 ttl=10m"
   else
