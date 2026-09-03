@@ -121,7 +121,7 @@ prefix.
 | CI: the e2e job takes ~15 min on every PR (D32) | W25 worker | PR #65 MERGED; coordinator verified 934s to 483s with all 62 assertion bodies byte-identical (delta sheet below) | lane closed | investigation-led: 934s over 68 serial steps, bring-up 186s, the model pull only 16s of it |
 | P14: the AP demo live on AKS (D33) | W26 worker | PR #83 MERGED; coordinator verified teardown, the scanner, the kind path unchanged and the render's fail-closed cases (delta sheet below) | lane closed; ap-injection not run verbatim on AKS — deviation accepted, see sheet |
 | `kmx` milestone 3 — the core plane verbs (D28(3), D33) | W27 worker | PR #81 MERGED; coordinator verified live — wait_switched carried, a destructive backup/restore round trip, approvals showing the call (delta sheet below) | lane closed |
-| W31: Kaimahi from inside the harness you are already in (D36) | unassigned | SHAPED 2026-09-03 — prompt below; the D36 lane, highest priority | MCP as the interface (coordinator's call, overrulable); the fast path needs no governance |
+| W31: `create-kaimahi-agent` — nothing to a working agent, fast (D36, D37) | unassigned | SHAPED 2026-09-03 — prompt below; the D36 lane, highest priority | prerequisite and time reduction FIRST (5 prereqs, 5-10 min today); packaging second; MCP deferred |
 | W28: ship it — version, release, a published install path, a documented upgrade (D34, D35) | unassigned | SHAPED 2026-09-03 — prompt below; PARALLEL with W30 | unblocked by D34; publishes to free namespaces only, asserts no trademark |
 | W29: govern your own agent — the generic onboarding path (D35) | unassigned | SHAPED 2026-09-03 — prompt below; runs ALONE | the product-defining gap: nothing documents adding your own MCP server or governing an agent you already run |
 | W30: identity on the call, and credentials that expire (D35) | unassigned | SHAPED 2026-09-03 — prompt below; PARALLEL with W28 | plane internals + a migration; the two security-review answers we do not have |
@@ -179,6 +179,7 @@ prefix.
 | D34 | 2026-09-03 | **The name is settled: kaimahi, and `kmx` for the binary. D9's and D26's freeze on publishing is LIFTED.** Recorded with its exact basis, because the difference matters and silence must not later be mistaken for clearance: **the cultural read cleared — a te reo Māori speaker was comfortable with the use — and the trademark opinion was NOT formally obtained.** So: (1) we may publish, and claiming free namespaces is no longer deferred; (2) NAMING.md must say plainly that no trademark opinion was taken, rather than implying both gates closed; (3) nothing may assert a trademark — no ™, no "registered", no claim of exclusivity — and the project stays renameable in principle, which is cheap while adoption is near zero and gets dearer with every published artifact; (4) `kmx` is approved too, accepting what D27(3) recorded: PyPI `kmx` and the GitHub user `kmx` are taken (so those are not available to us) and KMX is CarMax's ticker symbol. The residual risk is stated and accepted: a later trademark conflict would cost a rename, and the cost of that rename grows with every registry we claim | "naming is approved, lets close that out with agreement on kaimahi", then ruled via options: "Cultural read cleared; trademark not formally done", "Yes — kmx is approved too" |
 | D35 | 2026-09-03 | **The next arc is adoptability, not capability, and the first user is an external OSS adopter — with the user themselves as the earliest.** The coordinator's audit of what stands between "our demo works" and "someone else can use this" found the hard part done: enforcement holds, proven under a manipulated agent. What is missing is the last mile, and three findings define it. **(a) You cannot install a version**: no tags, no releases, no published image; `go install …@<commit sha>` is the only path, and there is no upgrade story at all — no versioning doc, and eight migrations never tested across a version gap. **(b) There is no path to govern an agent you already have** — `kmx govern <agent>` handles the LLM seam generically, but every governed upstream is a hand-written RemoteMCPServer (`kaimahi-tools`/`-slack`/`-github`/`-erp`) plus a matching upstreams entry, and NOTHING documents adding your own MCP server or governing an agent you already run. Every governed agent in the repo is one we shipped, which is the line between a demo and a product. **(c) The security-review table stakes** from the agentdesktop note: nothing records who an agent acted FOR, and governed credentials never expire. Three lanes follow, in this order of value to the stated first user: **W28 "ship it"** (version, tag, release, a published install path, a documented upgrade with a migration test across a gap — unblocked by D34); **W29 "govern your own agent"** (a generic, documented, tested path for an arbitrary agent and an arbitrary MCP server) — needs its own shaping pass first, because what the generic path SHOULD be is a design question, not just work; **W30 "identity and expiry"**. W28 and W30 run in parallel (release plumbing versus plane internals — a clean split); W29 runs alone, with the coordinator's full attention, because it is the product-defining one and it touches the docs both others touch. Not in this arc, and said explicitly: Postgres HA, dashboards and alerts, secret rotation, and a policy-validation command — all real, none blocking a first adopter | "1 - naming is approved… 2 - this makes a great deal of sense. 3 - also a good thing to do 4 - also a good thing to do. I think we assume the first user is an external oss adopter, although it would be ideal if i personally could be a earlier user" |
 | D36 | 2026-09-03 | **PIVOT: developer experience is the product; governance is a feature of it. Kaimahi must be reachable from whatever harness the developer already uses.** Leadership feedback, relayed by the user: focus on making it easy to get a fully functioning agent deployed quickly, enable non-coding users to succeed, **"not to worry as much about the governance up front"**, and "ideally our tool/framework should be accessible via whatever harness the user is using to quickly move forward with creating the agent they want". Rulings: (1) **DX is the product, governance a feature** — every investment is now measured by time-to-a-working-agent, not time-to-a-governed-agent; (2) **governance is not front-loaded** — the fast path must work without it, and governance is something you turn on afterwards rather than a gate you pass through first; (3) **the harness is a first-class consumer** — a developer inside Claude Code, Codex or Cursor should be able to create and deploy an agent without leaving it, which makes Kaimahi something an agent DRIVES rather than only something a human types; (4) the three shaped lanes (W28 ship it, W29 govern your own agent, W30 identity and expiry) all proceed. **Consequences, stated once and accepted rather than relitigated:** this inverts D12 (governance plane as the incubated thesis) and cuts across D31(1), which had Kaimahi growing UP into permissions, boundaries and pass/fail scenarios while explicitly not building the experience — the board's positioning section and D31 now need rewriting rather than quiet supersession, and until they are, the board contradicts itself. It also weakens our answer to the deck's own opening question, "why not kagent alone?": on pure time-to-deployed-agent we are compared with kagent's quickstart and kagent-ui, where we are the thinner option, and the differentiator that survives that comparison is the one being de-emphasised. The prime directive still binds: "accessible from any harness" must not become a second implementation of what kagent or the harness already does. Recorded so that if the comparison bites later, the trade was visible when it was made | "specifically mentioned was not to worry as much about the governance up front. ideally our tool/framework should be accessible via whatever harness the user is using to quickly move forward with creating the agent they want"; ruled via options: "DX is the product; governance is a feature of it", "All three proceed as shaped" |
+| D37 | 2026-09-03 | **"Consumed" means `npx create-react-app`, for agents — and the coordinator's MCP recommendation is WITHDRAWN.** Leadership's example, relayed by the user: one command that helps a user, an agent, or anything else create the agent they want. That is a zero-install scaffolder, not a service: every harness can already run a shell command, so a command satisfies "accessible from whatever harness" with far less surface than an MCP server. MCP is deferred, not rejected — a command is the smaller and more testable thing to get right first. **The finding that reshapes the lane, measured rather than assumed: the scaffolding is not the gap.** `kmx agent create` already scaffolds reviewable YAML and applies it, and PR #16 (closed) was an earlier `npx` take on the same idea. The gap is the RUNTIME — today it is FIVE prerequisites (Go, Docker or Podman, kind, kubectl, Helm) and 5-10 minutes to a first answer, against `create-react-app`'s one prerequisite and about a minute. A scaffolder on top of a five-prerequisite ten-minute runtime is still a five-prerequisite ten-minute experience. So W31 is prerequisite and time reduction FIRST, packaging second, with two numbers reported before and after: time from one command to an agent answering, and how many things had to be installed. Killing the **Go** requirement is the first target, because it excludes every non-coding user and D34 now permits publishing a binary. Stated and accepted: this may not reduce far enough — Kubernetes is our runtime and `create-react-app`'s is `npm start` on a laptop — and if so, the lane's most valuable output is that finding WITH numbers, plus what would actually move it (a non-Kubernetes local runtime for the first agent, pointing at an existing cluster, or a hosted option), rather than a wrapper that hides a ten-minute wait behind a nicer command | "the example give was something like npx create-react-app, but instead of a react app we help the user / agent /whatever create an agent" |
 | D14 | 2026-09-01 | P5 direction: the **undeniable demo** — not a new capability arc but making the built one legible and credible. Rulings: (1) outbound connector platform is **Slack** (via existing MCP servers, no connector code); (2) AKS work goes all the way — cluster portability AND a real AKS deployment with evidence (accepts Azure spend + credentials in a worker session); (3) demos run on the **Copilot** preset while **CI stays keyless on ollama** (public fork-exposed repo — no repo secrets in CI, ever). Rationale on the board: everything governed so far protects an agent that lists ConfigMaps; posting to a channel humans read is the first consequential action, and it makes the approval gate the point rather than the plumbing | "sure, that's undeniable demo makes sense" — then ruled via options: "Slack (Recommended)", "Portability + real AKS run (Recommended)", "Copilot for demo, ollama for CI (Recommended)" |
 | D13 | 2026-09-01 | P4c approval model: TIME-BOXED PERMITS — a denied action files a pending request; approval grants it bounded (expiry by duration and/or use count) and compiles into the existing allowlist/budget rows; deny-and-retry mechanics, no held-open calls. Demo scenarios: tool-access widening (k8s_get_events, read-only) AND budget overage; the P3 tool-server read-only posture stays untouched (write-tool demo deferred) | ruled via options: "Time-boxed permits (Recommended)"; "Widen tool access (Recommended), Budget overage (Recommended)" |
 
@@ -2682,97 +2683,99 @@ stacked bases; lane ends at PR-open-with-checks-green — do not merge.
 Report deviations in the PR.
 ```
 
-### W31 — Kaimahi from inside the harness you are already in (UNASSIGNED — paste into a fresh CLI session; the D36 lane)
+### W31 — `create-kaimahi-agent`: from nothing to a working agent, fast (UNASSIGNED — paste into a fresh CLI session; the D36 lane)
 
 ```
 You are a worker session for the Kaimahi project (repo root: this
 checkout, remote kaimahi-agents/kaimahi). Read docs/COORDINATION.md
-first — **D36 above all**, then D19, D27, D31, D35, the "Positioning:
+first — **D36 and D37 above all**, then D19, D27, D34, the "Positioning:
 agentdesktop" section, the security standing guidance and the
-"Considered and rejected" list. Your lane is the one D36 created: a
-developer working inside Claude Code, Codex or Cursor should be able to
-go from "I want an agent that does X" to a running agent **without
-leaving that harness**, and without writing code.
+"Considered and rejected" list. Your lane: leadership's example is
+`npx create-react-app`, but for an agent. One command, run by a person
+or by an agent inside any harness, that ends with a working agent
+answering a question.
 
-Today `kmx` is a CLI a human types. D36 makes the harness a first-class
-consumer: Kaimahi should be something an agent DRIVES. Note what already
-points this way — #71 gave `kmx agent chat` a readable view for
-terminals and raw JSON for pipes. That instinct is the seed of this
-lane; extend it rather than inventing a parallel interface.
+**Read this before you plan, because it decides what the lane is
+about.** The scaffolding is not the gap — `kmx agent create` already
+writes reviewable YAML and applies it, and PR #16 (closed) was an
+earlier `npx` take on the same idea. The gap is the RUNTIME. Measured
+today: FIVE prerequisites (Go, Docker or Podman, kind, kubectl, Helm)
+and 5-10 minutes to a first answer. `create-react-app` needs Node and
+about a minute. **A scaffolder on top of a five-prerequisite,
+ten-minute runtime is still a five-prerequisite, ten-minute
+experience.** So this lane is prerequisite and time reduction first,
+packaging second.
 
-Survey first, and this is where the lane is won or lost (prime
-directive): the harness already has an agent, a model and a UI. kagent
-already deploys agents. **You are not building a second harness, a
-second chat loop, or a second agent runtime.** What is missing is that
-Kaimahi's verbs are not reachable from inside a harness in a form an
-agent can drive reliably. Read cmd/kmx and internal/kmx/app as merged
-(three milestones), docs/kmx.md, and the JSON path #71 added, and say in
-the PR what you reused.
+Your metric, and report it as a NUMBER in the PR, before and after, from
+a genuinely clean machine: **time from one command to an agent
+answering a question, and how many things had to be installed first.**
+Everything else in this lane is subordinate to moving those two.
 
-Decide, and justify in the PR, HOW the harness reaches us. The
-coordinator's read, to overrule with reasoning if the code disagrees:
-**an MCP server is the obvious answer** — it is the one interface every
-harness in the brief already speaks, it needs no per-harness plugin, and
-this project already knows how to write and govern MCP servers
-(k8s/erp-mcp.yaml is one we built). A per-harness plugin or a skill file
-serves one harness and dies with it. Whatever you choose, the same code
-must back the CLI and the harness path: one implementation (D27(1)), or
-the two drift and the CLI becomes the tested one while the harness path
-rots.
+Survey first (prime directive): kagent deploys agents, the harness has a
+chat loop, kagent-ui is a console. You are not rebuilding any of them.
+Read cmd/kmx and internal/kmx/app as merged, docs/getting-started.md's
+prerequisite table, W25's e2e timings (the bring-up costs are measured
+there: kind create ~56s, the model pull only ~16s, kagent's pods ~110s),
+and PR #16. Say what you reused.
 
-Build:
-- **The verbs a harness needs to get someone to a running agent**, not
-  all of them: create an agent from a description, deploy it, talk to
-  it, see what it did, tear it down. Read-only status and logs matter
-  more than you think — an agent driving this needs to see what
-  happened to decide what to do next.
-- **Every mutating verb states what it will do, and where, before it
-  does it.** The context guard's banner is the precedent and it is not
-  optional here: a harness driving Kaimahi is a machine acting on a
-  cluster, and "which cluster" must never be implicit.
-- **Structured output everywhere.** A harness parses; a human reads. #71
-  already made that split for chat — make it the rule, not the
-  exception, and make the structured form the contract you test.
-- **The fast path works with no governance at all (D36).** Getting to a
-  running agent must not require a plane, a credential or a policy
-  decision. The ungoverned state must be OBVIOUS — the existing
-  ungoverned-agent warning is the precedent — and turning governance on
-  afterwards is one further step, not a prerequisite.
-- **Non-coding success is a documentation deliverable, not only a code
-  one.** The doc is "describe the agent you want to your assistant, and
-  here is what happens". If following it requires reading YAML, say so
-  plainly rather than pretending otherwise.
+Build, in this order of value:
+- **Cut the prerequisites.** Go is the one to kill first: an entry point
+  that requires a Go toolchain excludes every non-coding user, and D34
+  now permits publishing, so a published binary or an `npx`-style
+  wrapper is open to you. Decide and justify which of Docker, kind,
+  kubectl and Helm can be removed, bundled, or fetched on demand the way
+  the pinned kagent CLI already is (checksum-verified — that precedent
+  binds anything you fetch).
+- **Cut the time**, with the measurements to prove it. W25 found the
+  bring-up is dominated by cluster creation and kagent's image pulls,
+  NOT the model. A pre-warmed node image, pre-pulled images, or a
+  lighter first-run profile are all fair game. So is deferring work: the
+  first answer does not need the second agent, the tools server or
+  anything the first question will not touch.
+- **One command, drivable by a machine.** It must work non-interactively
+  with no TTY, print structured output on request (the #71 precedent),
+  and be safe to run twice. An agent in a harness will run it, read the
+  output and decide what to do next.
+- **Governance is not in the way (D36).** The fast path needs no plane,
+  no credential and no policy. The ungoverned state must be OBVIOUS —
+  the existing ungoverned-agent warning is the precedent — and turning
+  governance on afterwards is one further step, documented, not a
+  prerequisite.
+- **An honest answer if the number will not move enough.** If the
+  Kubernetes prerequisite cannot be cut below what an adopter will
+  tolerate, say so with the measurements, and say what WOULD move it —
+  a non-Kubernetes local runtime for the first agent, pointing at a
+  cluster the user already has, or a hosted option. That finding, with
+  numbers, is worth more to the project than a wrapper that hides a
+  ten-minute wait behind a nicer command.
 
-Guardrails, all hard: **kmx accepts no credential material** (D27) and
-that rule matters more here, not less — a harness may be running with a
-user's tokens and must never be able to hand one to Kaimahi; every
-mutation through the context guard, including those driven by a machine;
-no client-go; nothing published (W28 owns release); no Azure or Slack
-identifiers; no repo secrets in CI. **A harness-driven path must not be
-able to do anything the CLI cannot** — if you find yourself adding a
-capability only reachable from the MCP surface, stop: that is a second
-implementation and a second attack surface.
+Guardrails, all hard: **kmx accepts no credential material** (D27), and
+that matters more when an agent in a harness is driving it, possibly
+holding a user's tokens; every mutation through the context guard,
+including machine-driven ones — "which cluster" is never implicit; a
+machine-driven path must not do anything the CLI cannot; anything
+fetched at runtime is checksum-verified, like the kagent CLI; no
+trademark assertion and free namespaces only (D34); no Azure or Slack
+identifiers; no repo secrets in CI.
 
-CI stays keyless (D14): unit tests for the structured contract (a
-harness parses it; changing it is a breaking change and must be caught),
-and an e2e that drives the harness path end to end — create, deploy,
-chat, status, down — with no human in it, because that is exactly how it
-will be used.
+CI stays keyless (D14): the fast path runs end to end in CI on a clean
+runner, non-interactively, and **the time is asserted** — a regression
+that doubles time-to-first-answer should turn CI red, because that is
+the number this lane exists to move.
 
-Out of scope: a runtime console (kagent-ui ships one — D31(2), which
-survives D36 because it is a prime-directive ruling, not a positioning
-one), the analyst workflow canvas, publishing (W28), identity and expiry
-(W30), and the generic tool-server onboarding path (W29 owns it — if
-your verbs need it, depend on it rather than duplicating it).
+Out of scope: a runtime console (kagent-ui ships one), the analyst
+workflow canvas, publishing mechanics (W28 owns release — depend on it),
+identity and expiry (W30), and the generic tool-server onboarding path
+(W29). An MCP surface for harnesses is a LATER question, not this lane:
+every harness can already run a command, and a command is the smaller,
+more testable thing to get right first.
 
-Verification is real: a transcript in the PR of a session in an actual
-harness — Claude Code is the obvious one, and you are running in it —
-going from a plain-language request to a running agent answering a
-question, with no file hand-edited and no command typed outside the
-harness. If that transcript needs a step the doc does not describe, the
-doc is wrong. Branch from current main; PR targets main; no stacked
-bases; lane ends at PR-open-with-checks-green — do not merge. Report
-deviations in the PR.
+Verification is real: a transcript in the PR from a clean machine or
+container — nothing installed, no checkout — running your one command
+and ending with an agent answering a question, with the elapsed time and
+the prerequisite count stated plainly beside the old numbers. Branch
+from current main; PR targets main; no stacked bases; lane ends at
+PR-open-with-checks-green — do not merge. Report deviations in the PR.
 ```
 
 ### W28 — ship it: a version somebody can install, and an upgrade that works (UNASSIGNED — paste into a fresh CLI session; PARALLEL with W30)
