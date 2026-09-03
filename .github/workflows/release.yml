@@ -141,15 +141,34 @@ jobs:
           # vcs.modified=true stamped into every binary.
           if [ "$SYNTHETIC" != true ]; then
             python3 scripts/release-notes.py "$VERSION" | tee "$NOTES"
-          elif python3 scripts/release-notes.py Unreleased > "$NOTES" 2>"$RUNNER_TEMP/notes.err"; then
-            echo "dry run: notes taken from the Unreleased section"
-            cat "$NOTES"
           else
-            # An empty Unreleased section is a real thing right after a
-            # release is cut, and it must not fail a rehearsal.
+            # Branch on WHICH failure, not on "it failed" — the same
+            # distinction the secret scan in ci.yml makes between grep's
+            # "no match" and "the scanner did not run". Exit 3 (NO_SECTION)
+            # is the only one a rehearsal may shrug off; anything else means
+            # the script or the changelog is broken, which is precisely what
+            # a dry run is for.
+            set +e
+            python3 scripts/release-notes.py Unreleased > "$NOTES" 2>"$RUNNER_TEMP/notes.err"
+            rc=$?
+            set -e
             cat "$RUNNER_TEMP/notes.err" >&2
-            echo "Dry run of $VERSION. Not published." > "$NOTES"
-            echo "dry run: no usable Unreleased section; using a placeholder"
+            case "$rc" in
+              0)
+                echo "dry run: notes taken from the Unreleased section"
+                cat "$NOTES"
+                ;;
+              3)
+                # An empty Unreleased section is a real thing right after a
+                # release is cut, and it must not fail a rehearsal.
+                echo "Dry run of $VERSION. Not published." > "$NOTES"
+                echo "dry run: no usable Unreleased section; using a placeholder"
+                ;;
+              *)
+                echo "release-notes.py failed with exit $rc — the release job is broken, which is what this dry run is for" >&2
+                exit "$rc"
+                ;;
+            esac
           fi
           test -s "$NOTES"
 

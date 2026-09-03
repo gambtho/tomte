@@ -13,15 +13,32 @@ does not get a changelog entry of its own.
 Usage:
   release-notes.py <version> [CHANGELOG.md]   print the section, or fail
   release-notes.py --selftest                 run the checks below
+
+Exit status, because the release job branches on it:
+
+  0  the notes are on stdout
+  1  the changelog could not be read at all
+  2  this script was called wrong
+  3  NO_SECTION — there is no section for that version, or it is empty
+
+Only 3 means "nothing written down yet", which is a state a dry run may
+tolerate. Every other nonzero status means this script or its input is
+broken, and a release job that swallowed those would be hiding exactly the
+failure a dry run exists to find.
 """
 
 from __future__ import annotations
 
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 HEADING = re.compile(r"^## +(?P<version>\S+)(?P<rest>.*)$", re.M)
+
+# The one failure a caller may treat as "nothing written down yet". Kept as a
+# named constant because .github/workflows/release.yml branches on the number.
+NO_SECTION = 3
 
 
 def base_version(version: str) -> str:
@@ -102,7 +119,27 @@ def selftest() -> int:
         return 1
     # The heading may carry a date or anything else after the version.
     assert "second" in notes(changelog, "v0.2.0")
-    print("release-notes self-test: extraction, pre-release fallback, and both refusals hold")
+
+    # The EXIT STATUS is an interface: the release job's dry run treats
+    # NO_SECTION as "nothing written down yet" and every other failure as a
+    # broken release job. Collapsing the two would let a missing or
+    # unparseable changelog pass as a successful rehearsal.
+    with tempfile.TemporaryDirectory() as tmp:
+        good = Path(tmp) / "CHANGELOG.md"
+        good.write_text(changelog)
+        codes = {
+            "a version with notes": (["v0.1.0", str(good)], 0),
+            "a version with no section": (["v9.9.9", str(good)], NO_SECTION),
+            "an empty section": (["Unreleased", str(Path(tmp) / "empty.md")], NO_SECTION),
+            "no changelog at all": (["v0.1.0", str(Path(tmp) / "absent.md")], 1),
+            "called with no arguments": ([], 2),
+        }
+        (Path(tmp) / "empty.md").write_text("# Changelog\n\n## Unreleased\n\n## v0.1.0\n\n- x\n")
+        for label, (args, want) in codes.items():
+            got = main(args)
+            assert got == want, f"{label}: exit {got}, want {want}"
+
+    print("release-notes self-test: extraction, pre-release fallback, both refusals, and the exit codes hold")
     return 0
 
 
@@ -115,10 +152,17 @@ def main(argv: list[str]) -> int:
     version = argv[0]
     path = Path(argv[1]) if len(argv) > 1 else Path(__file__).resolve().parents[1] / "CHANGELOG.md"
     try:
-        sys.stdout.write(notes(path.read_text(), version))
+        changelog = path.read_text()
+    except OSError as problem:
+        # Distinct from NO_SECTION on purpose: an unreadable changelog is a
+        # broken repository, not an undocumented version.
+        print(f"cannot read {path}: {problem}", file=sys.stderr)
+        return 1
+    try:
+        sys.stdout.write(notes(changelog, version))
     except ValueError as problem:
         print(problem, file=sys.stderr)
-        return 1
+        return NO_SECTION
     return 0
 
 
