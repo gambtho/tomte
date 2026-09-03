@@ -13,8 +13,11 @@
 
 ## Governance for AI agents running on Kubernetes.
 
-Kaimahi builds on [kagent](https://kagent.dev) rather than replacing it. It adds
-controls at the model and MCP boundaries for consequential agent work.
+Agents run on [kagent](https://kagent.dev); Kaimahi does not replace or
+reimplement it. What Kaimahi adds is its own: a governance plane that sits at
+every boundary an agent crosses — the models it calls, the tools it reaches,
+and the events that trigger it — so consequential work is metered, bounded and
+audited.
 
 ### Control model spend
 
@@ -31,6 +34,12 @@ per-credential tool allowlists, and an audit trail that includes denials.
 Turn a denied model or tool action into a pending request. Human approval issues
 a grant limited by expiry, use count, or both. The exception lapses when its
 limit is reached.
+
+### Govern what triggers an agent
+
+Let the outside world start an agent only through the plane: authenticated
+before any work, rate- and size-bounded, replay-protected, spending previewed
+against the budget, and each event consuming one bounded grant.
 
 <p align="center">
   <img src="docs/assets/architecture.svg"
@@ -224,8 +233,14 @@ grows the same way it started — as YAML you can diff:
 [`k8s/tools-agent.yaml`](k8s/tools-agent.yaml) is the P1 agent plus a
 `tools:` block wiring it to an MCP server, and the P1 artifact itself is
 never mutated. Agents run on kagent — declarative Kubernetes agents whose
-Agent CRD YAML *is* the topology artifact. Kaimahi is thin glue over `kind`,
-`helm`, `kubectl`, and the kagent CLI.
+Agent CRD YAML *is* the topology artifact.
+
+Kaimahi reimplements none of that: `kmx` and the Makefile drive `kind`,
+`helm`, `kubectl` and the kagent CLI rather than standing in for them. The
+governance plane is the part that is Kaimahi's own — a Go service with four
+listeners (model, MCP, inbound, admin) backed by Postgres, holding the
+credentials, budgets, allowlists, grants and audit trail that the runtime
+does not provide.
 
 ## Model endpoints
 
