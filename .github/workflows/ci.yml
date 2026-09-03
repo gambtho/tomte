@@ -1615,12 +1615,24 @@ jobs:
           # module-proxy build (plane/internal/metrics). Before that fix it
           # was "unknown" on exactly this path — the one path with no
           # checkout to compare against.
+          #
+          # The label is `version`, and the ops port serves /readyz — NOT
+          # /healthz, which lives on the data, gateway and admin listeners.
+          # Both were wrong in the first version of this step, which is how
+          # a green-looking assertion turns out to assert nothing; the
+          # pseudo-version's revision is the sha's first 12 characters.
           pod=$(kubectl --context kind-kmx-clone-free -n kaimahi get pods -l app=kaimahi-proxy \
             -o jsonpath='{.items[0].metadata.name}')
           kubectl --context kind-kmx-clone-free -n kaimahi port-forward "$pod" 19092:9092 >/dev/null 2>&1 &
-          for _ in $(seq 1 60); do curl -fsS -o /dev/null http://127.0.0.1:19092/healthz && break; sleep 0.5; done
+          for _ in $(seq 1 60); do curl -fsS -o /dev/null http://127.0.0.1:19092/readyz && break; sleep 0.5; done
           curl -fsS http://127.0.0.1:19092/metrics | grep '^kaimahi_build_info{' | tee build-info.out
-          grep -q "revision=\"${SHA:0:12}\"" build-info.out
+          grep -q "^kaimahi_build_info{.*version=\"${SHA:0:12}\"" build-info.out
+          # ...and prove the assertion can FAIL, on this line, in this job:
+          # a grep for a label that does not exist passes nothing, but a
+          # grep for the wrong VALUE must not pass either.
+          if grep -q "^kaimahi_build_info{.*version=\"0000deadbeef\"" build-info.out; then
+            echo "the build_info assertion matches any revision — it proves nothing"; exit 1
+          fi
       - name: govern — the credential, the presets, the switch
         if: steps.changes.outputs.docs_only != 'true'
         working-directory: /home/runner/journey
