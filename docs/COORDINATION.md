@@ -122,7 +122,7 @@ prefix.
 | P14: the AP demo live on AKS (D33) | W26 worker | PR #83 MERGED; coordinator verified teardown, the scanner, the kind path unchanged and the render's fail-closed cases (delta sheet below) | lane closed; ap-injection not run verbatim on AKS — deviation accepted, see sheet |
 | `kmx` milestone 3 — the core plane verbs (D28(3), D33) | W27 worker | PR #81 MERGED; coordinator verified live — wait_switched carried, a destructive backup/restore round trip, approvals showing the call (delta sheet below) | lane closed |
 | W28: ship it — version, release, a published install path, a documented upgrade (D34, D35) | unassigned | SHAPED 2026-09-03 — prompt below; PARALLEL with W30 | unblocked by D34; publishes to free namespaces only, asserts no trademark |
-| W29: govern your own agent — the generic onboarding path (D35) | unassigned | NEEDS SHAPING — no prompt yet; runs ALONE after W28/W30 | the product-defining gap: nothing documents adding your own MCP server or governing an agent you already run |
+| W29: govern your own agent — the generic onboarding path (D35) | unassigned | SHAPED 2026-09-03 — prompt below; runs ALONE | the product-defining gap: nothing documents adding your own MCP server or governing an agent you already run |
 | W30: identity on the call, and credentials that expire (D35) | unassigned | SHAPED 2026-09-03 — prompt below; PARALLEL with W28 | plane internals + a migration; the two security-review answers we do not have |
 | Brand assets + architecture diagram + org/front-door plans | user-run lane (outside the board's prompt set) | PR #33 MERGED (+ kaimahi-agents/.github#1); main CI green | brand validator in the hygiene job |
 | README front door + CONTRIBUTING.md | user-run lane (outside the board's prompt set) | PR #34 MERGED; main CI green | anchored front-door checker in hygiene: section order enforced, no `npx kaimahi create` mention before the quickstart ends — PR #16's README hunk must land under "A scaffolder CLI: considered, not built" (was "Proposed CLI direction" until D23) |
@@ -2764,6 +2764,103 @@ the quickstart end to end — transcript in the PR. Plus the upgrade test
 green in CI. Branch from current main; PR targets main; no stacked
 bases; lane ends at PR-open-with-checks-green — do not merge. Report
 deviations in the PR.
+```
+
+### W29 — govern your own agent: the generic onboarding path (UNASSIGNED — paste into a fresh CLI session; runs ALONE)
+
+```
+You are a worker session for the Kaimahi project (repo root: this
+checkout, remote kaimahi-agents/kaimahi). Read docs/COORDINATION.md
+first — decisions D19, D27, D29, D31 and especially **D35**, the P12 and
+P13 delta sheets, the security standing guidance and the "Considered and
+rejected" list all bind you. Your lane is the one that turns a demo into
+a product: **today every governed agent in this repo is one we shipped.**
+An adopter can run our demos and cannot point Kaimahi at their own work.
+
+The gap, established by the coordinator before this prompt was written,
+so you do not spend the lane rediscovering it: `kmx govern <agent>`
+handles the LLM seam generically and is fine. The TOOL seam is not.
+Onboarding one upstream today means hand-writing five things, none of
+them documented as a general procedure: a NetworkPolicy PAIR in
+k8s/plane/network-policy.yaml (proxy egress, server ingress); an entry
+in the upstreams ConfigMap; a `RemoteMCPServer` whose URL is
+`http://kaimahi-mcp-gateway.kaimahi:8081/upstream/<name>/mcp` and whose
+`headersFrom` names the agent-side Secret; a credential and its
+allowlist; and a patch pointing the agent's tools at it. Every
+`k8s/kaimahi-*.yaml` is one of these, written by hand, four times.
+
+Coordinator's rulings, so the shape is not relitigated mid-lane —
+overrule any of them in the PR with reasoning if the code disagrees:
+1. **Reviewable YAML is the artifact**, exactly as `kmx agent create`
+   already treats it (D19, milestone 1). kmx SCAFFOLDS the pieces, the
+   operator reads them, kmx applies them behind the guard. It does not
+   do this invisibly.
+2. **kmx owns what is mechanical and error-prone** — the gateway URL,
+   the `headersFrom` wiring, the NetworkPolicy pair, the credential and
+   the allowlist. A typo in that URL silently points an agent at the
+   wrong upstream or a 404, which is precisely what a human should not
+   be retyping.
+3. **The operator owns policy** — which tools are allowed, and the
+   `policy_fields` declaration. kmx must not guess these.
+4. **The `policy_fields` choice is the governance-critical moment of
+   onboarding and must be explicit.** No declaration binds the WHOLE
+   canonical argument object (exact but brittle); `"policy_fields": []`
+   is a verb-level binding, which is the WEAKEST setting and the one an
+   impatient operator will reach for. Make the tool state the
+   consequence of each at the point of choosing, and make the docs say
+   it plainly. An onboarding path that quietly produces weaker
+   governance than our demos is worse than no path.
+
+Build:
+- **A command that onboards an upstream** (`kmx tools add <name>` or
+  your justified alternative): takes the server's in-cluster URL and the
+  tools it offers, scaffolds the RemoteMCPServer, the NetworkPolicy pair
+  and the upstreams entry as reviewable YAML, and applies behind the
+  guard. `--out -` / `--no-apply` restore generate-don't-mutate, as
+  `kmx agent create` does. Never accepts a credential (D27).
+- **Validation before the proxy eats it.** Today a malformed upstreams
+  entry is discovered when the proxy refuses to load — after a restart,
+  in a rollout that fails. Add the check that runs BEFORE apply, and
+  make it the same code the proxy uses, not a second implementation.
+- **A documented path, end to end**: docs/govern-your-agent.md (or a
+  section, if you argue the guide belongs inside tool-governance.md) —
+  "you have an agent and an MCP server; here is how they become
+  governed", including what to choose for `policy_fields` and why, the
+  ungoverned-by-default warning, and how to verify it worked from the
+  audit rather than from hope.
+- **Prove it with a server that is NOT one of ours.** This is the whole
+  point: a proof that uses `kagent-tools`, `slack`, `github` or the demo
+  ERP proves nothing about arbitrary onboarding. P10 built a synthetic
+  upstream for CI (scripts/ci/synthetic-upstream.sh) — reuse it, or add
+  a deliberately plain one, and drive the documented path against it as
+  a stranger would.
+
+CI stays keyless (D14): the e2e gains the generic onboarding path
+end to end against that non-demo server — scaffold, validate, apply,
+issue, allowlist, call, audited — plus unit tests for the URL
+derivation, the NetworkPolicy pair, the validation's refusals, and the
+`policy_fields` prompt's behaviour when the operator declares nothing.
+
+Out of scope: per-agent multi-tenancy, a policy UI, publishing anything
+(W28 owns release), identity and credential expiry (W30 owns those), and
+anything on the AKS path. If W28 or W30 have merged before you branch,
+rebase onto them rather than working around them.
+
+Guardrails, all hard: no credential accepted by kmx in any form (D27);
+every mutation through the guard; the scaffolded NetworkPolicy is
+least-privilege — proxy to that server and that server from the proxy,
+nothing wider; no client-go; no Azure or Slack identifiers; no repo
+secrets in CI; the four existing upstreams keep working byte-identically
+— if your generic path cannot express one of them, say WHICH and why,
+because that is the most useful finding this lane can produce.
+
+Verification is real: a transcript in the PR where you onboard a server
+that did not exist before this lane, on a clean cluster, following YOUR
+OWN doc without deviating from it — and if you deviate, the doc is
+wrong and you fix the doc. Then a governed tool call through it, denied
+outside its allowlist, admitted inside, and both in the audit. Branch
+from current main; PR targets main; no stacked bases; lane ends at
+PR-open-with-checks-green — do not merge. Report deviations in the PR.
 ```
 
 ### W30 — identity on the call, and credentials that expire (UNASSIGNED — paste into a fresh CLI session; PARALLEL with W28)
