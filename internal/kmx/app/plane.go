@@ -5,10 +5,12 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"time"
 
@@ -400,17 +402,10 @@ func secretManifest(name, namespace string, values, annotations map[string]strin
 	return []byte(b.String())
 }
 
+// sortedKeys keeps the rendered document stable, so re-running a step
+// produces byte-identical YAML and `kubectl apply` reports no change.
 func sortedKeys(m map[string]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	for i := 1; i < len(keys); i++ {
-		for j := i; j > 0 && keys[j] < keys[j-1]; j-- {
-			keys[j], keys[j-1] = keys[j-1], keys[j]
-		}
-	}
-	return keys
+	return slices.Sorted(maps.Keys(m))
 }
 
 // ---- deploying ------------------------------------------------------------

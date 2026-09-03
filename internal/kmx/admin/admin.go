@@ -25,7 +25,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os/exec"
 	"strings"
@@ -211,18 +210,6 @@ func decode(body []byte) (map[string]any, error) {
 		return nil, fmt.Errorf("cannot read the plane's reply: %w", err)
 	}
 	return out, nil
-}
-
-// FreePort asks the kernel for an unused loopback port. Used when the
-// default is busy, so two kmx commands in parallel do not fight over it.
-func FreePort() (string, error) {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return "", err
-	}
-	defer l.Close()
-	_, port, err := net.SplitHostPort(l.Addr().String())
-	return port, err
 }
 
 // TokenFrom reads the issued token out of a credential-creation reply.

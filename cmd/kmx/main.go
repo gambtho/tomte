@@ -19,10 +19,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime/debug"
 	"strings"
 
 	"github.com/kaimahi-agents/kaimahi/internal/kmx/app"
 	"github.com/kaimahi-agents/kaimahi/internal/kmx/config"
+	"github.com/kaimahi-agents/kaimahi/internal/kmx/planebuild"
 )
 
 const usage = `kmx — create and run governed agents on Kubernetes.
@@ -89,8 +91,16 @@ func run(argv []string) error {
 		fmt.Print(usage)
 		return nil
 	case "version":
-		fmt.Printf("kmx (kaimahi milestone 2)\n  kagent   %s\n  model    %s\n  plane    %s\n",
-			config.DefaultKagentVersion, config.DefaultModel, app.PlaneImage)
+		// The plane's revision is kmx's own — that is the contract of the
+		// clone-free path — so print what `kmx plane` would fetch, or why
+		// it cannot. An operator asking "which plane will this deploy?"
+		// should not have to run a deploy to find out.
+		revision := "unknown (kmx plane needs --source <checkout>)"
+		if rev, err := planebuild.Revision(debug.ReadBuildInfo()); err == nil {
+			revision = rev
+		}
+		fmt.Printf("kmx (kaimahi milestone 2)\n  kagent   %s\n  model    %s\n  plane    %s, built from %s\n",
+			config.DefaultKagentVersion, config.DefaultModel, app.PlaneImage, revision)
 		return nil
 	}
 

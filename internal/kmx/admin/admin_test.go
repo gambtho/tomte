@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -36,6 +37,22 @@ func (f *fakeKube) Command(args ...string) *exec.Cmd {
 	// the port, so the health check succeeds exactly as it would through a
 	// real forward.
 	return exec.Command(f.sleep, "60")
+}
+
+// freePort asks the kernel for a loopback port nothing is listening on, so
+// the "the forward never came up" path can be exercised for real.
+func freePort(t *testing.T) string {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	_, port, err := net.SplitHostPort(l.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return port
 }
 
 func serve(t *testing.T, handler http.HandlerFunc) (*httptest.Server, string) {
@@ -132,10 +149,7 @@ func TestOpenFailsClosedWhenTheForwardNeverComesUp(t *testing.T) {
 	if err != nil {
 		t.Skip("no sleep binary")
 	}
-	port, err := FreePort()
-	if err != nil {
-		t.Fatal(err)
-	}
+	port := freePort(t)
 	k := &fakeKube{token: "t", sleep: sleep}
 	// Nothing is listening on the port and the "forward" exits at once.
 	k.sleep = "false"
@@ -249,9 +263,9 @@ func TestGrantsAndAuditsRenderLikeTheScript(t *testing.T) {
 	for _, want := range []string{
 		"live", "expires (UTC)", "decided by",
 		"hello-tools", "k8s_get_events",
-		" yes   ",               // liveness is a word, not a JSON bool
-		"0/1",                   // uses/max_uses
-		"2026-09-03T02:00:00.5", // expiry cut to 22 characters
+		" yes   ",              // liveness is a word, not a JSON bool
+		"0/1",                  // uses/max_uses
+		"2026-09-03T02:00:00 ", // expiry cut to the second, like every other timestamp
 	} {
 		if !strings.Contains(grants.String(), want) {
 			t.Errorf("grants output lacks %q:\n%s", want, grants.String())

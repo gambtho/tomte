@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/base64"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -159,5 +160,57 @@ func TestAForeignPlaneImageIsRefusedRatherThanIgnored(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "TARGET=aks") {
 		t.Errorf("the refusal does not name the path that does render: %v", err)
+	}
+}
+
+// Which source the plane is built from decides what a CI run proves. The
+// Makefile passes `--source .`; a developer inside a clone gets the same
+// answer without asking; a `go install` user gets the module proxy; and
+// `--source -` is how you test the proxy path from inside a checkout.
+func TestPlaneSourceSelection(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, "plane"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for path, body := range map[string]string{
+		"go.mod":       "module github.com/kaimahi-agents/kaimahi\n",
+		"plane/go.mod": "module github.com/kaimahi-agents/kaimahi/plane\n",
+	} {
+		if err := os.WriteFile(filepath.Join(repo, path), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := &App{Err: io.Discard}
+
+	got, err := a.planeSource(repo)
+	if err != nil || got != repo {
+		t.Errorf("--source <checkout>: got %q, %v", got, err)
+	}
+
+	// "-" forces the clone-free path even standing inside a checkout, which
+	// is the only way to exercise the fetch from a development machine.
+	if got, err := a.planeSource("-"); err != nil || got != "" {
+		t.Errorf(`--source -: got %q, %v; want the module proxy`, got, err)
+	}
+
+	// A path that is not this repository is refused, not silently treated
+	// as "no source" and fetched instead: the operator asked for a build of
+	// something specific and did not get it.
+	notARepo := t.TempDir()
+	if _, err := a.planeSource(notARepo); err == nil {
+		t.Errorf("--source %s was accepted", notARepo)
+	} else if !strings.Contains(err.Error(), "not a checkout") {
+		t.Errorf("unhelpful refusal: %v", err)
+	}
+
+	// No flag, run from inside a checkout: found.
+	t.Chdir(filepath.Join(repo, "plane"))
+	if got, err := a.planeSource(""); err != nil || got != repo {
+		t.Errorf("auto-detection from inside the checkout: got %q, %v; want %q", got, err, repo)
+	}
+	// No flag, run from somewhere that is not a checkout: the module proxy.
+	t.Chdir(notARepo)
+	if got, err := a.planeSource(""); err != nil || got != "" {
+		t.Errorf("auto-detection outside a checkout: got %q, %v; want the module proxy", got, err)
 	}
 }

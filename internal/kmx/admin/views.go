@@ -63,7 +63,10 @@ func (c *Client) Grants(out io.Writer, credential string) error {
 		fmt.Fprintf(out, grantsFmt,
 			str(g["id"]), str(g["credential"]), str(g["kind"]), str(g["subject"]),
 			yesno(g["live"]),
-			trunc(dash(g["expires_at"]), 22), uses, dash(g["amount"]),
+			// [:19] inside a 22-wide column, exactly as the script slices
+			// it: an expiry is printed to the second, and the extra width
+			// is the gap before the next column.
+			trunc(dash(g["expires_at"]), 19), uses, dash(g["amount"]),
 			trunc(str(g["created_at"]), 19), dash(g["decided_by"]))
 	}
 	return nil

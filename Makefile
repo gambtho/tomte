@@ -696,15 +696,11 @@ plane: guard plane-image plane-secrets
 endif
 
 ifeq ($(TARGET),kind)
-# `kind load docker-image` does not work against podman here: kind reports
-# "image not present locally" for images podman demonstrably has (verified
-# with podman 5.8.1 / kind 0.27.0 — even `alpine` was invisible to it).
-# Piping an archive is the engine-agnostic path and is what kind documents
-# for non-docker providers, so podman saves and kind loads the archive.
-# Docker keeps the direct load: it works, and it skips writing a ~19MB
-# tarball on every build.
-# kmx builds the image and side-loads it, engine-aware (the podman archive
-# path above moved into internal/kmx/app/plane.go with its reason).
+# kmx builds the image and side-loads it. The engine-aware load this recipe
+# used to spell out — podman saves an archive because `kind load
+# docker-image` cannot see podman's images, docker loads directly because it
+# can and it skips a ~19MB tarball — moved into internal/kmx/app/plane.go
+# with its reason attached.
 plane-image: $(KMX)
 	@$(KMX_ENV) $(KMX) plane --step image --source .
 else
@@ -738,6 +734,8 @@ endif
 # managed cluster governance is stood up BEFORE the agents, because the
 # agents have no keyless model to start on. On kind the agent always
 # exists by this point, so the path taken is the one it always was.
+# On kind this is kmx's, waits and NotFound discrimination included; the
+# managed path below is unchanged (D28(4): kmx is kind only).
 ifeq ($(TARGET),kind)
 govern: $(KMX)
 	@$(KMX_ENV) $(KMX) govern $(CRED) --agent hello-world --preset $(GOVERNED_PRESET)

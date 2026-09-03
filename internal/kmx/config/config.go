@@ -162,17 +162,13 @@ func CacheDir() (string, error) {
 // on the clone-free path. It is kmx's own directory rather than the
 // operator's GOBIN, so building the plane never lands a binary on top of
 // something they installed themselves.
-func PlaneCacheDir() (string, error) {
+func (c *Config) PlaneCacheDir() (string, error) {
 	dir, err := stateDir()
 	if err != nil {
 		return "", err
 	}
 	return filepath.Join(dir, "plane-bin"), nil
 }
-
-// PlaneCacheDir is the method form, so callers already holding a Config do
-// not have to reach for the package.
-func (c *Config) PlaneCacheDir() (string, error) { return PlaneCacheDir() }
 
 // ReadSelectedContext returns the context chosen by `kmx ctx`, or "".
 func ReadSelectedContext() (string, error) {
