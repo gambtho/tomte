@@ -1499,7 +1499,9 @@ jobs:
             EXPECT=400 EXPECT_BODY='duplicate JSON key' bash scripts/tool-raw-probe.sh \
             '{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "pay_invoice", "arguments": {"amount_cents": 1, "amount_cents": 9900000}}}'
           make github-audit | tee dup-audit.out
-          grep -E 'hello-github +mcp-echo +tools/call .*denied +400 +request body carries a duplicate JSON key' dup-audit.out
+          # The refusal happens BEFORE the method is known, so the row
+          # carries no method or tool — only that the body was refused.
+          grep -E 'hello-github +mcp-echo +denied +400 +request body carries a duplicate JSON key' dup-audit.out
       - name: "Hosted upstreams: the record rebinds to the server's private address → the dialer refuses before any byte leaves, audited"
         if: steps.changes.outputs.docs_only != 'true'
         run: |
