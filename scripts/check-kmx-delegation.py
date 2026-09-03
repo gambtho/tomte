@@ -49,17 +49,16 @@ OWNED = {
 # in an environment prefix and `--kube-context` in an argument do not match.
 CLUSTER_TOOL = re.compile(r"(?:^|[;&|(]\s*|^\s*)(kubectl|helm|kind)\s", re.M)
 
-# Lines that legitimately appear in an owned recipe.
-ALLOWED = (
-    re.compile(r"\bgo build\b"),
-    re.compile(r"\bcommand -v go\b"),
-    # The pinned kagent CLI fetch: shared with slack-post and github-ask,
-    # which are still make's, and handed to kmx as KAGENT=bin/kagent so a
-    # checkout keeps one binary. Anchored to the release URL rather than the
-    # word "kagent", which would exempt any line that merely mentions it.
-    re.compile(r"github\.com/kagent-dev/kagent/releases/download"),
-    re.compile(r"^\s*(curl|chmod|mkdir|test|sum=|echo|rm -f bin/kagent)"),
-)
+# There is deliberately no allow-list of "safe" lines.
+#
+# There was one, and it was the bug: an exemption that matched the START of a
+# line (`curl …`, `go build …`) exempted the WHOLE line, so
+# `curl … && kubectl apply -f extra.yaml` passed. Every legitimate line in
+# these recipes — the kmx build, the pinned kagent fetch — runs no cluster
+# tool at all, so the rule needs no exceptions: a line that puts kubectl, helm
+# or kind in command position is a re-implementation, whatever else it does.
+# The same mistake in the other direction (exempting a line because it
+# mentions kmx) is covered by the self-test below.
 
 # The kmx invocation inside a recipe line, and everything it was asked to do.
 KMX_CALL = re.compile(r"\bbin/kmx\s+(?P<args>.*)$")
@@ -80,15 +79,15 @@ def kmx_invocations(recipe: str) -> list[str]:
 def offending_lines(recipe: str) -> list[str]:
     """Lines in an owned recipe that reach the cluster without kmx.
 
-    A line is NOT exempted just because it mentions kmx: `$(KMX) up --step
+    Nothing exempts a line from this: not mentioning kmx (`$(KMX) up --step
     ollama && kubectl apply -f extra.yaml` delegates and re-implements at the
-    same time, which is the shape that would drift.
+    same time), and not starting with something harmless (`curl … && kubectl
+    apply -f extra.yaml`). Both are the shape that would drift, and both
+    slipped past earlier versions of this check.
     """
     bad = []
     for line in recipe.splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        if any(pattern.search(line) for pattern in ALLOWED):
             continue
         if CLUSTER_TOOL.search(line):
             bad.append(line.strip())
@@ -165,6 +164,12 @@ SELFTEST = [
     # that merely mentions kagent-dev is still checked.
     ("a kubectl on a file named after kagent-dev", "kubectl apply -f kagent-dev-values.yaml",
      ["kubectl apply -f kagent-dev-values.yaml"]),
+    # …and one chained after a line that starts harmlessly. A leading `curl`
+    # or `go build` used to exempt the whole line.
+    ("a kubectl chained after curl", "curl -sSfLo bin/kagent https://example/x && kubectl apply -f extra.yaml",
+     ["curl -sSfLo bin/kagent https://example/x && kubectl apply -f extra.yaml"]),
+    ("a helm chained after go build", "go build -o bin/kmx ./cmd/kmx; helm upgrade --install x oci://y",
+     ["go build -o bin/kmx ./cmd/kmx; helm upgrade --install x oci://y"]),
 ]
 
 # `up` is a prefix of `up --step cluster`, so a substring search would say the
