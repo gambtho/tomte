@@ -36,8 +36,9 @@ config:
 ---
 flowchart TB
     accTitle: Kaimahi governance architecture
-    accDescr: A Kubernetes-hosted agent uses Kaimahi's governed model and tool paths, while dashed direct paths are explicitly ungoverned.
+    accDescr: A Kubernetes-hosted agent reaches models and tools through Kaimahi's governed paths, and external events reach the agent through Kaimahi's governed inbound bridge, while dashed direct paths are explicitly ungoverned.
 
+    W["External event<br/>webhook"]
     A["Kubernetes-hosted<br/>agent"]
 
     subgraph K[" "]
@@ -46,9 +47,11 @@ flowchart TB
       P["Bounded approvals<br/>expiry and/or use count"]
       L["LLM proxy<br/>auth · budgets<br/>credential custody<br/>spend ledger"]
       T["MCP gateway<br/>request auth · allowlists<br/>upstream bounds · audit<br/>proxy-side credential custody<br/>credential injection<br/>(keyed upstreams only)"]
+      N["Inbound bridge<br/>auth before any work<br/>rate and size bounds<br/>replay protection<br/>budget preview · audit"]
       H ~~~ P
       P -. "temporary grant" .-> L
       P -. "temporary grant" .-> T
+      P -. "temporary grant" .-> N
     end
 
     subgraph E[" "]
@@ -57,6 +60,8 @@ flowchart TB
       X["MCP tool server"]
     end
 
+    W -->|"governed<br/>trigger"| N
+    N -->|"invoke"| A
     A -->|"governed<br/>model call"| L
     A -->|"governed<br/>tool call"| T
     L --> M
@@ -70,14 +75,15 @@ flowchart TB
     classDef target fill:#F7F4E8,color:#071827,stroke:#60A5FA,stroke-width:3px,font-size:20px,font-weight:bold;
     classDef heading fill:transparent,color:#F7F4E8,stroke:transparent,font-size:20px,font-weight:bold;
     class A agent;
-    class L,T control;
+    class L,T,N control;
     class P approval;
     class H heading;
     class M,X target;
+    class W target;
     style K fill:#0D2947,stroke:#24D6D9,stroke-width:3px,color:#F7F4E8
     style E fill:transparent,stroke:transparent
     linkStyle 0 stroke:transparent,fill:none;
-    linkStyle 1,2 stroke:#FFB547,color:#FFF1B3,stroke-width:3px,stroke-dasharray:7 5;
-    linkStyle 3,4 stroke:#24D6D9,color:#F7F4E8,stroke-width:4px;
-    linkStyle 5,6 stroke:#60A5FA,color:#F7F4E8,stroke-width:4px;
-    linkStyle 7,8 stroke:#FFB547,color:#FFF1B3,stroke-width:3px,stroke-dasharray:9 6;
+    linkStyle 1,2,3 stroke:#FFB547,color:#FFF1B3,stroke-width:3px,stroke-dasharray:7 5;
+    linkStyle 4,5,6,7 stroke:#24D6D9,color:#F7F4E8,stroke-width:4px;
+    linkStyle 8,9 stroke:#60A5FA,color:#F7F4E8,stroke-width:4px;
+    linkStyle 10,11 stroke:#FFB547,color:#FFF1B3,stroke-width:3px,stroke-dasharray:9 6;

@@ -34,7 +34,7 @@ limit is reached.
 
 <p align="center">
   <img src="docs/assets/architecture.svg"
-       alt="A Kubernetes agent routes model calls through the Kaimahi LLM proxy and tool calls through its MCP gateway; bounded approvals can widen either path temporarily">
+       alt="A Kubernetes agent routes model calls through the Kaimahi LLM proxy and tool calls through its MCP gateway, and external events reach the agent through its inbound bridge; bounded approvals can widen any of the three paths temporarily">
 </p>
 
 Governance is opt-in per agent. The documentation identifies ungoverned paths
