@@ -204,19 +204,8 @@ func (c *Client) Deny(id string) error {
 // "any call". The plane computes the digest with the gateway's own code, so
 // the request and the agent's retry are provably the same call.
 func (c *Client) Request(credential, kind, subject string, args map[string]any) (bool, error) {
-	if err := ValidCredentialName(credential); err != nil {
+	if err := ValidRequest(credential, kind, subject, args); err != nil {
 		return false, err
-	}
-	switch kind {
-	case "tool", "budget", "inbound":
-	default:
-		return false, fmt.Errorf("kind must be tool, budget or inbound")
-	}
-	if err := namePart("subject", subject); err != nil {
-		return false, err
-	}
-	if args != nil && kind != "tool" {
-		return false, fmt.Errorf("--args is meaningful only on tool requests")
 	}
 	body := map[string]any{"credential": credential, "kind": kind, "subject": subject}
 	if args != nil {
@@ -235,6 +224,31 @@ func (c *Client) Request(credential, kind, subject string, args map[string]any) 
 	}
 	deduped, _ := doc["deduped"].(bool)
 	return deduped, nil
+}
+
+// ValidRequest is the shape check in front of a filing. It is exported so
+// the command layer can run it BEFORE the guard and the port-forward: a
+// mistyped subject should fail on the spot, not after an operator has
+// confirmed a context for it.
+func ValidRequest(credential, kind, subject string, args map[string]any) error {
+	if err := ValidCredentialName(credential); err != nil {
+		return err
+	}
+	switch kind {
+	case "tool", "budget", "inbound":
+	default:
+		return fmt.Errorf("kind must be tool, budget or inbound")
+	}
+	if err := namePart("subject", subject); err != nil {
+		return err
+	}
+	// The arguments name the CALL a TOOL request is about. On a budget or
+	// inbound request there is no call to name, so accepting them would be
+	// accepting something the plane cannot act on.
+	if args != nil && kind != "tool" {
+		return fmt.Errorf("--args is meaningful only on tool requests")
+	}
+	return nil
 }
 
 // expect performs a mutation and refuses anything but the well-formed

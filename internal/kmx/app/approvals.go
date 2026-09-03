@@ -100,6 +100,9 @@ func (a *App) Deny(id string) error {
 // means the ARGUMENT-LESS call, never "any call" — the distinction the whole
 // of P12 exists to make.
 func (a *App) Request(credential, kind, subject string, args map[string]any) error {
+	if err := admin.ValidRequest(credential, kind, subject, args); err != nil {
+		return err
+	}
 	if err := a.Guard(fmt.Sprintf("file a %s approval request for %q (%s)", kind, credential, subject),
 		fmt.Sprintf("kmx request %s %s", kind, subject)); err != nil {
 		return err
