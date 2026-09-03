@@ -251,7 +251,7 @@ for e in rows:
         call = (call + " ") if call else ""
         call += "[" + e["arg_digest"][:12] + "]"
     print(fmt % (e["created_at"][:19], e["credential"], e["upstream"], e["method"],
-                 e["tool"], e["decision"], e["status"], e["detail"][:44], call or "-"))
+                 e["tool"], e["decision"], e["status"], e["detail"], call or "-"))
 EOF
     ;;
   approvals)
@@ -270,7 +270,7 @@ for r in rows:
     # The call (P12) is what a human is actually approving: an approver
     # who cannot see the transaction is the whole problem restated.
     print(fmt % (r["id"], r["created_at"][:19], r["credential"], r["kind"], r["subject"],
-                 r["detail"][:34], r.get("arg_summary") or "-"))
+                 r["detail"], r.get("arg_summary") or "-"))
 EOF
     ;;
   approve)
@@ -399,7 +399,7 @@ fmt = "%-19s %-12s %-8s %-18s %-10s %-18s %-40s %s"
 print(fmt % ("created (UTC)", "credential", "kind", "subject", "action", "decided by", "bounds", "call"))
 for e in rows:
     print(fmt % (e["created_at"][:19], e["credential"], e["kind"], e["subject"], e["action"],
-                 e.get("decided_by") or "-", e["bounds"][:40], e.get("arg_summary") or "-"))
+                 e.get("decided_by") or "-", e["bounds"], e.get("arg_summary") or "-"))
 EOF
     ;;
   inbound-audit)
