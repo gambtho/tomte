@@ -28,6 +28,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 )
 
@@ -142,6 +143,20 @@ func (p PolicySet) Constraints(credential, tool string) (cs []Constraint, ok boo
 	}
 	cs, ok = byTool[tool]
 	return cs, ok
+}
+
+// ConstrainedTools lists the tools a credential carries standing
+// constraints for, sorted. They are callable right now for arguments
+// inside those bounds, so the gateway includes them in the tools/list
+// projection the way live grants are included.
+func (p PolicySet) ConstrainedTools(credential string) []string {
+	byTool := p.constraints[credential]
+	out := make([]string, 0, len(byTool))
+	for tool := range byTool {
+		out = append(out, tool)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Satisfied reports whether a call's canonical arguments are inside a

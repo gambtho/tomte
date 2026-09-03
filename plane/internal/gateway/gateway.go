@@ -68,14 +68,22 @@ type Store interface {
 	// P4c approvals: bounded grants admit tools outside the static
 	// allowlist (consuming a use, liveness evaluated in SQL at call
 	// time), and a denial files a pending approval request.
-	ConsumeToolGrant(ctx context.Context, credential, tool string) (grantID string, ok bool, err error)
+	// P12: a grant admits one CALL — the digest of its canonical policy
+	// fields must match — and a filed request carries that call.
+	ConsumeToolGrant(ctx context.Context, credential, tool, argDigest string) (grantID string, ok bool, err error)
 	LiveToolGrantSubjects(ctx context.Context, credential string) ([]string, error)
-	FileApprovalRequest(ctx context.Context, credential, kind, subject, detail string) (filed bool, err error)
+	FileApprovalRequest(ctx context.Context, f store.Filing) (filed bool, err error)
 }
 
 type Deps struct {
 	Store     Store
 	Upstreams map[string]config.ToolUpstream
+	// Policy (P12) is the argument-policy surface built from the same
+	// committed config: which argument fields each tool declares
+	// policy-relevant, and the standing constraints each credential
+	// carries on them. The zero value declares and constrains nothing,
+	// which is exactly P4b/P4c behaviour.
+	Policy config.PolicySet
 	// Client makes IN-CLUSTER upstream calls. Nil gets a default that
 	// never FOLLOWS a redirect (standing guidance); the relay paths then
 	// refuse the 3xx itself with a 502. Calls are bounded at 5 minutes.
@@ -165,6 +173,8 @@ func reasonFor(status int, msg string) metrics.Reason {
 		return metrics.ReasonCredentialStore
 	case strings.HasPrefix(msg, "tool not permitted"):
 		return metrics.ReasonAllowlist
+	case strings.HasPrefix(msg, "tool call not permitted"):
+		return metrics.ReasonConstraint
 	case strings.HasPrefix(msg, "method not relayed"):
 		return metrics.ReasonMethod
 	case status == http.StatusUnauthorized:
@@ -189,6 +199,26 @@ func (h *handler) rpcDeny(w http.ResponseWriter, r *http.Request, cred store.Cre
 	upstream, method, tool string, id json.RawMessage, code int, msg string) {
 	h.audit(r, store.ToolAuditEntry{CredentialName: cred.Name, Upstream: upstream,
 		Method: method, Tool: tool, Decision: "denied", Status: http.StatusForbidden, Detail: msg})
+	metrics.Decide(metrics.SeamGateway, metrics.Denied, reasonFor(http.StatusForbidden, msg))
+	if len(id) == 0 {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+	writeRPC(w, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"error":   map[string]any{"code": code, "message": msg},
+	})
+}
+
+// rpcDenyCall is rpcDeny for a tools/call: the denial row carries the
+// digest and summary of the call that was refused, so a denied attempt
+// and the approval it files describe the same transaction.
+func (h *handler) rpcDenyCall(w http.ResponseWriter, r *http.Request, cred store.Credential,
+	upstream, method, tool string, b CallBinding, id json.RawMessage, code int, msg string) {
+	h.audit(r, store.ToolAuditEntry{CredentialName: cred.Name, Upstream: upstream,
+		Method: method, Tool: tool, Decision: "denied", Status: http.StatusForbidden, Detail: msg,
+		ArgDigest: b.Digest, ArgSummary: b.Summary})
 	metrics.Decide(metrics.SeamGateway, metrics.Denied, reasonFor(http.StatusForbidden, msg))
 	if len(id) == 0 {
 		w.WriteHeader(http.StatusAccepted)
@@ -310,34 +340,67 @@ func (h *handler) relay(w http.ResponseWriter, r *http.Request) {
 			h.httpDeny(w, r, cred, name, method, "", http.StatusBadRequest, "tools/call params carry no tool name")
 			return
 		}
+		// P12: arguments are policy inputs now, so they must be an object
+		// the plane can read. Anything else is refused rather than
+		// forwarded unexamined.
+		args, ok := argumentsOf(msg)
+		if !ok {
+			h.httpDeny(w, r, cred, name, method, tool, http.StatusBadRequest, "tools/call arguments must be a JSON object")
+			return
+		}
+		fields, declared := h.d.Policy.Declared(tool)
+		bind := Bind(tool, args, fields, declared)
+
 		allowed, ok := h.allowlist(w, r, cred, name, method)
 		if !ok {
 			return
 		}
-		detail := ""
-		if !slices.Contains(allowed, tool) {
-			// Outside the static allowlist: a live time-boxed grant
-			// (P4c) can still admit the call, consuming one use — the
-			// use is consumed before the forward, so an upstream
-			// failure burns it (conservative direction).
-			grantID, ok, err := h.d.Store.ConsumeToolGrant(r.Context(), cred.Name, tool)
+
+		// Three ways a call is admitted, in order:
+		//   1. a STANDING CONSTRAINT (D31) the call is inside — routine
+		//      traffic proceeds with no human, and no grant is burned;
+		//   2. the static allowlist — but ONLY where no constraint exists
+		//      for this credential and tool, because a constraint is a
+		//      BOUND ("may call payment_schedule when amount_cents <=
+		//      1000000, and never otherwise"), not merely another way in;
+		//   3. a live grant welded to THIS call's digest (P4c + P12).
+		// Anything else is denied and files a request carrying the call.
+		detail, outside := "", ""
+		admitted := false
+		if cs, constrained := h.d.Policy.Constraints(cred.Name, tool); constrained {
+			if inside, why := config.Satisfied(cs, args); inside {
+				admitted, detail = true, "within standing constraint"
+			} else {
+				outside = why
+			}
+		} else if slices.Contains(allowed, tool) {
+			admitted = true
+		}
+		if !admitted {
+			// The use is consumed before the forward, so an upstream
+			// failure burns it (conservative direction, unchanged).
+			grantID, ok, err := h.d.Store.ConsumeToolGrant(r.Context(), cred.Name, tool, bind.Digest)
 			if err != nil {
 				slog.Error("gateway: grant check failed", "credential", cred.Name, "tool", tool, "err", err)
 				h.httpDeny(w, r, cred, name, method, tool, http.StatusServiceUnavailable, "grant check unavailable")
 				return
 			}
 			if !ok {
-				// Deny-and-pend (D13): the denial stands AND files a
-				// pending approval request (deduped per credential/
-				// kind/subject). A filing failure never un-denies and
-				// never trips the breaker — denial is the safe state.
-				denyMsg := "tool not permitted by the Kaimahi allowlist"
-				if h.fileRequest(r, cred.Name, "tool", tool,
-					"denied tools/call via upstream "+name) {
+				// Deny-and-pend (D13), now carrying the CALL: the request
+				// and its dedup key hold the digest and the summary, so two
+				// attempts with different policy-relevant arguments file TWO
+				// requests and one approval can never cover both. A filing
+				// failure never un-denies and never trips the breaker.
+				denyMsg := "tool not permitted by the Kaimahi allowlist for this call"
+				if outside != "" {
+					denyMsg = "tool call not permitted: outside the standing constraint (" + outside + ")"
+				}
+				filed := store.Filing{Credential: cred.Name, Kind: "tool", Subject: tool,
+					Detail: "denied tools/call via upstream " + name, ArgDigest: bind.Digest, ArgSummary: bind.Summary}
+				if h.fileRequest(r, filed) {
 					denyMsg += "; approval request filed — run 'make approvals'"
 				}
-				h.rpcDeny(w, r, cred, name, method, tool, id,
-					codeToolNotPermitted, denyMsg)
+				h.rpcDenyCall(w, r, cred, name, method, tool, bind, id, codeToolNotPermitted, denyMsg)
 				return
 			}
 			detail = "granted " + grantID
@@ -346,8 +409,10 @@ func (h *handler) relay(w http.ResponseWriter, r *http.Request) {
 		out := h.forward(w, r, name, up, body)
 		metrics.ObserveUpstream(metrics.SeamGateway, name, time.Since(started))
 		switch {
-		case detail != "":
+		case strings.HasPrefix(detail, "granted "):
 			metrics.Decide(metrics.SeamGateway, metrics.Granted, metrics.ReasonGrant)
+		case detail != "":
+			metrics.Decide(metrics.SeamGateway, metrics.Allowed, metrics.ReasonConstraint)
 		case out.refused:
 			metrics.Decide(metrics.SeamGateway, metrics.Allowed, metrics.ReasonEgressRefused)
 		case out.status >= 200 && out.status < 300:
@@ -357,9 +422,10 @@ func (h *handler) relay(w http.ResponseWriter, r *http.Request) {
 		default:
 			metrics.Decide(metrics.SeamGateway, metrics.Allowed, metrics.ReasonUpstreamError)
 		}
-		// The audit row carries the grant (if any) AND what became of the
-		// forward — an egress refusal or a cut body is recorded on the
-		// row of the call it happened to, not only in a log line.
+		// The audit row carries how the call was admitted (a constraint, a
+		// grant, or the allowlist), the digest and summary of the call
+		// itself — so the approved call and the call that ran are provably
+		// the same one — AND what became of the forward.
 		if out.note != "" {
 			if detail != "" {
 				detail += "; "
@@ -367,7 +433,8 @@ func (h *handler) relay(w http.ResponseWriter, r *http.Request) {
 			detail += out.note
 		}
 		h.audit(r, store.ToolAuditEntry{CredentialName: cred.Name, Upstream: name,
-			Method: method, Tool: tool, Decision: "allowed", Status: out.status, Detail: detail})
+			Method: method, Tool: tool, Decision: "allowed", Status: out.status, Detail: detail,
+			ArgDigest: bind.Digest, ArgSummary: bind.Summary})
 
 	default:
 		h.rpcDeny(w, r, cred, name, method, "", id,
@@ -435,6 +502,15 @@ func (h *handler) projectable(w http.ResponseWriter, r *http.Request, cred store
 			allowed = append(allowed, g)
 		}
 	}
+	// P12: a tool this credential carries a standing constraint for is
+	// callable right now for arguments inside those bounds, so it is
+	// visible too — the same "visible means callable" rule live grants
+	// follow.
+	for _, c := range h.d.Policy.ConstrainedTools(cred.Name) {
+		if !slices.Contains(allowed, c) {
+			allowed = append(allowed, c)
+		}
+	}
 	return allowed, true
 }
 
@@ -442,12 +518,12 @@ func (h *handler) projectable(w http.ResponseWriter, r *http.Request, cred store
 // (a client disconnect must not drop the filing). Reports whether a
 // request is now pending — freshly filed or already deduped both count;
 // only a store failure (logged) reports false.
-func (h *handler) fileRequest(r *http.Request, credential, kind, subject, detail string) bool {
+func (h *handler) fileRequest(r *http.Request, f store.Filing) bool {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
 	defer cancel()
-	if _, err := h.d.Store.FileApprovalRequest(ctx, credential, kind, subject, detail); err != nil {
+	if _, err := h.d.Store.FileApprovalRequest(ctx, f); err != nil {
 		slog.Error("gateway: filing approval request failed (denial stands)",
-			"credential", credential, "kind", kind, "subject", subject, "err", err)
+			"credential", f.Credential, "kind", f.Kind, "subject", f.Subject, "err", err)
 		return false
 	}
 	return true

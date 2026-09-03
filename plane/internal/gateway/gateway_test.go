@@ -32,7 +32,11 @@ type fakeStore struct {
 	toolGrants map[string]int
 	grantErr   error
 	filed      []string // "kind/subject" of filed requests
+	filings    []store.Filing
 	fileErr    error
+	// grantDigest, when set, is the call the fake's grants are welded to;
+	// empty stands for a legacy verb-level grant.
+	grantDigest string
 }
 
 func (f *fakeStore) CredentialByTokenHash(_ context.Context, hash []byte) (store.Credential, error) {
@@ -58,11 +62,15 @@ func (f *fakeStore) RecordToolAudit(_ context.Context, e store.ToolAuditEntry) e
 	return nil
 }
 
-func (f *fakeStore) ConsumeToolGrant(_ context.Context, _, tool string) (string, bool, error) {
+// ConsumeToolGrant mirrors the store: a tool grant admits one CALL, so
+// the digest must match the one the grant was minted for (P12). A grant
+// registered with an empty digest is the closed legacy class — a
+// verb-level grant that predates argument binding.
+func (f *fakeStore) ConsumeToolGrant(_ context.Context, _, tool, argDigest string) (string, bool, error) {
 	if f.grantErr != nil {
 		return "", false, f.grantErr
 	}
-	if f.toolGrants[tool] > 0 {
+	if f.toolGrants[tool] > 0 && (f.grantDigest == "" || f.grantDigest == argDigest) {
 		f.toolGrants[tool]--
 		return "grant-1", true, nil
 	}
@@ -82,11 +90,12 @@ func (f *fakeStore) LiveToolGrantSubjects(_ context.Context, _ string) ([]string
 	return out, nil
 }
 
-func (f *fakeStore) FileApprovalRequest(_ context.Context, _, kind, subject, _ string) (bool, error) {
+func (f *fakeStore) FileApprovalRequest(_ context.Context, fl store.Filing) (bool, error) {
 	if f.fileErr != nil {
 		return false, f.fileErr
 	}
-	f.filed = append(f.filed, kind+"/"+subject)
+	f.filed = append(f.filed, fl.Kind+"/"+fl.Subject)
+	f.filings = append(f.filings, fl)
 	return true, nil
 }
 
