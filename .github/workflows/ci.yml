@@ -2236,6 +2236,174 @@ jobs:
           case "$ports" in
             *9091*|*9092*) echo 'admin or ops port exposed by a Service' >&2; exit 1 ;;
           esac
+      # P15, keyless: the GENERIC onboarding path, end to end, against a
+      # server that is NOT one of ours. scripts/ci/plain-mcp-server.py has
+      # no NetworkPolicy, no upstream-table entry and no RemoteMCPServer
+      # committed anywhere in this repo — it is what an adopter arrives
+      # with. It lives in its OWN namespace over plain http, and its
+      # Service publishes 8090 while the container listens on 9090, which
+      # is the mistake a hand-written NetworkPolicy makes and the one
+      # `kmx tools add` cannot make.
+      - name: "Onboarding: a plain MCP server that is not one of ours"
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          KUBECTL="kubectl --context kind-kaimahi-p1" bash scripts/ci/plain-upstream.sh up
+      - name: "Onboarding: --out - generates and mutates nothing; the pair is proxy-to-server and nothing wider"
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          before=$(kubectl --context kind-kaimahi-p1 -n kaimahi get networkpolicy -o name | sort)
+          bin/kmx tools add warehouse \
+            --url http://acme-warehouse.acme:8090/mcp \
+            --tool stock_get:sku --tool stock_adjust:sku,delta --out - | tee scaffold.out
+          # The seam points at the GATEWAY, never at the server.
+          grep -qF 'url: "http://kaimahi-mcp-gateway.kaimahi:8081/upstream/warehouse/mcp"' scaffold.out
+          # The policy carries the CONTAINER port, not the Service's.
+          grep -q 'port: 9090' scaffold.out
+          if grep -qE '^ +port: 8090' scaffold.out; then
+            echo 'the NetworkPolicy used the Service port' >&2; exit 1
+          fi
+          # Nothing wider: no address range in either direction, and the
+          # server gets no egress at all under the default posture.
+          if grep -q 'ipBlock' scaffold.out; then echo 'a scaffolded policy opened an address range' >&2; exit 1; fi
+          grep -qF 'policyTypes: [Ingress, Egress]' scaffold.out
+          # No credential in any form — a Secret NAME and nothing else.
+          grep -qF 'name: "kaimahi-warehouse-token"' scaffold.out
+          if grep -E '^ *value:' scaffold.out; then
+            echo 'the scaffold emitted an inline value where a reference belongs' >&2; exit 1
+          fi
+          if grep -E 'kmh_[0-9a-f]{20,}' scaffold.out; then
+            echo 'the scaffold emitted something token-shaped' >&2; exit 1
+          fi
+          after=$(kubectl --context kind-kaimahi-p1 -n kaimahi get networkpolicy -o name | sort)
+          test "$before" = "$after"
+      - name: "Onboarding: a tool named with no policy_fields is refused, with the consequences"
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          # kmx must not choose the declaration that decides what an
+          # approval binds to. The refusal states all three answers.
+          if bin/kmx tools add warehouse --url http://acme-warehouse.acme:8090/mcp \
+               --tool stock_adjust --out - > undeclared.out 2>&1; then
+            echo 'a bare --tool was accepted' >&2; exit 1
+          fi
+          cat undeclared.out
+          grep -q 'WEAKEST' undeclared.out
+          grep -qF 'stock_adjust:*' undeclared.out
+          grep -q 'welded' undeclared.out
+      - name: "Onboarding: the PLANE refuses a bad table before anything is applied, in its own words"
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          # `k8s_get_events` is declared by the committed table as
+          # ["namespace"]. Declaring it differently here is refused at
+          # load — the rule that stops a constrained tool being reached
+          # unconstrained through another upstream. The point of this
+          # step is WHERE it is refused: before apply, by the running
+          # plane's own config.Parse, not by a pod that will not start.
+          before=$(kubectl --context kind-kaimahi-p1 -n kaimahi get configmap -o name | sort)
+          if bin/kmx tools add clash --url http://acme-warehouse.acme:8090/mcp \
+               --tool k8s_get_events:pod --out clash.yaml > clash.out 2>&1; then
+            echo 'a table the plane will not load was accepted' >&2; exit 1
+          fi
+          cat clash.out
+          grep -q 'nothing has been applied' clash.out
+          grep -q 'k8s_get_events' clash.out
+          test ! -e clash.yaml
+          after=$(kubectl --context kind-kaimahi-p1 -n kaimahi get configmap -o name | sort)
+          test "$before" = "$after"
+      - name: "Onboarding: scaffold, validate, apply — the overlay merges beside the committed four"
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          bin/kmx tools add warehouse \
+            --url http://acme-warehouse.acme:8090/mcp \
+            --tool stock_get:sku --tool stock_adjust:sku,delta 2>&1 | tee add.out
+          grep -q 'The plane validated the table' add.out
+          grep -q 'stock_adjust: an approval binds sku, delta' add.out
+          test -f upstreams/warehouse.yaml
+          # The COMMITTED table is byte-identical to the one in the tree:
+          # onboarding never edits this repo's four.
+          kubectl --context kind-kaimahi-p1 -n kaimahi get configmap kaimahi-upstreams \
+            -o jsonpath='{.data.upstreams\.json}' > live-upstreams.json
+          python3 - <<'PY'
+          import json
+          import yaml
+          live = json.load(open("live-upstreams.json"))
+          committed = json.loads(yaml.safe_load(open("k8s/plane/upstreams.yaml"))["data"]["upstreams.json"])
+          assert live == committed, "the committed upstream table was edited by onboarding"
+          assert "warehouse" not in live["tool_upstreams"], "the overlay leaked into the committed table"
+          print("committed table unchanged; upstreams:", sorted(live["tool_upstreams"]))
+          PY
+          # And the table the proxy is actually enforcing carries the overlay.
+          kubectl --context kind-kaimahi-p1 -n kaimahi logs -l app=kaimahi-proxy --tail=200 \
+            | grep -q 'operator overlay merged.*warehouse.json'
+      - name: "Onboarding: issue, allowlist, repoint — the projection IS the allowlist"
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          bin/kmx tools govern --server kaimahi-warehouse --secret kaimahi-warehouse-token \
+            --credential acme-agent --agent hello-tools --tools stock_get 2>&1 | tee govern-warehouse.out
+          # The agent-side Secret holds ONLY the kmh_ token.
+          n=$(kubectl --context kind-kaimahi-p1 -n kagent get secret kaimahi-warehouse-token \
+            -o jsonpath='{.data.api-key}' | base64 -d | grep -cE '^kmh_[0-9a-f]{64}$')
+          test "$n" = 1
+          # The server offers two tools; the credential may call one; the
+          # agent is shown exactly one.
+          kubectl --context kind-kaimahi-p1 -n kagent get remotemcpserver kaimahi-warehouse \
+            -o jsonpath='{.status.discoveredTools[*].name}' | tee discovered.out
+          grep -q 'stock_get' discovered.out
+          if grep -q 'stock_adjust' discovered.out; then
+            echo 'the agent was shown a tool its credential cannot call' >&2; exit 1
+          fi
+      - name: "Onboarding: admitted inside the allowlist, denied outside it, both audited"
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          KUBECTL="kubectl --context kind-kaimahi-p1" GOVERNED_SECRET=kaimahi-warehouse-token \
+            UPSTREAM=warehouse bash scripts/tool-call-probe.sh stock_get '{"sku": "SKU-1"}' | tee wh-call.out
+          grep -qF 'acme-warehouse stock_get:{"sku": "SKU-1"}' wh-call.out
+          KUBECTL="kubectl --context kind-kaimahi-p1" GOVERNED_SECRET=kaimahi-warehouse-token \
+            UPSTREAM=warehouse bash scripts/tool-denial-probe.sh stock_adjust '{"sku": "SKU-1", "delta": 5}'
+          bin/kmx audit tool acme-agent | tee wh-audit.out
+          grep -E 'acme-agent +warehouse +tools/call +stock_get +allowed +200' wh-audit.out
+          grep -E 'acme-agent +warehouse +tools/call +stock_adjust +denied +403' wh-audit.out
+          # The request carries the CALL, because policy_fields said what
+          # the arguments mean — the payoff of that declaration.
+          bin/kmx approvals | tee wh-approvals.out
+          grep -E 'acme-agent +tool +stock_adjust .*sku SKU-1, delta 5' wh-approvals.out
+          # The SERVER's own record agrees with the plane's audit: the
+          # allowed call arrived and the denied one never did. A denial
+          # that is audited but still reaches the upstream is not a denial.
+          KUBECTL="kubectl --context kind-kaimahi-p1" bash scripts/ci/plain-upstream.sh calls | tee wh-served.out
+          grep -q 'stock_get' wh-served.out
+          if grep -q 'stock_adjust' wh-served.out; then
+            echo 'a denied call reached the upstream anyway' >&2; exit 1
+          fi
+      - name: "Onboarding: the approval is welded to THAT call"
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          id=$(bin/kmx approvals | awk '$3=="acme-agent" && $5=="stock_adjust" {print $1}')
+          test -n "$id"
+          bin/kmx approve "$id" --uses 1 --ttl 10m
+          bin/kmx grants acme-agent | tee wh-grants.out
+          grep -E 'acme-agent +tool +stock_adjust +yes .*call [0-9a-f]{12}' wh-grants.out
+          # The approved call is admitted...
+          KUBECTL="kubectl --context kind-kaimahi-p1" GOVERNED_SECRET=kaimahi-warehouse-token \
+            UPSTREAM=warehouse bash scripts/tool-call-probe.sh stock_adjust '{"sku": "SKU-1", "delta": 5}'
+          # ...and a DIFFERENT one is not. Being manipulated into asking
+          # is not sufficient, on an upstream nobody hand-wrote.
+          KUBECTL="kubectl --context kind-kaimahi-p1" GOVERNED_SECRET=kaimahi-warehouse-token \
+            UPSTREAM=warehouse bash scripts/tool-denial-probe.sh stock_adjust '{"sku": "SKU-1", "delta": 500}'
+          bin/kmx audit tool acme-agent | tee wh-audit-2.out
+          grep -E 'acme-agent +warehouse +tools/call +stock_adjust +allowed +200 +granted .*delta 5' wh-audit-2.out
+      - name: "Onboarding: the boundary — only the proxy may reach the server"
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          kubectl --context kind-kaimahi-p1 -n acme get networkpolicy kaimahi-upstream-warehouse-ingress -o yaml
+          # A NEGATIVE against a CONTROL: the probe pod must reach a
+          # service it may legitimately reach, so "blocked" can only mean
+          # policy and not a broken probe. The other direction — the
+          # proxy CAN reach the server — is the governed call above.
+          KUBECTL="kubectl --context kind-kaimahi-p1" bash scripts/upstream-boundary-probe.sh
+      - name: "Onboarding: teardown"
+        if: always() && steps.changes.outputs.docs_only != 'true'
+        run: |
+          KUBECTL="kubectl --context kind-kaimahi-p1" bash scripts/ci/plain-upstream.sh down || true
       - name: Cluster state on failure
         if: failure() && steps.changes.outputs.docs_only != 'true'
         run: |

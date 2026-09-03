@@ -101,6 +101,12 @@ type ToolsOptions struct {
 	// Tools is the comma-separated allowlist, and the agent's selection.
 	// "-" is the empty allowlist: nothing callable without a live grant.
 	Tools string
+	// Server is the RemoteMCPServer to govern against (P15). Empty means
+	// this repo's committed `kaimahi-tools`, which kmx carries and
+	// applies. Any other name is one an operator scaffolded with
+	// `kmx tools add`, which already applied it — kmx has no committed
+	// copy to re-apply and must not invent one.
+	Server string
 }
 
 // GovernTools puts the tools agent behind the enforcing MCP gateway
@@ -140,8 +146,12 @@ func (a *App) GovernTools(opt ToolsOptions) error {
 		return err
 	}
 
-	if err := a.apply("kaimahi-tools.yaml"); err != nil {
-		return err
+	// The committed seam is kmx's to apply; a scaffolded one was applied
+	// by `kmx tools add` and its file is the operator's artifact.
+	if opt.Server == config.DefaultToolServer {
+		if err := a.apply("kaimahi-tools.yaml"); err != nil {
+			return err
+		}
 	}
 	// Accepted, not Ready: a RemoteMCPServer reports that it reached the
 	// upstream and discovered its tools. Patching the agent before that
@@ -150,10 +160,10 @@ func (a *App) GovernTools(opt ToolsOptions) error {
 	// with no tools at all, which looks exactly like a policy denial.
 	if err := a.kubectlRun("-n", config_kagentNamespace, "wait",
 		`--for=jsonpath={.status.conditions[?(@.type=="Accepted")].status}=True`,
-		"remotemcpserver/kaimahi-tools", "--timeout=300s"); err != nil {
+		"remotemcpserver/"+opt.Server, "--timeout=300s"); err != nil {
 		return err
 	}
-	if err := a.patchAgentTools(opt.Agent, tools); err != nil {
+	if err := a.patchAgentTools(opt.Server, opt.Agent, tools); err != nil {
 		return err
 	}
 	if err := a.waitSwitched(opt.Agent); err != nil {
@@ -250,7 +260,7 @@ func quotedList(tools []string) string {
 // An EMPTY selection is passed through as an empty array, not omitted:
 // `make tool-allow TOOLS=-` means nothing is callable, and an agent whose
 // toolNames key vanished would fall back to every discovered tool.
-func (a *App) patchAgentTools(agent string, tools []string) error {
+func (a *App) patchAgentTools(server, agent string, tools []string) error {
 	if tools == nil {
 		tools = []string{}
 	}
@@ -258,9 +268,13 @@ func (a *App) patchAgentTools(agent string, tools []string) error {
 	if err != nil {
 		return err
 	}
+	name, err := json.Marshal(server)
+	if err != nil {
+		return err
+	}
 	patch := fmt.Sprintf(
-		`{"spec":{"declarative":{"tools":[{"type":"McpServer","mcpServer":{"apiGroup":"kagent.dev","kind":"RemoteMCPServer","name":"kaimahi-tools","toolNames":%s}}]}}}`,
-		names)
+		`{"spec":{"declarative":{"tools":[{"type":"McpServer","mcpServer":{"apiGroup":"kagent.dev","kind":"RemoteMCPServer","name":%s,"toolNames":%s}}]}}}`,
+		name, names)
 	return a.kubectlRun("-n", config_kagentNamespace, "patch", "agent", agent, "--type", "merge", "-p", patch)
 }
 
@@ -269,6 +283,9 @@ func (a *App) patchAgentTools(agent string, tools []string) error {
 // CRED_TOOLS in the environment reaches `kmx tools` the same way it reaches
 // `make govern-tools`.
 func (a *App) toolsDefaults(o ToolsOptions) ToolsOptions {
+	if o.Server == "" {
+		o.Server = config.DefaultToolServer
+	}
 	if o.Credential == "" {
 		o.Credential = a.Cfg.ToolsCredential
 	}

@@ -113,7 +113,8 @@ swap plus a credential the agent cannot read past.
 | `kmx approve <id> [--ttl 10m] [--uses 1] [--amount n]` | mint the bounded grant. At least one of `--ttl`/`--uses` is required — an unbounded grant is a config change, not an approval |
 | `kmx deny <id>` | refuse a pending request |
 | `kmx request <tool\|budget\|inbound> <subject>` | file one explicitly. `--args '<json>'` (tool requests only) names the CALL to pre-approve; omitting it means the **argument-less** call, never "any call" |
-| `kmx tools govern` | issue the gateway credential, set the allowlist, apply the governed `RemoteMCPServer`, repoint the agent (`--tools`, `--credential`, `--agent`, `--secret`) |
+| `kmx tools add <name>` | onboard **your own** MCP server as a governed upstream: scaffold the table entry, the NetworkPolicy pair and the gateway seam as reviewable YAML, validate them against the running plane, apply (`--url`, `--tool`, `--server-egress`, `--pod-port`, `--secret`, `--out`, `--no-apply`, `--dry-run`) |
+| `kmx tools govern` | issue the gateway credential, set the allowlist, apply the governed `RemoteMCPServer`, repoint the agent (`--tools`, `--credential`, `--agent`, `--secret`, `--server`) |
 | `kmx tools allow <tool,tool\|->` | replace the allowlist. `-` is the **empty** allowlist: nothing callable without a live grant |
 | `kmx tools allowlist [<credential>]` | read it back, sorted |
 | `kmx tools ungovern` | put the agent back on the ungoverned tool server |
@@ -282,6 +283,48 @@ names the fix:
 go env -u GOBIN         # clear it, or
 kmx plane --source .    # build the plane from a checkout instead
 ```
+
+## `kmx tools add`
+
+```bash
+kmx tools add warehouse \
+  --url http://acme-warehouse.acme:8090/mcp \
+  --tool stock_get:sku \
+  --tool stock_adjust:sku,delta
+```
+
+It writes `upstreams/warehouse.yaml` — four documents that *are* the
+onboarding: the gateway's table entry (as an overlay fragment), the
+proxy's egress to that server, that server's ingress from the proxy
+alone, and the `RemoteMCPServer` whose URL is the gateway. Then it
+validates them against the running plane and applies them behind the
+guard. The full walkthrough, including what to choose for `policy_fields`
+and why, is [govern-your-agent.md](govern-your-agent.md).
+
+| Flag | Meaning |
+|---|---|
+| `--url <url>` | the server's OWN in-cluster endpoint, `http://<service>.<namespace>:<port>/mcp` |
+| `--tool <tool>:<fields>` | one per tool. `tool:a,b` declares those fields policy-relevant; `tool:` declares that none are (a verb-level binding — the weakest); `tool:*` declares nothing (the whole-argument-object binding) |
+| `--server-egress none\|dns\|keep` | what the scaffolded policy lets the SERVER reach. Default `none` |
+| `--pod-port <n>` | the container port, for the one case kmx will not guess: a Service targeting a NAMED port |
+| `--secret <name>` | agent-side Secret **name** the seam resolves its credential from (default `kaimahi-<name>-token`) |
+| `--out <path>` | where to write it (`-` for stdout) |
+| `--no-apply` | write the manifest and stop |
+| `--dry-run` | server-side dry run against the live CRDs |
+
+### Safety properties, and why each exists
+
+| Property | Why |
+|---|---|
+| **Never accepts a credential** — no flag, no environment variable, no file | The same rule as `agent create` (D27). `--secret` names a Secret RESOURCE; `kmx tools govern` is what mints a token into it. The generated document is scanned for key shapes before it is written. |
+| **A tool named without a declaration is REFUSED** | `policy_fields` decides what an approval binds to and what the audit says. kmx will not choose it, and prints what each of the three answers costs at the point of choosing. |
+| **The weakest setting announces itself in the file** | `policy_fields: []` is a verb-level binding and the shortest thing to type. The manifest carries a `WEAKEST SETTING IN USE` banner naming the tools, so a reviewer sees it too. |
+| **The policy pair is read from the live Service** | Its selector is the labels that actually route to those pods, and its resolved `targetPort` is the port they listen on. A policy written against a Service's PUBLISHED port blocks every call while reading as correct — policy is evaluated on the post-NAT pod address. A selector-less Service is refused: a policy pinned to no labels selects the whole namespace. |
+| **The committed table is never edited** | Onboarded upstreams live in `kaimahi-upstreams-extra`, merged over `k8s/plane/upstreams.yaml` at boot. `kmx plane` re-applies the committed table and so cannot discard your entry; an overlay that would redefine a committed entry is refused rather than resolved by precedence. |
+| **The overlay is emitted WHOLE** | A ConfigMap apply replaces `data`, so a map missing an existing key would silently un-onboard somebody else's server. An overlay read that is anything but a genuine `NotFound` aborts rather than reading as "nothing is onboarded". |
+| **Validated by the plane, not by a copy of it** | The candidate table goes to `POST /admin/config/validate`, which merges it over the committed one and calls the same `config.Parse` the proxy booted with. Nothing is written or applied until it says yes, and its refusal is the plane's own message. |
+| **`--out -` mutates nothing** | Generate-don't-mutate, as `agent create` has it. Validation still runs: it is a read. |
+| **Won't overwrite** | Exclusive create, no `--force`. |
 
 ## Governing an agent
 
