@@ -242,19 +242,21 @@ grows the same way it started — as YAML you can diff:
 never mutated. Agents run on kagent — declarative Kubernetes agents whose
 Agent CRD YAML *is* the topology artifact.
 
-**The tooling is thin glue over `kind`, `helm`, `kubectl`, and the kagent
-CLI — and staying thin is the goal, not an accident.** `kmx` and the
-Makefile drive those tools rather than standing in for them: `kmx agent
-chat` is a passthrough to `kagent invoke`, there is no `kmx install`, and
-reading, updating and deleting agents stay with `kubectl`. A developer
-entry point that grew into a second control plane would be a liability, so
-the constraint is deliberate.
+**The north star: Kaimahi is thin glue over `kind`, `helm`, `kubectl`, and
+the kagent CLI.** Build nothing that can be delegated. Every component has
+to earn its existence by being something no upstream provides.
 
-**The governance plane is the part that is Kaimahi's own** — a Go service
-with four listeners (model, MCP, inbound, admin) backed by Postgres,
-holding the credentials, budgets, allowlists, grants and audit trail that
-the runtime does not provide. That is not glue, and it is not meant to be:
-it exists because nothing upstream provides it.
+The tooling holds to that literally. `kmx agent chat` is a passthrough to
+`kagent invoke`, there is no `kmx install`, and reading, updating and
+deleting agents stay with `kubectl` — an entry point that grew into a
+second control plane would be exactly the failure this star steers away
+from.
+
+The governance plane is what remains after delegating everything that
+could be delegated: the credentials, budgets, allowlists, grants and audit
+trail that neither Kubernetes nor the runtime provides. It is held to the
+same standard — every package answers why it is not configuration — and it
+is the honest measure of whether the star is being followed.
 
 ## Model endpoints
 
