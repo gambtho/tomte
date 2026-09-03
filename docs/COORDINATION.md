@@ -121,6 +121,7 @@ prefix.
 | CI: the e2e job takes ~15 min on every PR (D32) | W25 worker | PR #65 MERGED; coordinator verified 934s to 483s with all 62 assertion bodies byte-identical (delta sheet below) | lane closed | investigation-led: 934s over 68 serial steps, bring-up 186s, the model pull only 16s of it |
 | P14: the AP demo live on AKS (D33) | W26 worker | PR #83 MERGED; coordinator verified teardown, the scanner, the kind path unchanged and the render's fail-closed cases (delta sheet below) | lane closed; ap-injection not run verbatim on AKS — deviation accepted, see sheet |
 | `kmx` milestone 3 — the core plane verbs (D28(3), D33) | W27 worker | PR #81 MERGED; coordinator verified live — wait_switched carried, a destructive backup/restore round trip, approvals showing the call (delta sheet below) | lane closed |
+| W32: the release agent — Kaimahi's first real user (D38) | unassigned | SHAPED 2026-09-03 — prompt below; runs BEFORE W31 so that lane gets real friction |narrow agent: drafts and proposes, human approves, CI moves bytes; ADO via its official hosted MCP server |
 | W31: `create-kaimahi-agent` — nothing to a working agent, fast (D36, D37) | unassigned | SHAPED 2026-09-03 — prompt below; the D36 lane, highest priority | prerequisite and time reduction FIRST (5 prereqs, 5-10 min today); packaging second; MCP deferred |
 | W28: ship it — version, release, a published install path, a documented upgrade (D34, D35) | unassigned | SHAPED 2026-09-03 — prompt below; PARALLEL with W30 | unblocked by D34; publishes to free namespaces only, asserts no trademark |
 | W29: govern your own agent — the generic onboarding path (D35) | unassigned | SHAPED 2026-09-03 — prompt below; runs ALONE | the product-defining gap: nothing documents adding your own MCP server or governing an agent you already run |
@@ -180,6 +181,7 @@ prefix.
 | D35 | 2026-09-03 | **The next arc is adoptability, not capability, and the first user is an external OSS adopter — with the user themselves as the earliest.** The coordinator's audit of what stands between "our demo works" and "someone else can use this" found the hard part done: enforcement holds, proven under a manipulated agent. What is missing is the last mile, and three findings define it. **(a) You cannot install a version**: no tags, no releases, no published image; `go install …@<commit sha>` is the only path, and there is no upgrade story at all — no versioning doc, and eight migrations never tested across a version gap. **(b) There is no path to govern an agent you already have** — `kmx govern <agent>` handles the LLM seam generically, but every governed upstream is a hand-written RemoteMCPServer (`kaimahi-tools`/`-slack`/`-github`/`-erp`) plus a matching upstreams entry, and NOTHING documents adding your own MCP server or governing an agent you already run. Every governed agent in the repo is one we shipped, which is the line between a demo and a product. **(c) The security-review table stakes** from the agentdesktop note: nothing records who an agent acted FOR, and governed credentials never expire. Three lanes follow, in this order of value to the stated first user: **W28 "ship it"** (version, tag, release, a published install path, a documented upgrade with a migration test across a gap — unblocked by D34); **W29 "govern your own agent"** (a generic, documented, tested path for an arbitrary agent and an arbitrary MCP server) — needs its own shaping pass first, because what the generic path SHOULD be is a design question, not just work; **W30 "identity and expiry"**. W28 and W30 run in parallel (release plumbing versus plane internals — a clean split); W29 runs alone, with the coordinator's full attention, because it is the product-defining one and it touches the docs both others touch. Not in this arc, and said explicitly: Postgres HA, dashboards and alerts, secret rotation, and a policy-validation command — all real, none blocking a first adopter | "1 - naming is approved… 2 - this makes a great deal of sense. 3 - also a good thing to do 4 - also a good thing to do. I think we assume the first user is an external oss adopter, although it would be ideal if i personally could be a earlier user" |
 | D36 | 2026-09-03 | **PIVOT: developer experience is the product; governance is a feature of it. Kaimahi must be reachable from whatever harness the developer already uses.** Leadership feedback, relayed by the user: focus on making it easy to get a fully functioning agent deployed quickly, enable non-coding users to succeed, **"not to worry as much about the governance up front"**, and "ideally our tool/framework should be accessible via whatever harness the user is using to quickly move forward with creating the agent they want". Rulings: (1) **DX is the product, governance a feature** — every investment is now measured by time-to-a-working-agent, not time-to-a-governed-agent; (2) **governance is not front-loaded** — the fast path must work without it, and governance is something you turn on afterwards rather than a gate you pass through first; (3) **the harness is a first-class consumer** — a developer inside Claude Code, Codex or Cursor should be able to create and deploy an agent without leaving it, which makes Kaimahi something an agent DRIVES rather than only something a human types; (4) the three shaped lanes (W28 ship it, W29 govern your own agent, W30 identity and expiry) all proceed. **Consequences, stated once and accepted rather than relitigated:** this inverts D12 (governance plane as the incubated thesis) and cuts across D31(1), which had Kaimahi growing UP into permissions, boundaries and pass/fail scenarios while explicitly not building the experience — the board's positioning section and D31 now need rewriting rather than quiet supersession, and until they are, the board contradicts itself. It also weakens our answer to the deck's own opening question, "why not kagent alone?": on pure time-to-deployed-agent we are compared with kagent's quickstart and kagent-ui, where we are the thinner option, and the differentiator that survives that comparison is the one being de-emphasised. The prime directive still binds: "accessible from any harness" must not become a second implementation of what kagent or the harness already does. Recorded so that if the comparison bites later, the trade was visible when it was made | "specifically mentioned was not to worry as much about the governance up front. ideally our tool/framework should be accessible via whatever harness the user is using to quickly move forward with creating the agent they want"; ruled via options: "DX is the product; governance is a feature of it", "All three proceed as shaped" |
 | D37 | 2026-09-03 | **"Consumed" means `npx create-react-app`, for agents — and the coordinator's MCP recommendation is WITHDRAWN.** Leadership's example, relayed by the user: one command that helps a user, an agent, or anything else create the agent they want. That is a zero-install scaffolder, not a service: every harness can already run a shell command, so a command satisfies "accessible from whatever harness" with far less surface than an MCP server. MCP is deferred, not rejected — a command is the smaller and more testable thing to get right first. **The finding that reshapes the lane, measured rather than assumed: the scaffolding is not the gap.** `kmx agent create` already scaffolds reviewable YAML and applies it, and PR #16 (closed) was an earlier `npx` take on the same idea. The gap is the RUNTIME — today it is FIVE prerequisites (Go, Docker or Podman, kind, kubectl, Helm) and 5-10 minutes to a first answer, against `create-react-app`'s one prerequisite and about a minute. A scaffolder on top of a five-prerequisite ten-minute runtime is still a five-prerequisite ten-minute experience. So W31 is prerequisite and time reduction FIRST, packaging second, with two numbers reported before and after: time from one command to an agent answering, and how many things had to be installed. Killing the **Go** requirement is the first target, because it excludes every non-coding user and D34 now permits publishing a binary. Stated and accepted: this may not reduce far enough — Kubernetes is our runtime and `create-react-app`'s is `npm start` on a laptop — and if so, the lane's most valuable output is that finding WITH numbers, plus what would actually move it (a non-Kubernetes local runtime for the first agent, pointing at an existing cluster, or a hosted option), rather than a wrapper that hides a ten-minute wait behind a nicer command | "the example give was something like npx create-react-app, but instead of a react app we help the user / agent /whatever create an agent" |
+| D38 | 2026-09-03 | **First real use: the user's own aks-desktop release process, as a dogfood (W32).** The user cuts releases regularly — create a release branch, collate notes from merged PRs, run several Azure DevOps builds, publish the binaries to a GitHub release — and this becomes the first thing Kaimahi is used FOR rather than demonstrated with. Ruled as a dogfood, not as release automation: a script or a GitHub Action could do much of it, and the point is the feedback loop and the sentence "we use it ourselves", which no fixture demo buys. Findings from the coordinator's survey, which shape the lane: **(a) Azure DevOps is configuration, not build work** — Microsoft ships an official MCP server (microsoft/azure-devops-mcp) with a REMOTE hosted endpoint over streamable HTTP, covering builds and releases, which is exactly the P10 hosted-upstream shape we already run GitHub's through; **(b) the binaries cannot pass through us** — the gateway caps request bodies at 4MB (gateway.go), and an MCP gateway moving build artifacts is the wrong tool anyway, so the agent TELLS systems to move bytes and never carries them; **(c) this is our first real WRITE under a grant** — the P10 delta sheet records that the GitHub write tool was never exercised, so creating a branch and publishing a release are a genuine step up in blast radius, on a real repo with a real token; **(d) long-running builds do not fit `kagent invoke`'s request/response shape**, making polling versus the P7b inbound bridge the lane's biggest architectural unknown. Rulings: (1) **the agent is narrow** — it drafts the notes and PROPOSES; a human approves; CI moves the bytes. The agent earns its place on judgement (collating notes, handling a failed build or a PR with no useful description) and nowhere else; (2) **every consequential call is approved and call-bound (P12)** — approving "publish release v1.2.3" must not authorize the next release, which is exactly what the digest binding buys and the first time it will matter to a real person; (3) **tokens are fine-grained and single-repo, in plane custody**, following scripts/github-secret.sh's read-only precedent but with write scope, and revocable the same way; (4) **it runs BEFORE W31, not after** — the friction the user hits IS the deliverable, and W31 should be shaped by a real workflow rather than by benchmarks | "i had an idea for a first personal use case we could try to really make work — i regularly need to create new releases for the aks-desktop project…"; ruled via option: "Dogfood Kaimahi on a real task (Recommended)" |
 | D14 | 2026-09-01 | P5 direction: the **undeniable demo** — not a new capability arc but making the built one legible and credible. Rulings: (1) outbound connector platform is **Slack** (via existing MCP servers, no connector code); (2) AKS work goes all the way — cluster portability AND a real AKS deployment with evidence (accepts Azure spend + credentials in a worker session); (3) demos run on the **Copilot** preset while **CI stays keyless on ollama** (public fork-exposed repo — no repo secrets in CI, ever). Rationale on the board: everything governed so far protects an agent that lists ConfigMaps; posting to a channel humans read is the first consequential action, and it makes the approval gate the point rather than the plumbing | "sure, that's undeniable demo makes sense" — then ruled via options: "Slack (Recommended)", "Portability + real AKS run (Recommended)", "Copilot for demo, ollama for CI (Recommended)" |
 | D13 | 2026-09-01 | P4c approval model: TIME-BOXED PERMITS — a denied action files a pending request; approval grants it bounded (expiry by duration and/or use count) and compiles into the existing allowlist/budget rows; deny-and-retry mechanics, no held-open calls. Demo scenarios: tool-access widening (k8s_get_events, read-only) AND budget overage; the P3 tool-server read-only posture stays untouched (write-tool demo deferred) | ruled via options: "Time-boxed permits (Recommended)"; "Widen tool access (Recommended), Budget overage (Recommended)" |
 
@@ -2687,6 +2689,100 @@ captured, and a `kmx use` that returns only once one pod on the new
 template is serving. Branch from current main; PR targets main; no
 stacked bases; lane ends at PR-open-with-checks-green — do not merge.
 Report deviations in the PR.
+```
+
+### W32 — the release agent: Kaimahi's first real user (UNASSIGNED — paste into a fresh CLI session; runs BEFORE W31)
+
+```
+You are a worker session for the Kaimahi project (repo root: this
+checkout, remote kaimahi-agents/kaimahi). Read docs/COORDINATION.md
+first — **D38 above all**, then D25 (hosted upstreams), D27, D29, D36,
+the P10 and P12 delta sheets, the security standing guidance and the
+"Considered and rejected" list. Your lane: the first thing Kaimahi is
+used FOR rather than demonstrated with. The user cuts releases for a
+real project — release branch, notes collated from merged PRs, several
+Azure DevOps builds, binaries published to a GitHub release — and this
+lane makes an agent help with it, weekly, for real.
+
+**This is a dogfood, and that changes what success means.** A GitHub
+Action could do much of this. The point is not to prove otherwise; it
+is that a real person uses Kaimahi on a real task and every piece of
+friction becomes a finding. **Write the friction down as you go** — a
+FINDINGS section in the PR is a required deliverable, not a courtesy,
+and W31 (the DX lane) is shaped by what you record. A lane that ships a
+working agent and no findings has half-failed.
+
+Four things were established before this prompt; do not re-derive them:
+- **Azure DevOps is configuration, not build work.** Microsoft ships an
+  official MCP server (`microsoft/azure-devops-mcp`) with a REMOTE
+  hosted endpoint over streamable HTTP — the same shape as GitHub's,
+  which this project already reaches through the P10 hardened dialer
+  (`internet: true`, one opt-in 443 allowance). Configure it; do not
+  build one.
+- **Binaries do not pass through the gateway.** Request bodies are
+  capped at 4MB (plane/internal/gateway/gateway.go), and an MCP gateway
+  moving build artifacts is the wrong tool regardless. The agent TELLS
+  systems to move bytes — trigger the build, let ADO or GitHub carry the
+  artifact — and never carries them itself. If you find yourself
+  streaming a file through a tool call, stop.
+- **This is the first real WRITE under a grant.** The P10 sheet records
+  that the GitHub write tool was never exercised. Creating a branch and
+  publishing a release are real writes on a real repository.
+- **Long-running builds do not fit `kagent invoke`.** A turn is
+  request/response; an ADO build is minutes. Polling versus the P7b
+  inbound bridge is this lane's real architectural question. Decide it,
+  justify it, and say what you rejected.
+
+Build, and keep it narrow (D38(1)):
+- **The agent drafts and PROPOSES.** It collates release notes from
+  merged PRs — the one place judgement genuinely earns its keep — and
+  proposes the release: the version, the branch, the notes, the builds
+  to run. It does not decide to ship.
+- **A human approves, and the approval is bound to the call (D38(2)).**
+  Approving "publish release v1.2.3" must not authorize the next
+  release. P12 already gives you this; declare the right
+  `policy_fields` so the version and the repository are part of what is
+  bound, and say in the PR why those fields and not others.
+- **CI moves the bytes.** The agent triggers builds and reports what
+  happened. Artifacts reach the release by the path ADO and GitHub
+  already provide.
+- **Failure is a first-class outcome.** A build fails, a PR has no
+  usable description, a token expired. The agent says so plainly and
+  stops. It never reports a step it did not complete — the AP agent was
+  caught claiming an invoice was settled when it was not, and this one
+  is operating on a real repository.
+
+Credentials (D38(3)), and these are hard: a **fine-grained,
+single-repository** GitHub token with the narrowest write scope that
+works, and an Azure DevOps token scoped as tightly as ADO allows, both
+in PLANE custody following scripts/github-secret.sh's precedent — the
+agent's own Secret holds only its `kmh_` token. Both revocable by one
+documented command, and REVOKED at the end of any session that was only
+a test. kmx accepts no credential material (D27). Never a personal
+account's broad-scope token, and never in the tree.
+
+Guardrails, all hard: no destructive git operation — no force-push, no
+tag deletion, no branch deletion — and say in the PR what you did to
+make that impossible rather than merely unlikely; the agent works on ONE
+repository and cannot reach another; no Azure identifiers in the tree
+(the ADO org and project names are identifiers — scripts/check-no-azure-ids.sh
+will catch them, and it is right to); nothing published (W28 owns
+release); no repo secrets in CI.
+
+CI stays keyless (D14) and cannot reach a real ADO org or repository, so
+CI proves what it can: the upstream table's shape, the policy_fields
+declaration, the approval binding, and the refusals — with the synthetic
+upstream P10 built for exactly this reason. The real run is manual, by
+the user, and its transcript is the proof.
+
+Verification is real: the user cuts an actual release with it, and the
+PR carries that transcript — the proposed notes, the approval naming the
+version, the builds, the published release — plus the FINDINGS section.
+If the honest finding is "this was slower than doing it by hand", write
+that down; it is the most valuable sentence this lane can produce and
+W31 needs it. Branch from current main; PR targets main; no stacked
+bases; lane ends at PR-open-with-checks-green — do not merge. Report
+deviations in the PR.
 ```
 
 ### W31 — `create-kaimahi-agent`: from nothing to a working agent, fast (UNASSIGNED — paste into a fresh CLI session; the D36 lane)
