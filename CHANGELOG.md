@@ -43,6 +43,10 @@ without a commit hash.
 - **`kmx version` reports the build's own version**, not only the versions it
   installs. A release binary reports its tag; a `go install` reports the
   version you asked for; a checkout build says it is a checkout build.
+- **A released binary deploys the plane at its tag.** `kmx plane` used to
+  depend entirely on VCS stamping surviving the build; the tag is now the
+  first source it reads, and the release refuses to publish unless the
+  plane module's matching `plane/vX.Y.Z` tag exists at the same commit.
 - **A documented upgrade path** ([docs/releases.md](docs/releases.md)),
   including what happens when a migration fails halfway (the plane does not
   start), and a CI job that upgrades a plane across a real schema gap with
