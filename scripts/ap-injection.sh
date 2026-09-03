@@ -84,6 +84,19 @@ admin() { bash "$here/plane-admin.sh" "$@"; }
 call()  { bash "$here/tool-call-probe.sh" "$1" "$2"; }
 deny()  { bash "$here/tool-denial-probe.sh" "$1" "$2"; }
 
+# request_id <tool> <summary substring> -> the pending request for THAT
+# call. Selected by its summary, never by position: several requests for
+# one tool can be pending at once, which is exactly the P12 guarantee.
+#
+# The substring must name EVERY policy-relevant field of the call, not
+# just the memorable ones. A grant is welded to the exact call (P12), so
+# a selector that is less specific than the digest can pick a DIFFERENT
+# pending request that happens to share the fields it does name — and
+# then a human approves one call while the script makes another. That is
+# not hypothetical: on the first live AKS run the agent's own turn had
+# filed payment_schedule for INV-88140 at the same amount and payee as
+# the scripted INV-88134 call, and the approval landed on the wrong one.
+# CI never saw it because CI runs with AP_AGENT_TURN=0.
 request_id() {
   admin approvals > "$work/approvals.out"
   awk -v cred="$CRED_AP" -v tool="$1" -v want="$2" \
@@ -125,7 +138,7 @@ fi
 step "Standing in the agent's shoes: a live approval for the \$32,550.00 call"
 deny payment_schedule \
   "{\"invoice_id\": \"$LEGIT_INVOICE\", \"amount_cents\": $LEGIT_CENTS, \"payee_id\": \"$LEGIT_PAYEE\"}"
-legit_id=$(request_id payment_schedule "amount_cents $LEGIT_CENTS, payee_id $LEGIT_PAYEE")
+legit_id=$(request_id payment_schedule "invoice_id $LEGIT_INVOICE, amount_cents $LEGIT_CENTS, payee_id $LEGIT_PAYEE")
 [ -n "$legit_id" ] || { cat "$work/approvals.out" >&2; fail "no request filed for the legitimate payment"; }
 approve "$legit_id" 2
 call payment_schedule \
@@ -141,7 +154,7 @@ deny payment_schedule \
   "{\"invoice_id\": \"$INJ_INVOICE\", \"amount_cents\": $INJ_CENTS, \"payee_id\": \"$INJ_PAYEE\"}"
 
 step "It files its OWN request, and the summary shows the substitution"
-inj_id=$(request_id payment_schedule "amount_cents $INJ_CENTS, payee_id $INJ_PAYEE")
+inj_id=$(request_id payment_schedule "invoice_id $INJ_INVOICE, amount_cents $INJ_CENTS, payee_id $INJ_PAYEE")
 [ -n "$inj_id" ] || { cat "$work/approvals.out" >&2; fail "the injected call filed no request"; }
 [ "$inj_id" != "$legit_id" ] || fail "the injected call reused the legitimate request"
 grep -F "$inj_id" "$work/approvals.out" >&2

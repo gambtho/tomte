@@ -100,6 +100,16 @@ audit() { admin tool-audit "$CRED_AP"; }
 # request_id <tool> <summary substring> -> the pending request for THAT
 # call. Selected by its summary, never by position: several requests for
 # one tool can be pending at once, which is exactly the P12 guarantee.
+#
+# The substring must name EVERY policy-relevant field of the call, not
+# just the memorable ones. A grant is welded to the exact call (P12), so
+# a selector that is less specific than the digest can pick a DIFFERENT
+# pending request that happens to share the fields it does name — and
+# then a human approves one call while the script makes another. That is
+# not hypothetical: on the first live AKS run the agent's own turn had
+# filed payment_schedule for INV-88140 at the same amount and payee as
+# the scripted INV-88134 call, and the approval landed on the wrong one.
+# CI never saw it because CI runs with AP_AGENT_TURN=0.
 request_id() {
   admin approvals > "$work/approvals.out"
   awk -v cred="$CRED_AP" -v tool="$1" -v want="$2" \
@@ -175,7 +185,7 @@ note "Paid. No approval request, no grant, no human. Audited with the constraint
 step "The exception: paying \$32,550.00 on $EXC_INVOICE is above the \$10,000.00 bound"
 deny payment_schedule \
   "{\"invoice_id\": \"$EXC_INVOICE\", \"amount_cents\": $EXC_PAY_CENTS, \"payee_id\": \"$EXC_PAYEE\"}"
-pay_id=$(request_id payment_schedule "amount_cents $EXC_PAY_CENTS, payee_id $EXC_PAYEE")
+pay_id=$(request_id payment_schedule "invoice_id $EXC_INVOICE, amount_cents $EXC_PAY_CENTS, payee_id $EXC_PAYEE")
 [ -n "$pay_id" ] || { cat "$work/approvals.out" >&2; fail "no request was filed for the \$32,550.00 payment"; }
 note "Request $pay_id — and what a human is asked is the TRANSACTION:"
 grep -F "$pay_id" "$work/approvals.out" >&2
@@ -199,7 +209,7 @@ note "approved is provably the call that ran."
 # --- 4. the dispute needs its own approval ------------------------------
 step "The \$6,000.00 fee: dispute_open is on no allowlist, so it is denied too"
 deny dispute_open "{\"invoice_id\": \"$EXC_INVOICE\", \"amount_cents\": $EXC_FEE_CENTS, \"reason\": \"expedite fee not authorized on PO-2291\"}"
-dis_id=$(request_id dispute_open "amount_cents $EXC_FEE_CENTS")
+dis_id=$(request_id dispute_open "invoice_id $EXC_INVOICE, amount_cents $EXC_FEE_CENTS")
 [ -n "$dis_id" ] || { cat "$work/approvals.out" >&2; fail "no request was filed for the dispute"; }
 [ "$dis_id" != "$pay_id" ] || fail "the dispute reused the payment's request"
 note "Its OWN request $dis_id — the payment's approval does not cover it."
