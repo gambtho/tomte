@@ -165,7 +165,7 @@ func reasonFor(status int, msg string) metrics.Reason {
 	case strings.HasPrefix(msg, "tool audit unavailable"):
 		return metrics.ReasonAuditDegraded
 	case strings.HasPrefix(msg, "request body"), strings.HasPrefix(msg, "JSON-RPC batches"),
-		strings.HasPrefix(msg, "tools/call params"), strings.HasPrefix(msg, "upstream tool listing"):
+		strings.HasPrefix(msg, "tools/call "), strings.HasPrefix(msg, "upstream tool listing"):
 		return metrics.ReasonBadRequest
 	case strings.HasPrefix(msg, "grant check unavailable"):
 		return metrics.ReasonGrantCheck
