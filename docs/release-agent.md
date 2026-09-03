@@ -1,0 +1,323 @@
+# The release agent
+
+Kaimahi's first real user (D38). Everything else in this repository is a
+demonstration — a fixture ERP, a hello-world agent, a Slack channel made
+for the purpose. This one helps cut releases of a real project, on a real
+repository, on the schedule that project actually releases on.
+
+That changes what "working" means. A demo is finished when it convinces
+somebody. This is finished when the person who cuts the release keeps
+using it, and every piece of friction on the way there is a finding worth
+more than the feature.
+
+## One command
+
+```sh
+make release GITHUB_REPO=owner/name VERSION=v1.2.3 \
+     GH_WORKFLOW=build-app-win.yml,build-app-mac.yml \
+     ADO_PROJECT=<project> ADO_PIPELINES=41,42
+```
+
+That is the whole interface, and the shape of it is the design. It is not
+a checklist to work through: it runs every step, blocks on the approvals
+itself, and polls the builds itself. A person is interrupted exactly once
+per consequential call — to approve it — and the approval can be typed in
+Slack from a phone:
+
+```
+@kaimahi approve 3f1c9a2e uses=1 ttl=10m
+```
+
+Start with `DRY_RUN=1`. It reads, drafts the notes, and stops before the
+first consequential call.
+
+## What the agent does, and what it cannot
+
+**It drafts.** It reads the last release, reads what merged since, and
+writes the notes. That is the one place judgement earns its keep here:
+turning forty terse pull-request titles into the five lines a user of the
+product cares about is work a script does badly. Where a pull request
+says nothing a user could act on, the agent is told to say so and name it
+rather than invent a meaning for it.
+
+**It proposes.** Cutting the branch and starting the builds are calls it
+makes and a human approves.
+
+**It never carries a byte.** Build artifacts do not pass through the
+gateway. The request-body cap is 4 MiB
+([`gateway.go`](../plane/internal/gateway/gateway.go)), and an MCP gateway
+moving binaries would be the wrong tool at any size. The agent dispatches
+the GitHub workflow and the Azure DevOps pipelines; they build and publish.
+This turned out to be forced rather than chosen — see
+[what the GitHub server cannot do](#what-the-github-server-cannot-do).
+
+**It never decides to ship.** Every consequential call is denied by
+default, files an approval request carrying the exact call, and proceeds
+only under a grant welded to that call (P12,
+[approvals.md](approvals.md)).
+
+**It reaches one repository.** Three independent reasons, below.
+
+## The approval names the release, not the verb
+
+D38(2) asks for one property: approving "publish v1.2.3" must not
+authorize the next release. That is P12's argument binding, and what it
+binds is the `policy_fields` the committed table declares
+([`k8s/plane/upstreams.yaml`](../k8s/plane/upstreams.yaml)).
+
+| Call | Bound |
+|---|---|
+| `create_branch` | `owner`, `repo`, `branch`, `from_branch` |
+| `actions_run_trigger` | `method`, `owner`, `repo`, `workflow_id`, `ref` |
+| `pipelines_write` | `action`, `project`, `pipelineId`, `previewRun` |
+
+**Why the dispatcher argument comes first.** Both servers this lane talks
+to consolidate several operations into one tool. `actions_run_trigger`'s
+`method` chooses between running a workflow, re-running one, **cancelling**
+one and deleting its logs. `pipelines_write`'s `action` chooses between
+queueing a run, creating a pipeline, renaming one and cancelling a stage.
+A verb-level policy cannot tell those apart: allowlisting the name would
+allow all of them. Binding the selector is what makes the tool governable
+at all, and putting it first makes the audit summary read as the verb it
+really is.
+
+**Why the release notes are not bound.** `name` and `body` are prose the
+model regenerates, and an LLM re-emitting semantically identical prose is
+not byte-stable; binding them would make "approve, then it proceeds" fail
+at random — exactly the failure D29 anticipated when it ruled that the
+digest binds *declared* fields rather than the whole argument object. So
+the honest statement of what a human approves is: **this version, on this
+repository, from this commit** — and they read the drafted notes in the
+proposal step. An agent that got approval on v1.2.3 could publish
+different prose under it. The blast radius of that is editable text; the
+blast radius of the alternative is an approval flow that fails randomly.
+
+**What the driver checks before a human is asked.** A model that proposed
+a *different* branch files a request too, and it would look identical in
+`make approvals`. So between the agent proposing and a person being
+shown anything, `scripts/release-run.sh` requires a pending request whose
+summary names every policy-relevant field of the call that was asked for
+on the command line. If the agent proposed something else, the run stops
+and says so, and nothing is approved. P13 learned this the expensive way:
+on its first live run the agent's own turn filed a payment for a
+different invoice at the same amount, and the approval landed on the
+wrong one.
+
+## What makes a destructive operation impossible
+
+The lane's hard guardrail is: no force-push, no tag deletion, no branch
+deletion. Four layers, and one that is honestly not available.
+
+1. **The servers are told not to offer them.** The `github-release`
+   upstream sets `X-MCP-Exclude-Tools` and an `X-MCP-Tools` allowlist;
+   the `ado` upstream sets `X-MCP-Toolsets: pipelines`. A tool excluded
+   this way is not in `tools/list`, is not discovered by kagent's
+   controller, is not projected to the agent, and cannot be reached even
+   by an approval. This is the strongest layer, because it does not
+   depend on Kaimahi's own bookkeeping. It is also why the tool seam
+   gained `extra_headers` in this lane.
+2. **The gateway forwards to exactly two servers.** `tool_upstreams` is
+   the whole reachable set.
+3. **Nothing destructive is allowlisted, or selected.** The credential's
+   allowlist holds reads only; `k8s/release-agent.yaml` names no
+   destructive tool, so kagent wires none.
+4. **GitHub's own server has no force-update.** Its only ref-creating
+   tool is `create_branch`, which calls `Git.CreateRef`; `Git.UpdateRef`
+   is called only inside file-write flows and hardcodes `Force: false`.
+   There is no `delete_ref`, no `update_ref` and no `create_tag` tool.
+
+**And the layer that does not exist.** The token is *not* one of these.
+GitHub's fine-grained permissions put creating a branch, creating a
+release and **deleting a ref** all under `Contents: write`; there is no
+separate Releases permission and no way to grant creation without
+deletion. The smallest token that can cut a release branch can also
+delete one. So the honest sentence is: *the gateway is what stands
+between this agent and a deleted branch, and the token is not a second
+opinion.* Said here rather than claimed away.
+
+## Credentials
+
+Both in plane custody: the gateway injects them, the agent never holds
+them, and neither is ever in the tree.
+
+```sh
+make release-secret GITHUB_REPO=owner/name   # paste the fine-grained token
+make ado-secret ADO_ORG=<organization>       # paste the Entra access token
+```
+
+Capturing a credential is a human's job here and stays one (D27 — `kmx`
+accepts no credential material). Everything after it is the agent's.
+
+**GitHub** ([`scripts/release-secret.sh`](../scripts/release-secret.sh)):
+a fine-grained personal access token on ONE repository, with Contents
+read+write, Pull requests read, Actions read+write. The script refuses
+anything that is not fine-grained, refuses a token that reaches more than
+one repository, refuses one with no expiry, and proves it can read the
+repository named. What it cannot prove, because GitHub does not expose a
+fine-grained token's permissions, is that you granted those and nothing
+else.
+
+**Azure DevOps** ([`scripts/ado-secret.sh`](../scripts/ado-secret.sh)):
+a Microsoft **Entra access token**, not a PAT — see
+[the ADO seam](#the-azure-devops-seam-is-not-a-pat). It refuses a token
+whose audience is not the MCP resource, refuses an expired one, and
+proves the server accepts it before storing anything. It reports when the
+token dies, because that is in about an hour.
+
+Both revoked by one command:
+
+```sh
+make release-revoke
+```
+
+which deletes both Secrets and closes the hosted egress allowance. **Run
+it at the end of any session that was only a test.** Deleting the Secret
+stops Kaimahi using the GitHub token; revoking it at
+github.com/settings/personal-access-tokens stops GitHub honouring it, and
+the command says so.
+
+## One repository, three ways
+
+1. The GitHub token is fine-grained and scoped to one repository, and
+   `release-secret.sh` refuses a token that lists more than one.
+2. `make release-bind GITHUB_REPO=owner/name` adds a P12 **standing
+   constraint** so the read tools are callable only with that `owner` and
+   `repo`. A read naming another repository is denied at the plane and
+   files a request. (Only the reads: a standing constraint *admits*, and
+   admitting a branch creation without a human would be the opposite of
+   the design. Re-run it after `make plane`, which restores the committed
+   table.)
+3. The consequential calls bind `owner` and `repo` in their digest, so an
+   approval for one repository cannot be spent on another.
+
+## Long builds: the driver polls, the agent never blocks
+
+A kagent turn is request/response; an Azure DevOps build is minutes. The
+waiting therefore lives in `scripts/release-run.sh`, in shell, and each
+agent turn is one short step.
+
+Rejected, and why:
+
+- **The P7b inbound bridge**, delivering a build-completion callback.
+  It needs a public HTTPS edge — a `LoadBalancer` Service, an Azure DNS
+  label and ACME ([`k8s/inbound-edge.yaml`](../k8s/inbound-edge.yaml)) —
+  which exists on AKS only, and a weekly release process run from a
+  laptop will not stand that up. It also buys latency, not capability.
+  And on the generic hooks the webhook body becomes the agent's prompt
+  verbatim, which is not what to do with a build payload.
+- **A polling loop inside one agent turn.** A model re-deciding "has it
+  finished yet" every minute burns budget on a question the status tool
+  answers exactly, and puts an unbounded wait inside a bounded turn.
+
+## What the GitHub server cannot do
+
+Worth knowing before you plan around it. GitHub's hosted MCP server
+(read at `v1.12.0`) has **no tool that creates a release, and none that
+creates a tag**. `list_releases`, `get_latest_release`,
+`get_release_by_tag`, `list_tags` and `get_tag` are all read-only, and
+`create_branch` is the only ref-creating tool in the registry.
+
+So the agent cannot publish a release even if a human approved it. The
+path is `actions_run_trigger` with `method: run_workflow` — the agent
+dispatches the workflow, and the workflow publishes. Which is what D38(b)
+asked for anyway: the agent tells systems to move bytes and never carries
+them. Here the tool surface enforces it rather than the design merely
+intending it.
+
+There is also **no compare tool**, so "what changed since the last
+release" is `get_latest_release` for the previous tag, then
+`list_pull_requests` (`state: closed`, `base`, sorted by update) reading
+`merged_at` per pull request. `list_pull_requests` is deliberately
+preferred over `search_pull_requests`, which takes its scope inside a
+free-text `query` argument — a repository named in free text is not
+something an argument-level policy can bind.
+
+## The Azure DevOps seam is not a PAT
+
+The lane was scoped expecting one. It is not available.
+
+`POST https://mcp.dev.azure.com/` answers `401` with
+`WWW-Authenticate: Bearer resource_metadata="…/.well-known/oauth-protected-resource/"`,
+and that document declares:
+
+```json
+{"resource": "https://mcp.dev.azure.com",
+ "authorization_servers": ["https://login.microsoftonline.com/organizations/v2.0"],
+ "bearer_methods_supported": ["header"],
+ "scopes_supported": ["https://mcp.dev.azure.com/.default"]}
+```
+
+Microsoft Entra ID only. The **local** `@azure-devops/mcp` server does
+take a PAT, but it speaks stdio and nothing else, and the gateway relays
+streamable HTTP — reaching it would mean writing a shim into the
+credential path, which this project declined to do.
+
+What makes the remote server reachable anyway is
+`bearer_methods_supported: ["header"]`: Entra's answer is an ordinary
+bearer token in the Authorization header, which is exactly what the
+gateway already injects from custody. So the ADO seam is configuration
+and not code, as intended — just with a different credential than
+expected.
+
+The prerequisites, which are Microsoft's and not ours: the organization
+must be backed by an Entra tenant (standalone Microsoft-account
+organizations are not supported), and whichever client mints the token
+must be consented in that tenant.
+
+**The cost, stated where it will be met:** an access token lives about an
+hour. A release session begins by refreshing it. The seam does not break
+when it dies — the server answers 401, the gateway audits it, nothing is
+half-done — but it is real friction, and P16's credential deadlines exist
+for the same reason.
+
+## Known gap: the ref an Azure DevOps build runs on cannot be bound
+
+An approval for `pipelines_write` binds *which pipeline in which
+project*. It cannot bind *which ref that pipeline builds*.
+
+The branch a run builds is not a top-level argument. It lives at
+`resources.repositories.<name>.refName`, and Kaimahi's policy vocabulary
+is top-level argument names only — `policy.go` says so and enforces it.
+`templateParameters` and `variables` are nested for the same reason.
+
+This is the first hole this project has found by pointing the plane at a
+server it did not write, and it is real: an approval to build pipeline 41
+does not constrain what it builds. Closing it needs dotted-path policy
+fields (`resources.repositories.self.refName`), which is a plane change
+and was out of this lane's scope.
+
+## Proven how
+
+**In CI, keyless.** Every decision above happens in the gateway before
+the forward, so all of it runs against the synthetic hosted upstream with
+no credential anywhere: a read bound to one repository proceeds with no
+human and the same read elsewhere is denied and filed; cutting a branch
+is denied and the request names the artifact; the approval is welded to
+that release, so the next version and the same version from a different
+base are denied again; an approval to run a workflow cannot be spent
+cancelling one; and a tool excluded by a header is absent from both
+`tools/call` and `tools/list`. The stand-in honours `X-MCP-Tools` the way
+the real servers do, and its policy declarations are copied from the
+committed table so they cannot drift from what ships.
+
+**In the plane's own tests.** `k8s/plane/upstreams.yaml` is parsed by
+`go test`, so a typo in the committed table fails the suite rather than a
+rollout; the dispatcher tools are asserted to bind their selector first.
+
+**For real.** The transcript is in the pull request.
+
+## From zero
+
+```sh
+make up && make plane
+make plane-copilot-secret                       # the agent thinks on governed Copilot
+make govern
+make release-secret GITHUB_REPO=owner/name      # paste the fine-grained token
+make ado-secret ADO_ORG=<organization>          # paste the Entra access token
+make govern-release                             # credential, read allowlist, both seams, the agent
+make release-bind GITHUB_REPO=owner/name        # the reads may reach only that repository
+make release GITHUB_REPO=owner/name VERSION=v1.2.3 DRY_RUN=1
+```
+
+When done: `make release-down` removes the agent and both seams;
+`make release-revoke` deletes both tokens and closes the allowance.

@@ -138,6 +138,7 @@ func TestTheConnectorFamiliesAreNotEmbedded(t *testing.T) {
 		"kaimahi-github.yaml", "github-agent.yaml",
 		"inbound-edge.yaml", "egress-copilot.yaml", "egress-hosted.yaml",
 		"ap-agent.yaml", "kaimahi-erp.yaml", "erp-mcp.yaml",
+		"release-agent.yaml", "kaimahi-release-github.yaml", "kaimahi-release-ado.yaml",
 	} {
 		// The premise first: this asserts an EXCLUSION, and an exclusion
 		// passes for free once the thing it excludes stops existing. If a
