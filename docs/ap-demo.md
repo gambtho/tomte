@@ -9,6 +9,10 @@ About twenty minutes on a laptop, on top of
 [the main demo's](demo.md) first two steps. Everything here runs on kind
 and needs no key.
 
+If you need to talk someone through this without a cluster in front of
+you, [ap-story.md](ap-story.md) is the same demo as a narrative — the
+beats, the numbers, the limits, and the line to land it on.
+
 ## What is real and what is simulated
 
 Be direct about this when you show it.
