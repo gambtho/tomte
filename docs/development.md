@@ -315,3 +315,5 @@ make plane-metrics                                  # one replica's counters, qu
 The ledger and the audit are the source of truth for "did governance
 actually happen". A passing conversation proves nothing on its own — the
 rows do.
+
+<!-- W25 docs-only short-circuit demonstration; this branch is throwaway. -->
