@@ -206,6 +206,42 @@ data:
           "url": "https://api.githubcopilot.com/mcp/",
           "internet": true,
           "credential_file": "/etc/kaimahi/upstream-creds/github/token"
+        },
+        "github-release": {
+          "url": "https://api.githubcopilot.com/mcp/",
+          "internet": true,
+          "credential_file": "/etc/kaimahi/upstream-creds/github-release/token",
+          "extra_headers": {
+            "X-MCP-Toolsets": "repos,pull_requests,actions",
+            "X-MCP-Tools": "list_pull_requests,list_commits,list_tags,list_releases,get_latest_release,get_release_by_tag,actions_list,actions_get,create_branch,actions_run_trigger",
+            "X-MCP-Exclude-Tools": "delete_repository,delete_file,push_files,create_or_update_file,merge_pull_request,update_pull_request_branch,fork_repository,create_repository,create_repository_ruleset,custom_properties_write"
+          },
+          "tools": {
+            "list_pull_requests":  {"policy_fields": ["owner", "repo", "state", "base"]},
+            "list_commits":        {"policy_fields": ["owner", "repo", "sha"]},
+            "list_tags":           {"policy_fields": ["owner", "repo"]},
+            "list_releases":       {"policy_fields": ["owner", "repo"]},
+            "get_latest_release":  {"policy_fields": ["owner", "repo"]},
+            "get_release_by_tag":  {"policy_fields": ["owner", "repo", "tag"]},
+            "actions_list":        {"policy_fields": ["method", "owner", "repo", "resource_id"]},
+            "actions_get":         {"policy_fields": ["method", "owner", "repo", "resource_id"]},
+            "create_branch":       {"policy_fields": ["owner", "repo", "branch", "from_branch"]},
+            "actions_run_trigger": {"policy_fields": ["method", "owner", "repo", "workflow_id", "ref"]}
+          }
+        },
+        "ado": {
+          "url": "https://mcp.dev.azure.com/",
+          "internet": true,
+          "credential_file": "/etc/kaimahi/upstream-creds/ado/token",
+          "extra_headers": {
+            "X-MCP-Toolsets": "pipelines"
+          },
+          "tools": {
+            "pipelines_definition": {"policy_fields": ["action", "project"]},
+            "pipelines_build":      {"policy_fields": ["action", "project", "buildId"]},
+            "pipelines_build_log":  {"policy_fields": ["action", "project", "buildId"]},
+            "pipelines_write":      {"policy_fields": ["action", "project", "pipelineId", "previewRun"]}
+          }
         }
       },
       "inbound_hooks": {
