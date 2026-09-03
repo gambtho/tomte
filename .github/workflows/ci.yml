@@ -2954,6 +2954,16 @@ jobs:
           # not be diagnosed from the log at all.
           kubectl --context kind-kmx-clone-free -n kaimahi port-forward --address 127.0.0.1 \
             "pod/$pod" 19092:9092 >port-forward.log 2>&1 &
+          pf=$!
+          # The forward must not outlive this step. A background process is
+          # NOT reaped when a step ends, so this kubectl went on holding
+          # 127.0.0.1:19092 for the rest of the job — and `kmx metrics`, three
+          # steps later, forwards that same port. From #81 (which added the
+          # metrics step) every non-docs push to main failed here with
+          # "bind: address already in use", visible to nobody: this job runs
+          # on main only, and that step sent kmx's stderr to a file it never
+          # printed. Both of those are fixed too; this line is the bug.
+          trap 'kill "$pf" 2>/dev/null || true' EXIT
           ready=
           for _ in $(seq 1 150); do
             # /livez, not /readyz: readiness needs Postgres, and reading
