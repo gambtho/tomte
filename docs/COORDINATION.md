@@ -204,8 +204,11 @@ from the name.
 WORKSTATIONS: a daemon on each machine discovers Claude Code, Codex and
 VS Code extensions, inventories their MCP servers and skills, applies
 tool-native sandbox policy, and enrols the device against an LLM gateway
-that issues short-lived JWTs instead of shipping long-lived provider keys
-to laptops. Apache-2.0, early (~58 stars, ~97 commits when read).
+that can issue short-lived JWTs instead of shipping long-lived provider
+keys to laptops. **That JWT path is controller-managed mode**: the
+controller is optional, and in standalone mode there is no controller and
+no device identity — "authenticate the user directly to a compatible LLM
+gateway". Apache-2.0, and early: created 2026-07-31, read 2026-09-03.
 
 **The one genuine overlap**, and we should concede it rather than argue
 it: short-lived credentials instead of distributed API keys is the same
@@ -224,8 +227,9 @@ allowlist AND its arguments (P12), a denial that files a request a human
 decides, and a grant welded to that exact call.
 
 **The sharper framing is who the agent works for.** Theirs sits behind a
-developer at a keyboard — a human is in the loop by construction and the
-risk is credential sprawl and shadow tooling. Ours runs unattended with
+developer at a keyboard, in a workstation context where a person is
+present at the session even if not at every call, and the risk is
+credential sprawl and shadow tooling. Ours runs unattended with
 authority to act, where nobody is watching the individual call and the
 risk is that it DOES something. Their controls are about access; ours
 are about effects.
@@ -241,7 +245,7 @@ are a natural place to grow toward the developer's machine.
 OIDC device enrolment, fleet inventory and per-device identity. Kaimahi
 cannot tell you which laptops are running which MCP servers, and that is
 not our problem to solve. Their problem is also more immediately felt —
-every enterprise has ungoverned Claude Code installs today, while
+many enterprises have ungoverned Claude Code installs today, while
 deployed agents with spending authority are still mostly ahead of us.
 
 ### What they have that would make sense here (NOT GO — candidates)
@@ -260,7 +264,10 @@ Each verified against this repo before it was written down.
 2. **Credentials that expire.** The `credential` table has no expiry
    column: a governed token is bounded by allowlist, budget and
    constraint, but never by TIME, and lives until its row is deleted.
-   Theirs are short-lived by construction. On AKS the platform-native
+   Theirs are short-lived in controller-managed mode (not in standalone,
+   which has no controller and no device identity) — so the comparison
+   is with their managed deployment, not with the tool as such. On AKS
+   the platform-native
    answer is workload identity, which also answers "why AKS" better than
    observability does.
 3. **A posture view.** We hold everything needed and expose it only as
