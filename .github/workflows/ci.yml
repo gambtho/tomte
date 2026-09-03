@@ -1989,6 +1989,16 @@ jobs:
           # exist at all; `make govern-tools` repoints the TOOLS wiring,
           # not the model.
           KIND_CLUSTER=kaimahi-p1 bin/kmx use governed-ollama --agent hello-tools
+          # A new key in an already-mounted Secret takes kubelet up to a
+          # minute to project (P5b delta), and the plane fails a hook
+          # CLOSED (503) while its signing secret is unreadable — which
+          # is the right behaviour and the reason to wait for it here,
+          # exactly as the P8b setup above does.
+          for _ in $(seq 1 60); do
+            EXPECT=403 HOOK=slack-tools bash scripts/slack-mention-probe.sh U0CIPERSON \
+              'List the configmaps in the default namespace.' >/dev/null 2>&1 && break
+            sleep 3
+          done
           # Triggering an agent from outside is approvable (P7b): the
           # first mention is refused and files a request.
           EXPECT=403 HOOK=slack-tools bash scripts/slack-mention-probe.sh U0CIPERSON \
