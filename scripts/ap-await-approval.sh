@@ -61,6 +61,16 @@ if [ -z "$subject" ]; then
   exit 1
 fi
 
+# The grants that already exist for this subject, BEFORE the wait. The
+# check at the end requires a grant that is not in this set: "a grant for
+# this tool decided by this person exists" is not the same claim as "this
+# wait produced one", and on a credential that has approved the same tool
+# before, the weaker claim is satisfied by history.
+admin grants "$CRED_AP" > "$work/grants-before.out"
+awk -v cred="$CRED_AP" -v subj="$subject" \
+  '$2==cred && $3=="tool" && $4==subj {print $1}' "$work/grants-before.out" \
+  | sort > "$work/grant-ids-before"
+
 printf '\n\033[1m   WAITING FOR A HUMAN.\033[0m This is the request, as the plane states it:\n\n' >&2
 grep -F "$id" "$work/pending.out" >&2 || true
 printf '\n   In the Slack channel this cluster posts to, %s types:\n\n' "$user" >&2
@@ -106,12 +116,19 @@ if ! awk -v cred="$CRED_AP" -v subj="$subject" -v who="slack:$user" \
   exit 1
 fi
 
+# The grant this wait produced: NEW (not in the snapshot above), LIVE, and
+# decided by that person. Requiring all three is what makes the caller's
+# next call — which spends this grant — the one the human actually
+# authorised, rather than any grant that happens to be lying around.
 admin grants "$CRED_AP" > "$work/grants.out"
-if ! awk -v cred="$CRED_AP" -v subj="$subject" -v who="slack:$user" \
-  '$2==cred && $3=="tool" && $4==subj && index($0, who) {found=1} END{exit !found}' \
-  "$work/grants.out"; then
+awk -v cred="$CRED_AP" -v subj="$subject" -v who="slack:$user" \
+  '$2==cred && $3=="tool" && $4==subj && $5=="yes" && $10==who {print $1}' \
+  "$work/grants.out" | sort > "$work/grant-ids-after"
+if [ -z "$(comm -13 "$work/grant-ids-before" "$work/grant-ids-after")" ]; then
   cat "$work/grants.out" >&2
-  echo "ap-await-approval: $subject was approved by slack:$user but carries no grant." >&2
+  echo "ap-await-approval: no NEW live grant for $subject decided by slack:$user." >&2
+  echo "  A grant that already existed before this wait does not show that the" >&2
+  echo "  decision just made is the one about to be spent. Not continuing." >&2
   exit 1
 fi
 

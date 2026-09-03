@@ -107,8 +107,15 @@ the ERP simply travels it too. A private ACR is **not** publication
 publishing the demo ERP is untouched. See
 [aks.md](aks.md#6c-optional-the-accounts-payable-demo) for the managed-cluster run.
 
-`bash scripts/erp-deploy.sh render` prints what a registry target would
-apply, and contacts no cluster.
+To see exactly what a registry target would apply, without a cluster:
+
+```bash
+ERP_TARGET=registry ERP_IMAGE=<registry-host>/kaimahi-erp:p13 \
+  bash scripts/erp-deploy.sh render
+```
+
+(`ERP_PULL_POLICY` defaults to `IfNotPresent`. Without `ERP_TARGET=registry`
+the script refuses, because the kind path renders nothing.)
 
 What `make govern-ap` configures is worth reading out loud, because it is
 the entire demo:

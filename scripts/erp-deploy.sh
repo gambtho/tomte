@@ -199,11 +199,26 @@ validate_registry() {
       echo "  (an unset ACR_NAME produces exactly this shape)" >&2
       exit 1 ;;
   esac
+  # A SLASH IS NOT A REGISTRY. "team/erp:p13" has one and resolves through
+  # Docker Hub — a public registry this project deliberately never uses
+  # (D15). Docker's own rule is what distinguishes them: the first path
+  # component is a registry host only if it contains a dot or a port
+  # colon (or is localhost). Anything else is a Docker Hub namespace, so
+  # accepting it would pull an image from a name a stranger can register.
   case "$ERP_IMAGE" in
-    (*/*) ;;
+    (*://*)
+      echo "erp-deploy: ERP_IMAGE '$ERP_IMAGE' carries a URL scheme" >&2
+      echo "  (an image reference is <registry>/<repository>:<tag>, not a URL)" >&2
+      exit 1 ;;
+  esac
+  erp_image_host=${ERP_IMAGE%%/*}
+  case "$ERP_IMAGE" in (*/*) ;; (*) erp_image_host='' ;; esac
+  case "$erp_image_host" in
+    (localhost | *.* | *:*) ;;
     (*)
       echo "erp-deploy: ERP_IMAGE '$ERP_IMAGE' names no registry" >&2
-      echo "  (a registry target needs <registry>/<repository>:<tag>)" >&2
+      echo "  (a registry target needs <registry-host>/<repository>:<tag>;" >&2
+      echo "   '${erp_image_host:-$ERP_IMAGE}' is a Docker Hub namespace, not a host)" >&2
       exit 1 ;;
   esac
   case "$ERP_PULL_POLICY" in

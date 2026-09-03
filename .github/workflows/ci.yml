@@ -191,6 +191,12 @@ jobs:
           # Exactly the shape an unset ACR_NAME expands to.
           refuse "malformed ERP_IMAGE" ERP_TARGET=registry ERP_IMAGE=.azurecr.io/kaimahi-erp:p13
           refuse "names no registry" ERP_TARGET=registry ERP_IMAGE=kaimahi-erp:p13
+          # A SLASH IS NOT A REGISTRY. Both of these resolve through Docker
+          # Hub, a public registry this project never uses (D15), from a
+          # name a stranger can register.
+          refuse "names no registry" ERP_TARGET=registry ERP_IMAGE=team/erp:p13
+          refuse "names no registry" ERP_TARGET=registry ERP_IMAGE=nginx:latest
+          refuse "carries a URL scheme" ERP_TARGET=registry ERP_IMAGE=https://reg.example/erp:p13
           refuse "unknown ERP_TARGET" ERP_TARGET=aks ERP_IMAGE=registry.example/kaimahi-erp:test
           # And a kind target renders NOTHING: that path applies the
           # committed document, which is the claim this step exists to
