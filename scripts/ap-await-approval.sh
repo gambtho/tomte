@@ -61,6 +61,20 @@ if [ -z "$subject" ]; then
   exit 1
 fi
 
+# The CALL this request is for, not just the tool. `make approvals` does
+# not print the argument digest, but its last column is the arg_summary —
+# the rendering of exactly the policy-relevant fields the digest is taken
+# over — so it identifies the call just as precisely. "<tool>: " appears
+# only at the head of that summary; the subject column carries the bare
+# tool name with no colon.
+want_call=$(grep -F "$id" "$work/pending.out" | grep -o "$subject: .*" | head -1)
+if [ -z "$want_call" ]; then
+  cat "$work/pending.out" >&2
+  echo "ap-await-approval: request $id states no call — refusing to wait on a" >&2
+  echo "  request whose approval could not afterwards be tied to one." >&2
+  exit 1
+fi
+
 # The grants that already exist for this subject, BEFORE the wait. The
 # check at the end requires a grant that is not in this set: "a grant for
 # this tool decided by this person exists" is not the same claim as "this
@@ -102,17 +116,27 @@ if [ "$decided" != yes ]; then
   exit 1
 fi
 
-# Decided is not approved, and approved is not approved BY THAT PERSON.
-# Both are read from the plane's own records rather than inferred from the
-# request having left the pending list — a denial empties it too.
+# Decided is not approved; approved is not approved BY THAT PERSON; and
+# approved by that person is not approved FOR THIS CALL. All three are
+# read from the plane's own records rather than inferred from the request
+# having left the pending list — a denial empties it too.
+#
+# The last of the three is the one that matters most here, because two
+# requests for the same tool can be pending at once (that is the P12
+# guarantee, and it is the normal case in these scenarios). Without it, a
+# human who approved the OTHER request and denied this one would satisfy
+# every other check.
 admin approval-audit "$CRED_AP" > "$work/audit.out"
-if ! awk -v cred="$CRED_AP" -v subj="$subject" -v who="slack:$user" \
-  '$2==cred && $3=="tool" && $4==subj && $5=="approved" && $6==who {found=1} END{exit !found}' \
+if ! awk -v cred="$CRED_AP" -v subj="$subject" -v who="slack:$user" -v want="$want_call" \
+  '$2==cred && $3=="tool" && $4==subj && $5=="approved" && $6==who \
+   && substr($0, length($0) - length(want) + 1) == want {found=1} END{exit !found}' \
   "$work/audit.out"; then
   cat "$work/audit.out" >&2
-  echo "ap-await-approval: no 'approved' row for $subject decided by slack:$user." >&2
-  echo "  The request was decided, but not approved by that person — treated as a" >&2
-  echo "  failure rather than continuing on somebody else's authority." >&2
+  echo "ap-await-approval: no 'approved' row by slack:$user for this exact call:" >&2
+  echo "    $want_call" >&2
+  echo "  The request was decided, but not approved by that person for that call —" >&2
+  echo "  treated as a failure rather than continuing on an approval of something" >&2
+  echo "  else." >&2
   exit 1
 fi
 
