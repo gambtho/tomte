@@ -152,6 +152,15 @@ func (a *App) GovernTools(opt ToolsOptions) error {
 		if err := a.apply("kaimahi-tools.yaml"); err != nil {
 			return err
 		}
+	} else if err := a.preflightToolServer(opt.Server); err != nil {
+		// A scaffolded seam kmx did not apply may simply not be there —
+		// `kmx tools add --no-apply` writes the manifest and stops, and
+		// `--dry-run` writes nothing to the cluster at all. Without this
+		// check the next line waits five minutes on an object that does
+		// not exist and then reports a timeout, which says nothing about
+		// the cause. The credential and allowlist above are already
+		// written and are correct; only the wiring is missing.
+		return err
 	}
 	// Accepted, not Ready: a RemoteMCPServer reports that it reached the
 	// upstream and discovered its tools. Patching the agent before that
@@ -170,6 +179,27 @@ func (a *App) GovernTools(opt ToolsOptions) error {
 		return err
 	}
 	return a.waitAgentReady(opt.Agent)
+}
+
+// preflightToolServer refuses early when the RemoteMCPServer this is
+// meant to govern against does not exist, and names the command that
+// creates it. Only a genuine NotFound is treated as absence: an
+// unreachable API server or an RBAC denial must not be reported as
+// "you forgot to apply it".
+func (a *App) preflightToolServer(server string) error {
+	_, err := a.kubectlCapture("-n", config_kagentNamespace, "get",
+		"remotemcpserver", server, "-o", "name")
+	if err == nil {
+		return nil
+	}
+	if !isNotFound(err) {
+		return err
+	}
+	return fmt.Errorf("no RemoteMCPServer %q in namespace %s.\n"+
+		"  The credential and its allowlist are set; what is missing is the seam an agent is pointed at.\n"+
+		"  If you scaffolded with --no-apply or --dry-run, apply the manifest first:\n"+
+		"    kubectl --context %s apply -f upstreams/<name>.yaml",
+		server, config_kagentNamespace, a.Cfg.KubeContext)
 }
 
 // UngovernTools restores the P3 wiring — direct to the chart-managed tool

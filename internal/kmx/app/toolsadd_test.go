@@ -83,6 +83,12 @@ JSON
     printf 'Forwarding from 127.0.0.1:%s -> 9091\n' "$KMX_TEST_ADMIN_PORT"
     exec sleep 30 ;;
   *"get pods"*) printf '%s' "$KMX_TEST_PODS"; exit 0 ;;
+  *"get remotemcpserver"*)
+    case "$KMX_TEST_NO_SERVER" in
+      1)    printf 'Error from server (NotFound): remotemcpservers.kagent.dev "x" not found\n' >&2; exit 1 ;;
+      boom) printf 'Unable to connect to the server: dial tcp: i/o timeout\n' >&2; exit 1 ;;
+      *)    printf 'remotemcpserver.kagent.dev/x\n'; exit 0 ;;
+    esac ;;
   *"get service"*)
     if [ "$KMX_TEST_SVC" = "notfound" ]; then
       printf 'Error from server (NotFound): services "acme-warehouse" not found\n' >&2
@@ -220,6 +226,29 @@ func TestAnUnsetTargetPortDefaultsToTheServicePort(t *testing.T) {
 	doc, _ := os.ReadFile(opt.Out)
 	if !strings.Contains(string(doc), "port: 8090") {
 		t.Fatalf("want the Service port when targetPort is unset:\n%s", doc)
+	}
+}
+
+func TestGoverningAgainstASeamThatWasNeverAppliedFailsFast(t *testing.T) {
+	// `kmx tools add --no-apply` writes the manifest and stops, so the
+	// RemoteMCPServer may simply not be there. Without this the next
+	// step waits five minutes on an object that does not exist and
+	// reports a timeout, which says nothing about the cause.
+	f := newAddFixture(t, warehouseService, "notfound", nil)
+	t.Setenv("KMX_TEST_NO_SERVER", "1")
+	err := f.app.preflightToolServer("kaimahi-warehouse")
+	if err == nil || !strings.Contains(err.Error(), "no RemoteMCPServer") {
+		t.Fatalf("want an early refusal naming the missing seam, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "apply the manifest first") {
+		t.Fatalf("the refusal must name the fix: %v", err)
+	}
+	// An ambiguous read is NOT absence: an unreachable API server or an
+	// RBAC denial must not be reported as "you forgot to apply it".
+	t.Setenv("KMX_TEST_NO_SERVER", "boom")
+	err = f.app.preflightToolServer("kaimahi-warehouse")
+	if err == nil || strings.Contains(err.Error(), "apply the manifest first") {
+		t.Fatalf("an ambiguous read was reported as absence: %v", err)
 	}
 }
 

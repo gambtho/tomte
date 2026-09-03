@@ -154,9 +154,14 @@ Both directions are worth checking rather than assuming:
 `kubectl -n <namespace> get networkpolicy` lists every policy selecting
 those pods, not only this one.
 
-**Before anything is written or applied**, kmx sends the candidate table
-to the running plane, which merges it over the committed one and parses
-it with the same `config.Parse` it booted with. A malformed entry is
+**Before anything is written or applied**, kmx sends the candidate
+**table** to the running plane, which merges it over the committed one
+and parses it with the same `config.Parse` it booted with. That covers
+the upstream entry and the declarations; the two NetworkPolicies and the
+RemoteMCPServer are checked only by the Kubernetes API when they are
+applied (`--dry-run` does that early). Their content comes from your
+Service, so the thing worth reading before you apply is the pod selector
+kmx printed. A malformed entry is
 therefore refused *here*, with the plane's own message — not later, in a
 rollout, by a pod that will not start. What the plane understood comes
 back:
@@ -196,6 +201,11 @@ and refuses *before* anything is created.
 
 Nothing can call the upstream yet: it has no credential, and an empty
 allowlist means nothing is callable.
+
+If you scaffolded with `--no-apply` or `--dry-run`, apply the manifest
+before this step — the seam is your file, and `kmx tools govern` does not
+re-apply it (it says so rather than waiting on an object that is not
+there).
 
 ```bash
 kmx tools govern \
