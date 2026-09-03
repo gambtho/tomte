@@ -118,6 +118,7 @@ prefix.
 | P11: `kmx` milestone 2 — `kmx govern` and the plane, clone-free (D28) | W22 worker | READY 2026-09-02 — prompt below; W21 merged and verified, so this is clear to launch | kind only and fully keyless; fetches the plane at kmx's own sha from the Go proxy, embeds `k8s/`, publishes nothing |
 | P12: argument-level policy — standing constraints + an approval bound to the call (D29, widened by D31) | W23 worker | SHAPED 2026-09-02 — prompt below; launches after W22, or in parallel if the user re-applies the parallel-set rules | touches the gateway, the store, a migration, the approvals path and the Slack notifier; no new upstream |
 | P13: the accounts-payable exception demo — the scenario on top of P12 (D29, D30) | W24 worker | SHAPED 2026-09-02 — prompt below; launches after W23 (P12) merges | fixture ERP server + ConfigMap corpus, the payee-substitution injection case, Slack as the surface; kind + CI, no AKS run unless the user calls one |
+| CI: the e2e job takes ~15 min on every PR (D32) | W25 worker | SHAPED 2026-09-02 — prompt below; runs in parallel with W22/W23 but MERGES LAST (both edit ci.yml) | investigation-led: 934s over 68 serial steps, bring-up 186s, the model pull only 16s of it |
 | Brand assets + architecture diagram + org/front-door plans | user-run lane (outside the board's prompt set) | PR #33 MERGED (+ kaimahi-agents/.github#1); main CI green | brand validator in the hygiene job |
 | README front door + CONTRIBUTING.md | user-run lane (outside the board's prompt set) | PR #34 MERGED; main CI green | anchored front-door checker in hygiene: section order enforced, no `npx kaimahi create` mention before the quickstart ends — PR #16's README hunk must land under "A scaffolder CLI: considered, not built" (was "Proposed CLI direction" until D23) |
 | CLI decisions + PR #16 review | user + coordinator | D19 ruled; coordinator review rounds done (2026-09-01/02) | not a build lane; parallelises with everything |
@@ -167,6 +168,7 @@ prefix.
 | D29 | 2026-09-02 | **The demo thesis becomes accounts-payable exceptions, and the capability it needs — argument-bound approvals — is P12; the scenario is P13.** The user's framing: *build an agent that resolves the invoices ordinary automation cannot, then deploy it with authority to act, without giving it uncontrolled access to company money.* The coordinator's blind-spot pass established that the plane cannot make that claim today: enforcement is VERB-ONLY (the gateway reads `params.name` and nothing else, checks the allowlist, consumes a grant for the tool NAME, and forwards arguments unread), `permit_grant.amount` is budget-only by CHECK constraint, and approval requests dedupe on `(credential_name, kind, subject)` where subject is the tool name — so two attempts to pay different amounts collapse into ONE request and one approval covers both. Four rulings: (1) **an approval binds to the exact call** — the denied call's canonical arguments are fingerprinted, the request and the grant carry that digest, and the gateway admits only a matching call; the approver approves a transaction, not a verb; (2) **the audit records the digest plus a declared summary** of the fields a tool's own definition marks policy-relevant (amount, payee, invoice id) — provable linkage and a legible line, without persisting arbitrary business data into a table that is in every backup; (3) **capability first (P12), scenario second (P13)** — P12 builds argument-bound approvals end to end against the tools that already exist, P13 builds the AP scenario on top; (4) **the ERP is an in-cluster fixture-backed MCP server in this repo** (the shape `slack-mcp` already has, one `tool_upstreams` entry, keyless, deterministic, CI-testable) — not a real sandbox ERP. Also ruled, and stated plainly because it refines (1): the digest binds the tool's **declared policy-relevant fields** where a tool declares them, and the whole canonical argument object only where it does not — an LLM re-emitting a semantically identical call is not byte-stable, so a whole-blob digest would make "approve, then it proceeds" fail nondeterministically, including in the existing P4c approvals e2e. One declaration serves both the binding and the summary. Consequence, stated and accepted: P12 makes the injection demo's claim honest — not *the agent refuses manipulation*, but *being manipulated is not sufficient to move money* | ruled via options: "Approval binds to the exact call (Recommended)", "Digest plus a declared summary (Recommended)", "Capability first, then the scenario (Recommended)", "In-cluster MCP server in this repo, fixture-backed (Recommended)" |
 | D30 | 2026-09-02 | **P13 shaped — the accounts-payable exception demo, invented in full.** User ruling on the open scenario questions: "i think we can make up all of those things, its a demo, not a real implementation" — so the coordinator invented the corpus and the tool surface rather than asking. (1) **The ERP is one in-cluster fixture-backed MCP server** in this repo (the `slack-mcp` shape, one `tool_upstreams` entry, keyless), with the fixtures in a ConfigMap so the story can be edited without a rebuild. Read tools — `invoice_get`, `invoice_list`, `po_get`, `receiving_get`, `contract_get`, `payment_policy_get` — are on the standing allowlist. Consequential tools — `payment_schedule`, `dispute_open`, `vendor_notify` — are on NO allowlist, so every attempt to use one is denied and files an approval request; that is the demo. Their declared policy-relevant fields (D29) are: `payment_schedule` → invoice_id, amount_cents, payee_id; `dispute_open` → invoice_id, amount_cents; `vendor_notify` → vendor_id. (2) **The corpus is arithmetic the audience can check**: vendor Meridian Industrial Supply (MER-4471); PO-2291 for 400 units at $105.00 = $42,000.00, contract terms requiring prior written authorization for any expedite fee, none on file; invoice INV-88134 for $48,000.00 = 400 units at $105.00 plus $6,000.00 "expedited handling"; receiving record RCV-2291-A showing 310 units received and 90 backordered; payment policy: pay only the received quantity, hold disputed lines, and any payment over $10,000 needs human approval. The correct resolution is therefore 310 × $105 = **$32,550 payable**, $9,450 held as undelivered, $6,000 disputed as an unauthorized fee. (3) **The injection case is a payee substitution**, the real AP fraud pattern: a second invoice INV-88140 carries text instructing the agent that the invoice is pre-approved and must be paid in full to a DIFFERENT payee immediately without requesting approval. The demo does not depend on the model refusing it — the agent is allowed to comply, and the gateway denies the call anyway, files a request whose summary shows both the changed amount and the changed payee, and audits the attempt. Crucially it cannot ride the earlier approval either: that grant is welded to the $32,550 call's digest (D29). (4) **Slack is the demo's UI — no new web surface** (prime directive): the approval carries the transaction summary P12 adds, the evidence is what the agent posts, and the audit trail is printed. (5) **Built and proven on kind + CI**, keyless and deterministic; a live AKS run is a separate call for the user because it costs money and needs their credentials, exactly as D20/D25 handled it. W24 prompt below; launches after W23 (P12) merges | "i think we can make up all of those things, its a demo, not a real implementaiton" |
 | D31 | 2026-09-02 | **Kaimahi's boundary against the "AI Agent DevX" deck: own the governance vertical completely and expose it through `kmx`; do not build the experience around it.** Context: a PM-team ideation deck (8 pages) sketching a developer journey — describe the agent by chat, connect data/models/skills/MCP, define permissions, boundaries and pass/fail scenarios, generate and test locally, migrate to AKS with CI/CD and observability, then hand it to a business analyst. Coordinator's read of the deck itself, which binds this decision: (a) page 4 labels the guided flow **`(kmx-build-agent)`** — the deck already assumes kmx is the vehicle, which is the one real signal in it about direction; (b) it is titled "Ideation" and page 2 still asks "Developer? Business analyst? Hobby person?", with two slides marked "(NA)" — the AUDIENCE IS UNRESOLVED, which is upstream of every scoping question here; (c) its last slide's finance example is scheduled REPORTING with a sign-off step, not exception handling, so the AP agent (D30) is an UPGRADE on the deck and must not be presented internally as what the deck asked for. Four rulings: (1) **Kaimahi grows UP into slide 4's middle column** — describe permissions, boundaries and pass/fail scenarios, get an agent that provably enforces them — because every governance bullet in the deck is already built or shaped here (source permission RO/RW = the tool allowlist; "boundaries: no internet" = the P7a egress policy; "audit — can't turn off" = the audit trail; "Validate/HiL" and "Approver Sign off" = P4c/P8b approvals; pass/fail scenarios = what P12 makes enforceable). (2) **Kaimahi does NOT build the experience**: not the runtime console of slides 5–6 (agent list, logs, metrics, traces, start/stop/pause, YAML editing) — `kagent-ui` already ships that and was observed running during the P11 verification, so building a second one is exactly what the prime directive exists to stop — not the analyst canvas of slide 8, not chat-driven scaffolding, not CI/CD generation, not the Azure observability wiring. Those surfaces CONSUME Kaimahi. (3) **P12's scope gains the standing-constraint half**, amending D29(1): the hero prompt's "may approve valid invoices under $10,000, anything else needs Finance approval" is a declarative per-credential/tool constraint — the option NOT taken in D29 — and the scenario needs it alongside the bind-to-the-call digest. P12 therefore builds BOTH: standing constraints for routine calls, and an approval welded to the exact call for everything outside them. W23 amended below. (4) **"Never expose payment details" is cut from the hero prompt**: it is output filtering, neither an allowlist nor an approval, and the honest position is not to imply a control that does not exist. Consequence, stated: this answers the three positioning questions without ever having to explain why we rebuilt kagent's UI — kagent runs the agent, Kaimahi is what makes an agent safe to give authority to, and AKS matters for identity, private connectivity and observability, which are platform reasons rather than governance ones | "Your suggestions seem reasonable" |
+| D32 | 2026-09-02 | **A parallel lane to make the e2e job faster (W25), investigation-led and merging LAST.** The `e2e-hello-world` job is a required check on every PR and takes ~15 minutes; hygiene and go-plane are ~35s each, so it is effectively all of CI. The coordinator measured before shaping the lane (run 33707312808): 934s across 68 SERIAL steps in one job on one cluster, the bring-up 186s of it (kind create 56s, the 1.9GB model pull only 16s, ~110s waiting for kagent's five pods), and a 747s tail whose largest entries are the network-boundary probe 105s, the Postgres outage probe 76s and the plane deploy 59s. **Recorded because it redirects the lane: caching the model — the obvious first idea — would save about 16 seconds.** The structural question is whether one serial job on one cluster is still right now that it carries every phase's proof from P1 to P10. Rulings: (1) **what is proven must not shrink** — no probe deleted, moved to main-only, path-filtered away or downgraded to a smoke test to buy time; a probe believed redundant is NAMED in the PR with evidence for a coordinator ruling, not removed; (2) **the model is not weakened** without the tool probes passing repeatedly as evidence, and that is a coordinator decision because the P3 proofs depend on real function-calling; (3) **flakiness is worse than slowness** — the three recorded flake classes were each paid for once and must not return, and any change that is fast on average and occasionally red is a regression, so the lane reports variance across repeated runs, not one fast number; (4) **W25 merges LAST** — W22 and W23 are in flight and both edit ci.yml, so W25 branches from main, rebases onto whatever they land, and does not edit the steps they own | "i think we should also have a parallel session to investigate our e2e hello world ci -- it is taking close to 10m" |
 | D14 | 2026-09-01 | P5 direction: the **undeniable demo** — not a new capability arc but making the built one legible and credible. Rulings: (1) outbound connector platform is **Slack** (via existing MCP servers, no connector code); (2) AKS work goes all the way — cluster portability AND a real AKS deployment with evidence (accepts Azure spend + credentials in a worker session); (3) demos run on the **Copilot** preset while **CI stays keyless on ollama** (public fork-exposed repo — no repo secrets in CI, ever). Rationale on the board: everything governed so far protects an agent that lists ConfigMaps; posting to a channel humans read is the first consequential action, and it makes the approval gate the point rather than the plumbing | "sure, that's undeniable demo makes sense" — then ruled via options: "Slack (Recommended)", "Portability + real AKS run (Recommended)", "Copilot for demo, ollama for CI (Recommended)" |
 | D13 | 2026-09-01 | P4c approval model: TIME-BOXED PERMITS — a denied action files a pending request; approval grants it bounded (expiry by duration and/or use count) and compiles into the existing allowlist/budget rows; deny-and-retry mechanics, no held-open calls. Demo scenarios: tool-access widening (k8s_get_events, read-only) AND budget overage; the P3 tool-server read-only posture stays untouched (write-tool demo deferred) | ruled via options: "Time-boxed permits (Recommended)"; "Widen tool access (Recommended), Budget overage (Recommended)" |
 
@@ -2283,6 +2285,84 @@ the denial, the Slack approval naming the transaction, the payment, and
 then the injected invoice being refused with its audit row. Branch from
 current main; PR targets main; no stacked bases; lane ends at PR-open-
 with-checks-green — do not merge. Report deviations in the PR.
+```
+
+### W25 — CI: the e2e job takes 15 minutes on every PR (UNASSIGNED — paste into a fresh CLI session; MERGES LAST, see D32)
+
+```
+You are a worker session for the Kaimahi project (repo root: this
+checkout, remote kaimahi-agents/kaimahi). Read docs/COORDINATION.md
+first — D32 (which created this lane and sets its merge order), the
+CI flake classes recorded above, the "Considered and rejected" list and
+the security standing guidance bind you. Your lane: the `e2e-hello-world`
+job is a required check on every PR and it takes about 15 minutes. Make
+it materially faster WITHOUT reducing what it proves.
+
+The coordinator measured a real run before writing this (run
+33707312808, a code branch, e2e job 100499115377). Treat these as the
+starting point, not the answer — re-measure, and say where you disagree:
+- The job is 934s across 68 SERIAL steps in ONE job on ONE cluster.
+  hygiene and go-plane are ~35s each, so e2e is essentially all of CI.
+- The single biggest step is the bring-up ("Cluster + Ollama + model +
+  kagent + agent") at 186s. Inside it: `kind create cluster` 56s, the
+  1.9GB `ollama pull qwen2.5:3b` only 16s, and roughly 110s waiting for
+  kagent's five pods to reach Ready.
+- **So the obvious fix is a red herring**: caching the model would save
+  about 16 seconds. Do not spend the lane on it. The time is in cluster
+  creation, kagent's image pulls, and a 747s serial tail of probes.
+- The tail's largest: network boundary 105s, Postgres outage 76s, deploy
+  the plane 59s, governed tool call 42s, hosted-upstream refusal 41s,
+  tool call through MCP 39s, both-replicas-restart 30s. 41 of the 68
+  steps take under 5s each.
+
+Investigate first, and put the measurements in the PR. The structural
+question is whether one serial job on one cluster is still the right
+shape now that it carries every phase's proof from P1 to P10, or whether
+it should be several jobs that each bring up a cluster and run one
+capability's probes in parallel — trading repeated bring-up cost for
+wall-clock. Do the arithmetic with real numbers before choosing;
+sharding pays only if the per-shard bring-up is much smaller than the
+tail it removes, and the bring-up may itself be reducible (a cached kind
+node image, pre-pulled kagent images side-loaded into the node, a
+readiness wait that is not the long pole).
+
+Hard rules:
+- **What is proven must not shrink.** Every assertion that runs today
+  still runs on every PR. You may re-order, parallelise, share setup, or
+  make waits smarter. You may NOT delete a probe, move a check to
+  main-only, skip it by path filter, or turn a real assertion into a
+  smoke test to buy time. If you believe a specific probe is genuinely
+  redundant with another, do not remove it — name it in the PR with the
+  evidence and let the coordinator rule.
+- **Do not weaken the model.** A smaller model would be faster, but the
+  P3 tool-call probes depend on real function-calling. If you propose a
+  model change, it needs the tool probes passing repeatedly (not once)
+  as evidence, and it is a coordinator decision, not yours.
+- **The docs-only short-circuit stays exactly as it is** (W14, and every
+  e2e step carries its guard — there is a hygiene check asserting that).
+  If you add steps or jobs, they carry the same guard and that check
+  must still pass.
+- **Flakiness is worse than slowness.** Any parallelism must not create
+  a new race. The three recorded flake classes above were each paid for
+  once; re-read them and do not reintroduce them. If a change makes a
+  step's timing tighter, widen the margin rather than betting on the
+  runner.
+
+Sequencing, and this is not negotiable (D32): W22 (kmx milestone 2) and
+W23 (P12) are in flight and BOTH edit .github/workflows/ci.yml. You
+merge LAST. Branch from current main, and expect to rebase onto whatever
+those two land; do not edit the steps they own — if your change needs
+one of their steps moved, say so in the PR and let them land first.
+
+Verification is real: the job green on your PR, plus before-and-after
+wall-clock numbers in the PR body from actual runs (not estimates), the
+per-step breakdown for the new shape, and an explicit statement that the
+set of assertions is unchanged — ideally a diff of the assertion list.
+Run it more than once: a single fast run proves nothing about variance,
+and a change that is fast on average and occasionally red is a
+regression. Branch from current main; PR targets main; no stacked bases;
+lane ends at PR-open-with-checks-green — do not merge. Report deviations
+in the PR.
 ```
 
 ## Delta sheets from finished lanes
