@@ -212,6 +212,104 @@ and finding them a second time is wasted effort:
   them is reasonable; ending up with two implementations of either is not
   (principle 6).
 
+## Directions worth arguing about
+
+**Nothing below is ruled, scheduled, or agreed.** These are seeds — several
+of them cut against decisions currently in force, and that tension is the
+reason they are written down rather than the reason to leave them out. Each
+one is stated with the objection it has to answer.
+
+### A provider model — the entry point as a harness
+
+Today every agent here is `type: Declarative` on kagent, running as a pod.
+That is one runtime, and the entry point is shaped around it.
+
+The idea: make the runtime a *provider* the harness selects, so the same
+scaffolding journey can target something other than a pod —
+`kmx create agent` versus a Hyperlight micro-VM or a WASM target, chosen at
+create time rather than baked into the tool.
+
+The pull is real. A scaffolder that only ever emits one runtime's YAML is a
+template engine with extra steps; one that abstracts the runtime is a
+harness other people can build on.
+
+The objection it must answer: **kagent is the runtime, and principle 1 says
+delegate.** A provider model is only honest if the alternatives genuinely
+exist and are genuinely wanted — otherwise it is an abstraction over one
+implementation, which is the most expensive kind. The test is whether a
+second provider ships and stays supported, not whether the interface looks
+extensible.
+
+### The consumer question: who is holding it
+
+`kmx create agent` reads differently depending on who types it. A platform
+team wants a governed default. A product team inside a large organisation —
+GitHub, say, consuming this rather than building it — wants a runtime
+choice and a topology they can review.
+
+Worth resolving deliberately rather than by accident: **the entry point's
+audience determines its defaults.** Governed-by-default and
+choose-your-runtime pull in opposite directions, and a tool that tries to
+serve both without deciding will do neither cleanly.
+
+### Governance as a component, DX first
+
+The provocative one. Today the framing is that governance is the product
+and the developer experience is how you reach it. The inversion: the
+developer experience is the product, and governance is a component it
+composes — something the entry point pulls in, rather than the thing
+everything else exists to serve.
+
+The objection: this repo's differentiator *is* the governance plane, and
+the scenarios that justify it are journeys where the control boundary is
+the whole point. Demoting governance to a module risks becoming another
+pleasant way to run agents in a market that has several.
+
+The counter-argument deserves a fair hearing anyway: nobody adopts controls
+they cannot get to. The first fifteen minutes decide whether the governance
+is ever reached at all.
+
+This one is a genuine fork in the road. It should be argued explicitly and
+ruled, not drifted into.
+
+### Topology as a first-class view
+
+Leadership's founding ask was:
+
+> "having an artifact that shows my agent topology — almost agent as code
+> (ideally yaml template or something like that)"
+
+The YAML delivers that for *one* agent. It does not answer it for an
+estate: which agents exist, what each may call, which credential each
+carries, what is governed and what is not. Today that is assembled by hand
+from `kubectl`, the ledger and the audit tables.
+
+A topology view is the natural next artifact — and it is closer than it
+looks, because the plane already records the edges. It is a read over data
+that exists.
+
+### Auditing agents, not just calls
+
+The audit tables answer "what happened". A reviewer usually wants "what
+*could* happen": this agent holds that credential, reaches those tools,
+draws on that budget — before it is invoked, not after.
+
+That is a different query over the same data, and arguably where governance
+becomes reviewable rather than merely recorded.
+
+### A separate CLI surface
+
+Raised, and worth stating precisely so it is not lost: splitting the CLI
+from the implementation.
+
+The objection is D27(1), and it is a strong one: **one implementation, not
+two that drift.** If a split ever happens it must not recreate the parallel
+path the alias condition exists to prevent — a library plus a thin
+front-end is defensible; two front-ends that both implement the journey is
+the failure mode already ruled against.
+
+---
+
 ## Status
 
 `kmx` is accepted (D27) and milestone 1 is in flight. Milestone 2 —
