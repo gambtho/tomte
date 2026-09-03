@@ -1573,7 +1573,7 @@ jobs:
           rc=$?
           set -e
           test "$rc" -eq 1 || { echo "possible Slack token committed (or scanner failed: exit $rc)"; exit 1; }
-      - name: Gateway upstream table — Slack and kagent-tools in-cluster, GitHub the one hosted entry (marked)
+      - name: Gateway upstream table — three in-cluster entries, GitHub the one hosted one (marked)
         if: steps.changes.outputs.docs_only != 'true'
         run: |
           kubectl --context kind-kaimahi-p1 -n kaimahi get configmap kaimahi-upstreams \
@@ -1582,7 +1582,7 @@ jobs:
           import json, sys
           from urllib.parse import urlparse
           t = json.load(open("upstreams.json"))["tool_upstreams"]
-          assert set(t) == {"kagent-tools", "slack", "github"}, t
+          assert set(t) == {"kagent-tools", "slack", "erp", "github"}, t
           # P10: an internet-facing entry exists now, and ONLY under the
           # marker that routes it through the hardened dialer; every
           # unmarked entry is still in-cluster (the plane refuses the
@@ -1598,6 +1598,13 @@ jobs:
           slack = t["slack"]
           assert slack["credential_file"].startswith("/etc/kaimahi/upstream-creds/"), slack
           assert not any(k for k in slack if k in ("credential", "token", "api_key")), slack
+          # P13: the demo's ERP is the one entry with NO credential at all
+          # — there is nothing to hold. Asserted here so a credential
+          # quietly appearing on it would fail on the deployed table, not
+          # only in the file.
+          erp = t["erp"]
+          assert not any(k in erp for k in ("credential_file", "credential", "token", "api_key")), erp
+          assert not erp.get("internet"), erp
           print("tool upstreams:", {k: urlparse(v["url"]).hostname for k, v in t.items()})
           EOF
       - name: Issue the Slack credential with a READ-ONLY allowlist
