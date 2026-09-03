@@ -115,8 +115,8 @@ prefix.
 | P9: run it for real — stateless multi-replica plane, exact budgets, metrics (D24) | W19 worker | PR #46 MERGED (43fd748) ahead of the coordinator's pass; verified against main (delta sheet below) | own kind cluster; touches Makefile/ci.yml/k8s/plane/proxy.yaml and the plane; #37/#42 (owner-handled) touch the Makefile too — second to merge rebases |
 | P10: hosted upstreams — GitHub's hosted MCP server through a hardened dialer (D25) | W20 worker | PR #51 MERGED (d79b469) ahead of the coordinator's pass; verified against main (delta sheet below) | lane closed |
 | P11: `kmx` milestone 1 — the developer journey as one Go binary (D27) | W21 worker | PR #57 MERGED (e3e3c84); coordinator verified on its own cluster incl. the clone-free install, guard parity and a tampered kagent cache (delta sheet below) | lane closed; #53's Podman recovery carried across, not lost |
-| P11: `kmx` milestone 2 — `kmx govern` and the plane, clone-free (D28) | W22 worker | SHAPED 2026-09-02 — prompt below; launches only after W21 merges | kind only and fully keyless; fetches the plane at kmx's own sha from the Go proxy, embeds `k8s/`, publishes nothing |
-| P12: argument-bound approvals — an approval binds to the call, not the verb (D29) | W23 worker | SHAPED 2026-09-02 — prompt below; launches after W22, or in parallel if the user re-applies the parallel-set rules | touches the gateway, the store, a migration, the approvals path and the Slack notifier; no new upstream |
+| P11: `kmx` milestone 2 — `kmx govern` and the plane, clone-free (D28) | W22 worker | READY 2026-09-02 — prompt below; W21 merged and verified, so this is clear to launch | kind only and fully keyless; fetches the plane at kmx's own sha from the Go proxy, embeds `k8s/`, publishes nothing |
+| P12: argument-level policy — standing constraints + an approval bound to the call (D29, widened by D31) | W23 worker | SHAPED 2026-09-02 — prompt below; launches after W22, or in parallel if the user re-applies the parallel-set rules | touches the gateway, the store, a migration, the approvals path and the Slack notifier; no new upstream |
 | P13: the accounts-payable exception demo — the scenario on top of P12 (D29, D30) | W24 worker | SHAPED 2026-09-02 — prompt below; launches after W23 (P12) merges | fixture ERP server + ConfigMap corpus, the payee-substitution injection case, Slack as the surface; kind + CI, no AKS run unless the user calls one |
 | Brand assets + architecture diagram + org/front-door plans | user-run lane (outside the board's prompt set) | PR #33 MERGED (+ kaimahi-agents/.github#1); main CI green | brand validator in the hygiene job |
 | README front door + CONTRIBUTING.md | user-run lane (outside the board's prompt set) | PR #34 MERGED; main CI green | anchored front-door checker in hygiene: section order enforced, no `npx kaimahi create` mention before the quickstart ends — PR #16's README hunk must land under "A scaffolder CLI: considered, not built" (was "Proposed CLI direction" until D23) |
@@ -1011,10 +1011,11 @@ the Makefile comment for `AKS_NETWORK_POLICY` (W15 deviation 3).
 
 ## Open items after P8b (2026-09-02)
 
-- **P9 and P10 DONE** (#46, #51 — both verified below). **P11 milestone 1
-  is IN PROGRESS (D27, W21); milestone 2 is SHAPED (D28, W22 prompt
-  below) and launches only after milestone 1 merges.** Still queued
-  behind them: Postgres durability (HA or a managed database on the AKS
+- **P9, P10 and P11 milestone 1 DONE** (#46, #51, #57 — all verified
+  below). **Milestone 1's lane is CLOSED, so W22 (milestone 2) is clear
+  to launch now**; W23 (P12) follows it, or runs in parallel if the
+  parallel-set rules are re-applied, and W24 (P13) needs W23. Still
+  queued behind them: Postgres durability (HA or a managed database on the AKS
   path), OAuth-based hosted servers (Slack's own), hostname-level egress
   on AKS (Cilium FQDN), `kmx` milestone 3 (budget, approvals,
   backup/restore, the connector families — everything D28(3) left in
@@ -2165,13 +2166,26 @@ Build:
   only.
 - **The governed wiring**: the ERP as one `tool_upstreams` entry with the
   declared policy-relevant fields from D30; a credential for the AP agent
-  whose STANDING allowlist is the six read tools, plus P12's standing
-  constraint admitting `payment_schedule` only at or under $10,000
-  (D31) — the business rule the hero prompt states. Everything else is
-  denied and files an approval request carrying the transaction summary.
-  The demo's $32,550 payment therefore rides the standing constraint and
-  the $48,000 injected one cannot, which is the rule doing visible work
-  rather than a slide claiming it.
+  whose STANDING allowlist is the six read tools, plus the standing
+  constraint P12 supplies (this lane CONFIGURES it, it does not build
+  it), admitting `payment_schedule` only at or under $10,000 — the
+  business rule the hero prompt states. Everything else is denied and
+  files an approval request carrying the transaction summary.
+  Read the amounts carefully, because they are the demo: the exception
+  invoice's correct payment is **$32,550, which EXCEEDS the $10,000
+  constraint** — so it is denied, files a request, and proceeds only
+  under an approval bound to that exact call. That is the point of the
+  scenario, not a snag in it. The $48,000 injected payment is denied for
+  the same reason and cannot ride the approval the $32,550 call earned.
+- **A routine invoice, so the standing constraint does visible work.**
+  With the constraint at $10,000 and every scenario payment above it,
+  nothing would exercise the no-approval path and the rule would be
+  asserted rather than shown. Add one ordinary invoice to the corpus —
+  INV-88121, a second vendor, $4,120.00, matching its PO and delivery
+  record with no fee issues — which the agent pays under the standing
+  constraint with NO human in the loop, audited like any allowed call.
+  The demo then shows three outcomes in one run: routine pays itself,
+  the exception needs a named human, and the manipulated call is refused.
 - **The agent**: an AP exception agent (k8s/ap-agent.yaml, the shape of
   the existing agents) whose instructions describe the job — investigate
   the mismatch, gather evidence, propose a resolution, act only through
@@ -2249,10 +2263,11 @@ identifiers in the tree; no repo secrets in CI; the demo runs on kind.
 
 Out of scope: a web UI (Slack is the surface, D30(4)), a live AKS run
 (the user's separate call — it costs money and needs their credentials),
-standing per-credential amount limits, a real ERP or sandbox vendor
-system, and anything that changes the P12 enforcement path — if you find
-yourself editing the gateway's policy code, stop: that is a P12 defect
-and belongs in its own lane.
+a real ERP or sandbox vendor system, output filtering of tool results,
+and anything that changes the P12 enforcement path. Standing constraints
+are P12's control (D31): this lane CONFIGURES one and must not implement
+or extend the mechanism — if you find yourself editing the gateway's
+policy code, stop: that is a P12 defect and belongs in its own lane.
 
 Verification is real: the full e2e green, plus a transcript in the PR of
 both scenarios hand-run on your own kind cluster — the investigation,
