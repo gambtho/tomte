@@ -121,6 +121,9 @@ prefix.
 | CI: the e2e job takes ~15 min on every PR (D32) | W25 worker | PR #65 MERGED; coordinator verified 934s to 483s with all 62 assertion bodies byte-identical (delta sheet below) | lane closed | investigation-led: 934s over 68 serial steps, bring-up 186s, the model pull only 16s of it |
 | P14: the AP demo live on AKS (D33) | W26 worker | PR #83 MERGED; coordinator verified teardown, the scanner, the kind path unchanged and the render's fail-closed cases (delta sheet below) | lane closed; ap-injection not run verbatim on AKS — deviation accepted, see sheet |
 | `kmx` milestone 3 — the core plane verbs (D28(3), D33) | W27 worker | PR #81 MERGED; coordinator verified live — wait_switched carried, a destructive backup/restore round trip, approvals showing the call (delta sheet below) | lane closed |
+| W28: ship it — version, release, a published install path, a documented upgrade (D34, D35) | unassigned | SHAPED 2026-09-03 — prompt below; PARALLEL with W30 | unblocked by D34; publishes to free namespaces only, asserts no trademark |
+| W29: govern your own agent — the generic onboarding path (D35) | unassigned | NEEDS SHAPING — no prompt yet; runs ALONE after W28/W30 | the product-defining gap: nothing documents adding your own MCP server or governing an agent you already run |
+| W30: identity on the call, and credentials that expire (D35) | unassigned | SHAPED 2026-09-03 — prompt below; PARALLEL with W28 | plane internals + a migration; the two security-review answers we do not have |
 | Brand assets + architecture diagram + org/front-door plans | user-run lane (outside the board's prompt set) | PR #33 MERGED (+ kaimahi-agents/.github#1); main CI green | brand validator in the hygiene job |
 | README front door + CONTRIBUTING.md | user-run lane (outside the board's prompt set) | PR #34 MERGED; main CI green | anchored front-door checker in hygiene: section order enforced, no `npx kaimahi create` mention before the quickstart ends — PR #16's README hunk must land under "A scaffolder CLI: considered, not built" (was "Proposed CLI direction" until D23) |
 | CLI decisions + PR #16 review | user + coordinator | D19 ruled; coordinator review rounds done (2026-09-01/02) | not a build lane; parallelises with everything |
@@ -172,6 +175,8 @@ prefix.
 | D31 | 2026-09-02 | **Kaimahi's boundary against the "AI Agent DevX" deck: own the governance vertical completely and expose it through `kmx`; do not build the experience around it.** Context: a PM-team ideation deck (8 pages) sketching a developer journey — describe the agent by chat, connect data/models/skills/MCP, define permissions, boundaries and pass/fail scenarios, generate and test locally, migrate to AKS with CI/CD and observability, then hand it to a business analyst. Coordinator's read of the deck itself, which binds this decision: (a) page 4 labels the guided flow **`(kmx-build-agent)`** — the deck already assumes kmx is the vehicle, which is the one real signal in it about direction; (b) it is titled "Ideation" and page 2 still asks "Developer? Business analyst? Hobby person?", with two slides marked "(NA)" — the AUDIENCE IS UNRESOLVED, which is upstream of every scoping question here; (c) its last slide's finance example is scheduled REPORTING with a sign-off step, not exception handling, so the AP agent (D30) is an UPGRADE on the deck and must not be presented internally as what the deck asked for. Four rulings: (1) **Kaimahi grows UP into slide 4's middle column** — describe permissions, boundaries and pass/fail scenarios, get an agent that provably enforces them — because every governance bullet in the deck is already built or shaped here (source permission RO/RW = the tool allowlist; "boundaries: no internet" = the P7a egress policy; "audit — can't turn off" = the audit trail; "Validate/HiL" and "Approver Sign off" = P4c/P8b approvals; pass/fail scenarios = what P12 makes enforceable). (2) **Kaimahi does NOT build the experience**: not the runtime console of slides 5–6 (agent list, logs, metrics, traces, start/stop/pause, YAML editing) — `kagent-ui` already ships that and was observed running during the P11 verification, so building a second one is exactly what the prime directive exists to stop — not the analyst canvas of slide 8, not chat-driven scaffolding, not CI/CD generation, not the Azure observability wiring. Those surfaces CONSUME Kaimahi. (3) **P12's scope gains the standing-constraint half**, amending D29(1): the hero prompt's "may approve valid invoices under $10,000, anything else needs Finance approval" is a declarative per-credential/tool constraint — the option NOT taken in D29 — and the scenario needs it alongside the bind-to-the-call digest. P12 therefore builds BOTH: standing constraints for routine calls, and an approval welded to the exact call for everything outside them. W23 amended below. (4) **"Never expose payment details" is cut from the hero prompt**: it is output filtering, neither an allowlist nor an approval, and the honest position is not to imply a control that does not exist. Consequence, stated: this answers the three positioning questions without ever having to explain why we rebuilt kagent's UI — kagent runs the agent, Kaimahi is what makes an agent safe to give authority to, and AKS matters for identity, private connectivity and observability, which are platform reasons rather than governance ones | "Your suggestions seem reasonable" |
 | D32 | 2026-09-02 | **A parallel lane to make the e2e job faster (W25), investigation-led and merging LAST.** The `e2e-hello-world` job is a required check on every PR and takes ~15 minutes; hygiene and go-plane are ~35s each, so it is effectively all of CI. The coordinator measured before shaping the lane (run 33707312808): 934s across 68 SERIAL steps in one job on one cluster, the bring-up 186s of it (kind create 56s, the 1.9GB model pull only 16s, ~110s waiting for kagent's five pods), and a 747s tail whose largest entries are the network-boundary probe 105s, the Postgres outage probe 76s and the plane deploy 59s. **Recorded because it redirects the lane: caching the model — the obvious first idea — would save about 16 seconds.** The structural question is whether one serial job on one cluster is still right now that it carries every phase's proof from P1 to P10. Rulings: (1) **what is proven must not shrink** — no probe deleted, moved to main-only, path-filtered away or downgraded to a smoke test to buy time; a probe believed redundant is NAMED in the PR with evidence for a coordinator ruling, not removed; (2) **the model is not weakened** without the tool probes passing repeatedly as evidence, and that is a coordinator decision because the P3 proofs depend on real function-calling; (3) **flakiness is worse than slowness** — the three recorded flake classes were each paid for once and must not return, and any change that is fast on average and occasionally red is a regression, so the lane reports variance across repeated runs, not one fast number; (4) **W25 merges LAST** — W22 and W23 are in flight and both edit ci.yml, so W25 branches from main, rebases onto whatever they land, and does not edit the steps they own | "i think we should also have a parallel session to investigate our e2e hello world ci -- it is taking close to 10m" |
 | D33 | 2026-09-03 | **Two lanes in parallel: the AP demo live on AKS (P14, W26) and `kmx` milestone 3 (W27).** Chosen as a PAIR for a specific reason — one runs in the cloud and one on kind, so they do not compete for the coordinator's box, which is what actually blocked the P13 pass (eight kind clusters, kube-proxy `too many open files`). D31's middle column and `kmx` milestone 3 could NOT run together: both live in `cmd/kmx` and `internal/kmx`, and the former would redefine the surface the latter extends, so the middle column is shaped alone after W27 lands. Coordinator's blind-spot findings, which shape both: **(a) the AP demo cannot run on AKS today at all** — `make erp` on a non-kind target exits with "the demo ERP is kind-only: its image is built from source and never published, so there is nothing for a managed cluster to pull", so W26 is not "run it elsewhere", it is "give the ERP the registry path the plane already has"; **(b)** AKS is Copilot-only (D15, no Ollama), so the AP agent runs `governed-copilot` there and needs the Copilot secret, whose capture stays a script (D27); **(c)** milestone 3's connector families are entangled with secret capture that D27 keeps in scripts, so they are NOT in W27; **(d)** milestone 1 deliberately did not carry `wait_switched` across because `make use` was not one of the six commands (deviation 7) — if W27 takes `use`, that is the moment to carry it. Rulings: (1) **W26 gives the ERP an ACR path exactly as the plane has it** (`az acr build`, private registry, built in Azure, never published publicly — D15's shape, not a new one); (2) **W26's approvals go through real Slack** via the app-mention command on the existing edge, the same terms P8a/P8b ran under — an admin-only approval would prove the plumbing but not the story, and the story is a human approving a payment; (3) **teardown is mandatory with a reported spend figure, and the Azure identifier scanner still refuses every identifier the run produces**, as on every prior AKS lane; (4) **W27 is kind-only and must not touch the AKS path** — that is what keeps the two lanes apart, and it is the reason they can run at once; (5) **W27 takes the core plane verbs** (budget, the approval verbs, backup/restore, plane-metrics, the tool-governance verbs, and `use`/`use-ollama` carrying `wait_switched`) and **not** the Slack/GitHub/inbound families, which move to a later milestone with their secret-capture question answered; (6) **secret capture stays scripts** (D27 unchanged); (7) **`ci.yml`'s gate line is now a shared write for every lane** — since W25 every lane that adds a shard edits `needs:` on `e2e-hello-world` — so second to merge rebases and neither lane edits the other's steps | "great, lets do that -- provide prompts for what you recommend", after "could we do those in parallel?" |
+| D34 | 2026-09-03 | **The name is settled: kaimahi, and `kmx` for the binary. D9's and D26's freeze on publishing is LIFTED.** Recorded with its exact basis, because the difference matters and silence must not later be mistaken for clearance: **the cultural read cleared — a te reo Māori speaker was comfortable with the use — and the trademark opinion was NOT formally obtained.** So: (1) we may publish, and claiming free namespaces is no longer deferred; (2) NAMING.md must say plainly that no trademark opinion was taken, rather than implying both gates closed; (3) nothing may assert a trademark — no ™, no "registered", no claim of exclusivity — and the project stays renameable in principle, which is cheap while adoption is near zero and gets dearer with every published artifact; (4) `kmx` is approved too, accepting what D27(3) recorded: PyPI `kmx` and the GitHub user `kmx` are taken (so those are not available to us) and KMX is CarMax's ticker symbol. The residual risk is stated and accepted: a later trademark conflict would cost a rename, and the cost of that rename grows with every registry we claim | "naming is approved, lets close that out with agreement on kaimahi", then ruled via options: "Cultural read cleared; trademark not formally done", "Yes — kmx is approved too" |
+| D35 | 2026-09-03 | **The next arc is adoptability, not capability, and the first user is an external OSS adopter — with the user themselves as the earliest.** The coordinator's audit of what stands between "our demo works" and "someone else can use this" found the hard part done: enforcement holds, proven under a manipulated agent. What is missing is the last mile, and three findings define it. **(a) You cannot install a version**: no tags, no releases, no published image; `go install …@<commit sha>` is the only path, and there is no upgrade story at all — no versioning doc, and eight migrations never tested across a version gap. **(b) There is no path to govern an agent you already have** — `kmx govern <agent>` handles the LLM seam generically, but every governed upstream is a hand-written RemoteMCPServer (`kaimahi-tools`/`-slack`/`-github`/`-erp`) plus a matching upstreams entry, and NOTHING documents adding your own MCP server or governing an agent you already run. Every governed agent in the repo is one we shipped, which is the line between a demo and a product. **(c) The security-review table stakes** from the agentdesktop note: nothing records who an agent acted FOR, and governed credentials never expire. Three lanes follow, in this order of value to the stated first user: **W28 "ship it"** (version, tag, release, a published install path, a documented upgrade with a migration test across a gap — unblocked by D34); **W29 "govern your own agent"** (a generic, documented, tested path for an arbitrary agent and an arbitrary MCP server) — needs its own shaping pass first, because what the generic path SHOULD be is a design question, not just work; **W30 "identity and expiry"**. W28 and W30 run in parallel (release plumbing versus plane internals — a clean split); W29 runs alone, with the coordinator's full attention, because it is the product-defining one and it touches the docs both others touch. Not in this arc, and said explicitly: Postgres HA, dashboards and alerts, secret rotation, and a policy-validation command — all real, none blocking a first adopter | "1 - naming is approved… 2 - this makes a great deal of sense. 3 - also a good thing to do 4 - also a good thing to do. I think we assume the first user is an external oss adopter, although it would be ideal if i personally could be a earlier user" |
 | D14 | 2026-09-01 | P5 direction: the **undeniable demo** — not a new capability arc but making the built one legible and credible. Rulings: (1) outbound connector platform is **Slack** (via existing MCP servers, no connector code); (2) AKS work goes all the way — cluster portability AND a real AKS deployment with evidence (accepts Azure spend + credentials in a worker session); (3) demos run on the **Copilot** preset while **CI stays keyless on ollama** (public fork-exposed repo — no repo secrets in CI, ever). Rationale on the board: everything governed so far protects an agent that lists ConfigMaps; posting to a channel humans read is the first consequential action, and it makes the approval gate the point rather than the plumbing | "sure, that's undeniable demo makes sense" — then ruled via options: "Slack (Recommended)", "Portability + real AKS run (Recommended)", "Copilot for demo, ollama for CI (Recommended)" |
 | D13 | 2026-09-01 | P4c approval model: TIME-BOXED PERMITS — a denied action files a pending request; approval grants it bounded (expiry by duration and/or use count) and compiles into the existing allowlist/budget rows; deny-and-retry mechanics, no held-open calls. Demo scenarios: tool-access widening (k8s_get_events, read-only) AND budget overage; the P3 tool-server read-only posture stays untouched (write-tool demo deferred) | ruled via options: "Time-boxed permits (Recommended)"; "Widen tool access (Recommended), Budget overage (Recommended)" |
 
@@ -2673,6 +2678,182 @@ captured, and a `kmx use` that returns only once one pod on the new
 template is serving. Branch from current main; PR targets main; no
 stacked bases; lane ends at PR-open-with-checks-green — do not merge.
 Report deviations in the PR.
+```
+
+### W28 — ship it: a version somebody can install, and an upgrade that works (UNASSIGNED — paste into a fresh CLI session; PARALLEL with W30)
+
+```
+You are a worker session for the Kaimahi project (repo root: this
+checkout, remote kaimahi-agents/kaimahi). Read docs/COORDINATION.md
+first — decisions D9, D26, D27 and especially **D34 and D35**, the
+security standing guidance and the "Considered and rejected" list all
+bind you. Your lane: today the only way to install this is
+`go install …/cmd/kmx@<commit sha>`, there are no tags, no releases and
+no published artifact, and there is no upgrade story at all. Nobody
+adopts software they have to pin by commit hash. Fix that.
+
+**Read D34 before you publish anything.** The naming freeze is lifted,
+but on a stated basis: the cultural read cleared and **no trademark
+opinion was obtained**. Consequences you must honour: publish to free
+namespaces only; assert NO trademark anywhere — no ™, no "registered",
+no claim of exclusivity in a README, a package description or a
+release note; and do not claim a namespace we have no use for, because
+every claimed namespace raises the cost of a rename we may still have
+to make. PyPI `kmx` and the GitHub user `kmx` are taken and are not
+ours (D27(3)).
+
+Survey first (prime directive): `kmx version` already exists and
+milestone 1 established that a module-proxy build carries its revision
+in `Main.Version` — the P11 sheets and `plane/internal/metrics` are the
+precedent for how a build identifies itself. `.github/workflows/ci.yml`
+is the shape CI takes. docs/getting-started.md and docs/README.md carry
+the install instructions today. Read them and say what you reused.
+
+Build:
+- **A version scheme and the first tag.** Semantic, pre-1.0 (this is an
+  incubation project and should say so). The tag is the source of truth
+  and `kmx version` reports it; a build from a tag must not say
+  "unknown" or a bare sha.
+- **A release**, produced by CI from the tag, containing what an adopter
+  needs and nothing they do not. Decide and justify: which platforms,
+  whether checksums are published alongside (they must be — the project
+  already verifies the kagent CLI's digest before executing it, and
+  shipping our own binary with less care than we apply to someone
+  else's would be indefensible), and whether the plane's image is
+  published or still built locally. **If you publish an image, it goes
+  to a public registry under this org and nowhere else** — and say in
+  the PR what that changes for the kind path, which currently side-loads
+  and pins `imagePullPolicy: Never` for reasons scripts/plane-deploy.sh
+  documents.
+- **An install path that is one line and does not name a sha**, in the
+  README and docs/getting-started.md, with the front-door checker's
+  order still passing (edit its expectations in the same PR if the
+  quickstart's first command changes).
+- **A documented upgrade, and a migration test across a real gap.** The
+  plane runs eight goose migrations and has never been tested upgrading
+  from an older version to a newer one. Prove it: stand up an OLD
+  version, put data in it (a ledger row, an allowlist, a live grant),
+  upgrade to the new one, and show the data intact and the plane
+  serving. That test belongs in CI, not only in the PR. Say what
+  happens when a migration fails halfway — if the answer is "the plane
+  does not start", that is acceptable and must be documented, not
+  discovered.
+- **A CHANGELOG or release notes convention**, so the next release is
+  cheaper than this one.
+
+CI stays keyless (D14). The release job must not need a secret this
+project does not already have; if it needs a token, say exactly which
+scope and why, and do not add it yourself.
+
+Out of scope, and another lane is live: **do not touch
+`plane/internal/gateway`, `plane/internal/store`, the migrations'
+CONTENT, or `cmd/kmx`'s command surface** — W30 (identity and expiry)
+owns those and is adding a migration of its own. You own release
+plumbing, versioning, CI's release job and the install docs. `ci.yml`'s
+gate line (`needs:` on `e2e-hello-world`) is a shared write: second to
+merge rebases.
+
+Guardrails, all hard: no trademark assertion; free namespaces only; no
+Azure or Slack identifiers; no repo secrets in CI beyond what a release
+genuinely requires, named and justified; the kind path keeps working
+exactly as it does now.
+
+Verification is real: on a clean machine with no checkout, install the
+RELEASED artifact the way the README now tells an adopter to, and run
+the quickstart end to end — transcript in the PR. Plus the upgrade test
+green in CI. Branch from current main; PR targets main; no stacked
+bases; lane ends at PR-open-with-checks-green — do not merge. Report
+deviations in the PR.
+```
+
+### W30 — identity on the call, and credentials that expire (UNASSIGNED — paste into a fresh CLI session; PARALLEL with W28)
+
+```
+You are a worker session for the Kaimahi project (repo root: this
+checkout, remote kaimahi-agents/kaimahi). Read docs/COORDINATION.md
+first — decisions D13, D21, D24, D29, D31 and especially **D35**, the
+"Positioning: agentdesktop" section (which is where these two gaps were
+found), the security standing guidance and the "Considered and rejected"
+list all bind you. Your lane: the two questions this project cannot
+currently answer in a security review.
+
+Both were verified against the schema before this prompt was written,
+so do not spend the lane rediscovering them:
+- **Nothing records who an agent acted FOR.** `ledger_entry` and
+  `tool_audit` key on `credential_name` and nothing else; no migration
+  carries a user, actor or on-behalf-of column. The only human in our
+  data is `decided_by` on an approval — the APPROVER, never the
+  requester. We can say "ap-agent spent $4.10" and never "on whose
+  behalf".
+- **Governed credentials never expire.** The `credential` table has no
+  expiry column. A token is bounded by allowlist, budget and constraint
+  — but not by time — and lives until its row is deleted.
+
+Survey first (prime directive): P8b already solved half of the identity
+problem for approvals (`decided_by`, "slack:<user id>", and
+scripts/slack-mention-probe.sh as the keyless CI stand-in) — reuse that
+vocabulary rather than inventing a second one. P7b's inbound bridge is
+where a human MOST visibly triggers an agent and where the attribution
+gap is widest. Migration 00008 is the pattern for an additive change
+that closes a NULL class deliberately. Read those, and
+plane/internal/store, before designing.
+
+Build:
+- **Identity on the call.** An agent run carries, where one exists, the
+  identity it is acting for, and that identity reaches the ledger and
+  the tool audit. Where it comes from is your design and must be
+  justified in the PR: the inbound path knows a Slack user; an
+  operator-triggered run may know nothing. **A run with no identity must
+  remain valid and must say so explicitly** — an empty column that could
+  mean "nobody" or "we lost it" is worse than no column. Do not invent
+  an identity the plane cannot substantiate.
+- **What it unlocks, and what it does not.** Per-person attribution in
+  the ledger is in scope. Per-person BUDGETS are not this lane: say in
+  the PR whether the schema you chose makes them possible later, and do
+  not build them.
+- **Credentials that expire.** An expiry on the credential, honoured at
+  every seam that authenticates one, failing closed and audited like
+  every other refusal. Existing credentials have no expiry: say how they
+  are treated, and prefer the conservative reading — a NULL expiry is a
+  legacy credential that still works, and new ones get an expiry by
+  default, with the same "the NULL class is closed" reasoning migration
+  00008 used. Issuing and renewing must stay inside the custody rules
+  (D27): kmx accepts no credential material and the bytes it mints
+  travel only through pipes and 0600 files.
+- **The operator has to be able to see it coming.** A credential that
+  expires silently at 3am is an outage nobody diagnosed. `kmx grants`
+  and the credential views should show expiry, and an expired credential
+  must refuse with a message that names the problem and the fix.
+
+CI stays keyless (D14): the existing e2e keeps proving the seams; add
+the cases that matter — an expired credential is refused and audited; a
+credential with no expiry still works; an identity present on an inbound
+run reaches both the ledger and the tool audit; a run with no identity
+is valid and distinguishable from one whose identity was lost. Store
+tests against the service Postgres, as the concurrency tests do.
+`make backup` / `make restore` must still round-trip across your
+migration.
+
+Out of scope, and another lane is live: **do not touch release
+plumbing, `.github/workflows/ci.yml`'s release job, versioning, or the
+install docs** — W28 owns those. You own `plane/`, the migration, and
+the kmx views that display what you add. `ci.yml`'s gate line (`needs:`
+on `e2e-hello-world`) is a shared write: second to merge rebases.
+
+Guardrails, all hard: the migration is additive and reversible; no
+credential material anywhere new; no PII beyond the identifier the
+source already gives you (a Slack user id is an identifier, not a
+profile — do not fetch or store a name, an email or anything else); the
+audit is in every pg_dump, so store the identifier and nothing more; no
+Azure or Slack identifiers in the tree; no repo secrets in CI.
+
+Verification is real: a transcript in the PR on your own kind cluster
+showing an inbound-triggered run whose ledger and audit rows name the
+person who triggered it, an operator run that is valid with no identity
+and visibly so, and a credential that expires and is then refused with
+the message an operator would need. Branch from current main; PR targets
+main; no stacked bases; lane ends at PR-open-with-checks-green — do not
+merge. Report deviations in the PR.
 ```
 
 ## Delta sheets from finished lanes
