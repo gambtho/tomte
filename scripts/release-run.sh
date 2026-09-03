@@ -151,7 +151,7 @@ consequential() {
   if [ -z "$id" ]; then
     admin approvals >&2 || true
     fail "no pending approval request for the call that was asked for:
-    $tool: $want
+    $want
   Either the agent did not make the call, or it made a DIFFERENT one. The
   pending list is above; nothing has been approved, and nothing was done.
   This is the check that stops a human approving a call nobody asked for."
