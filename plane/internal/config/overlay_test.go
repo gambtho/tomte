@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -297,4 +298,37 @@ func mustMarshal(t *testing.T, v any) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+// custodyFields is a DENIAL, and a denial that drifts open is worse than
+// none. `ToolUpstream` is a struct in another package's blast radius —
+// the plane gained identity and credential expiry between this lane
+// branching and merging — so a field added to it must be classified
+// deliberately, here, rather than admitted into the overlay by silence.
+func TestEveryToolUpstreamFieldIsClassifiedAsSafeOrDenied(t *testing.T) {
+	// Fields an overlay MAY set: they describe an in-cluster, keyless
+	// tool server and nothing about the proxy's own custody or reach.
+	safe := map[string]bool{"url": true, "tools": true}
+	denied := map[string]bool{}
+	for _, f := range custodyFields {
+		denied[f] = true
+	}
+	typ := reflect.TypeOf(ToolUpstream{})
+	for i := range typ.NumField() {
+		tag := strings.Split(typ.Field(i).Tag.Get("json"), ",")[0]
+		if tag == "" || tag == "-" {
+			continue
+		}
+		if !safe[tag] && !denied[tag] {
+			t.Fatalf("ToolUpstream gained field %q and nothing classified it.\n"+
+				"  Add it to custodyFields if it decides what credential the proxy reads or which host it\n"+
+				"  may be reached at; add it to `safe` here if an operator may set it in an overlay.\n"+
+				"  Doing neither admits it into a ConfigMap that exists to be hand-edited.", tag)
+		}
+	}
+	// And the classification is not vacuous: every denied field is
+	// actually refused, which the case above already asserts one by one.
+	if len(denied) == 0 {
+		t.Fatal("custodyFields is empty — the denial has been emptied out")
+	}
 }
