@@ -234,10 +234,14 @@ func agentCommand(a *app.App, args []string) error {
 	case "chat":
 		fs := newFlagSet("agent chat")
 		asJSON := fs.Bool("json", false, "print the raw A2A task instead of the readable view")
-		if err := fs.Parse(args[1:]); err != nil {
+		// parseInterspersed, not fs.Parse: flag stops at the first
+		// non-flag argument, so `agent chat a "hi" --json` would silently
+		// append "--json" to the QUESTION and print the readable view
+		// anyway. `agent create` already had this right.
+		rest, err := parseInterspersed(fs, args[1:])
+		if err != nil {
 			return err
 		}
-		rest := fs.Args()
 		if len(rest) == 0 {
 			return errors.New("usage: kmx agent chat <name> [message] [--json]")
 		}
