@@ -20,9 +20,9 @@ It is deliberately unlike our four in the ways that matter:
     consequential, so the policy_fields choice is a real choice.
 
   POST /mcp   initialize / notifications/initialized / tools/list /
-              tools/call. tools/call echoes the arguments back and, for
-              stock_adjust, records them, so a call that got through can
-              be told from one that did not.
+              tools/call. Every tools/call echoes its arguments back and
+              is recorded, so a call that got through can be told from
+              one that did not.
   GET /calls  the calls this server actually served, newest last. The
               audit says what the PLANE decided; this says what the
               SERVER saw. A denial that both audits as denied and never

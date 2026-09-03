@@ -41,8 +41,17 @@ func TestTheProxySelectorMatchesTheCommittedBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key, value, _ := strings.Cut(ProxySelector, "=")
-	if !strings.Contains(string(raw), key+": "+value) {
-		t.Fatalf("k8s/plane/network-policy.yaml does not select the proxy by %q", ProxySelector)
+	if !strings.Contains(string(raw), ProxySelectorKey+": "+ProxySelectorValue) {
+		t.Fatalf("k8s/plane/network-policy.yaml does not select the proxy by %s: %s",
+			ProxySelectorKey, ProxySelectorValue)
+	}
+	// And the generated pair is emitted FROM those constants, so this
+	// test guards the generator and not just a string nobody reads.
+	doc, err := GenerateUpstream(warehouse())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(doc, ProxySelectorKey+": "+ProxySelectorValue) != 2 {
+		t.Fatalf("both scaffolded policies must pin the proxy by the committed label:\n%s", doc)
 	}
 }

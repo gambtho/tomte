@@ -43,6 +43,10 @@ type Store interface {
 	SetToolAllowlist(ctx context.Context, credentialName string, tools []string) error
 	ToolAllowlist(ctx context.Context, credentialName string) ([]string, error)
 	ToolAudit(ctx context.Context, credentialName string, limit int) ([]store.ToolAuditEntry, error)
+	// P15: which credentials already allowlist a tool NAME, so onboarding
+	// an upstream that offers one can say so instead of claiming nothing
+	// can call it yet.
+	CredentialsAllowlisting(ctx context.Context, tools []string) (map[string][]string, error)
 	// P4c approvals: deny-and-pend filing (data path) and the decision
 	// surface (admin).
 	FileApprovalRequest(ctx context.Context, f store.Filing) (filed bool, err error)

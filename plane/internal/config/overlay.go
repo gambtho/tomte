@@ -15,6 +15,18 @@ package config
 //     credential mount or a signing secret; a generic onboarding path
 //     that could rewrite them would be a much larger blast radius than
 //     the one this exists for.
+//   - and within `tool_upstreams`, an overlay entry may not carry the
+//     CUSTODY fields. This is the same rule as the bullet above, applied
+//     one level down, and it was missed once: `credential_file` names a
+//     path the proxy reads and sends upstream, and `internet` plus
+//     `ca_file` decide which host it may be sent to. Together they are a
+//     complete exfiltration primitive — an entry naming
+//     /etc/kaimahi/admin/token against an attacker's https host would
+//     hand the plane's admin bearer to it on the first relayed call.
+//     Excluding them costs the overlay exactly the two upstreams
+//     docs/govern-your-agent.md already says it cannot express (a keyed
+//     server and a hosted one), and both remain available by editing the
+//     committed table, which is a deliberate act on a reviewed file.
 //   - a name defined twice is REFUSED, naming both sources, rather than
 //     resolved by precedence. Silent precedence is how an operator ends
 //     up reviewing one entry and running another.
@@ -44,6 +56,12 @@ const DefaultConfigDir = "/etc/kaimahi/upstreams.d"
 
 // mergeableBlocks are the top-level keys a fragment may carry.
 var mergeableBlocks = []string{"tool_upstreams", "standing_constraints"}
+
+// custodyFields are the tool_upstreams keys an OVERLAY entry may not set.
+// They are refused by NAME rather than by decoding into ToolUpstream, so
+// a field added to that struct later is not silently admitted here: the
+// list is a denial, and a denial that drifts open is worse than none.
+var custodyFields = []string{"credential_file", "credential_header", "internet", "ca_file"}
 
 // Fragment is one operator-added overlay file: its name (for error
 // messages and ordering) and its bytes.
@@ -75,7 +93,7 @@ func Read(path, dir string) ([]byte, []Fragment, error) {
 		name := e.Name()
 		// A ConfigMap volume plants ..data and ..2026_09_03_… symlinks
 		// beside the keys; only the keys are ours to read.
-		if e.IsDir() || strings.HasPrefix(name, ".") || !strings.HasSuffix(name, ".json") {
+		if e.IsDir() || !FragmentName(name) {
 			continue
 		}
 		raw, err := os.ReadFile(filepath.Join(dir, name))
@@ -86,6 +104,15 @@ func Read(path, dir string) ([]byte, []Fragment, error) {
 	}
 	sort.Slice(frags, func(i, j int) bool { return frags[i].Name < frags[j].Name })
 	return base, frags, nil
+}
+
+// FragmentName reports whether a ConfigMap key is one the boot path will
+// actually read. It is exported because the admin validator has to apply
+// the SAME rule: a key this returns false for is silently ignored at
+// boot, and a validator that accepted one would tell an operator their
+// standing constraint was fine when the plane will never see it.
+func FragmentName(name string) bool {
+	return !strings.HasPrefix(name, ".") && strings.HasSuffix(name, ".json")
 }
 
 // LoadDir is Load plus the overlay: read, merge, parse.
@@ -117,7 +144,11 @@ func Merge(base []byte, frags []Fragment) ([]byte, error) {
 	origin := map[string]map[string]string{}
 	for _, block := range mergeableBlocks {
 		origin[block] = map[string]string{}
-		for name := range namesIn(merged[block]) {
+		names, err := namesIn(merged[block])
+		if err != nil {
+			return nil, fmt.Errorf("config: base table: %q: %w", block, err)
+		}
+		for name := range names {
 			origin[block][name] = "the committed table"
 		}
 	}
@@ -136,12 +167,23 @@ func Merge(base []byte, frags []Fragment) ([]byte, error) {
 			}
 		}
 		for _, block := range mergeableBlocks {
-			add := namesIn(frag[block])
+			add, err := namesIn(frag[block])
+			if err != nil {
+				return nil, fmt.Errorf("config: overlay %s: %q: %w", f.Name, block, err)
+			}
 			if len(add) == 0 {
 				continue
 			}
-			into := namesIn(merged[block])
+			into, err := namesIn(merged[block])
+			if err != nil {
+				return nil, fmt.Errorf("config: %q: %w", block, err)
+			}
 			for name, raw := range add {
+				if block == "tool_upstreams" {
+					if err := refuseCustodyFields(f.Name, name, raw); err != nil {
+						return nil, err
+					}
+				}
 				if from, ok := origin[block][name]; ok {
 					return nil, fmt.Errorf("config: overlay %s redefines %s %q, already defined by %s — refused rather than resolved by precedence",
 						f.Name, strings.TrimSuffix(block, "s"), name, from)
@@ -159,6 +201,28 @@ func Merge(base []byte, frags []Fragment) ([]byte, error) {
 	return marshalSorted(merged)
 }
 
+// refuseCustodyFields rejects an overlay entry that tries to put the
+// proxy's own custody, or its reach outside the cluster, under the
+// control of a ConfigMap that exists to be edited.
+func refuseCustodyFields(fragment, upstream string, raw json.RawMessage) error {
+	var entry map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &entry); err != nil {
+		return fmt.Errorf("config: overlay %s: tool upstream %q: want an object, got %s",
+			fragment, upstream, firstBytes(raw))
+	}
+	for _, field := range custodyFields {
+		if _, ok := entry[field]; !ok {
+			continue
+		}
+		return fmt.Errorf("config: overlay %s: tool upstream %q sets %q, which an overlay may not set. "+
+			"An overlay describes an in-cluster, keyless tool server; %s decide what credential the proxy "+
+			"reads and which host outside the cluster it may be sent to, and belong in the committed table "+
+			"(k8s/plane/upstreams.yaml) where they are reviewed as part of this repository",
+			fragment, upstream, field, strings.Join(custodyFields, ", "))
+	}
+	return nil
+}
+
 func mergeable(key string) bool {
 	for _, b := range mergeableBlocks {
 		if key == b {
@@ -169,15 +233,32 @@ func mergeable(key string) bool {
 }
 
 // namesIn decodes one top-level block into name -> raw value. An absent
-// or null block is an empty map, never an error: Parse decides whether
-// the resulting table makes sense.
-func namesIn(raw json.RawMessage) map[string]json.RawMessage {
+// or null block is an empty map — that is a table with nothing in that
+// block, which is legal. Anything else that is not an object IS an
+// error: a hand-edited fragment whose `tool_upstreams` is a list or a
+// string would otherwise merge nothing, reach Parse never, and leave the
+// operator with a command that reported success and an upstream that
+// does not exist. The overlay is meant to be hand-edited (standing
+// constraints are added that way), so this is a real shape to refuse.
+func namesIn(raw json.RawMessage) (map[string]json.RawMessage, error) {
 	out := map[string]json.RawMessage{}
-	if len(raw) == 0 {
-		return out
+	if len(raw) == 0 || string(raw) == "null" {
+		return out, nil
 	}
-	_ = json.Unmarshal(raw, &out)
-	return out
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("want an object of names, got %s", firstBytes(raw))
+	}
+	return out, nil
+}
+
+// firstBytes renders enough of a value to identify it in a message
+// without pasting a whole table into a log line.
+func firstBytes(raw json.RawMessage) string {
+	const max = 40
+	if len(raw) > max {
+		return string(raw[:max]) + "…"
+	}
+	return string(raw)
 }
 
 // marshalSorted emits an object with its keys in sorted order, so the
@@ -229,8 +310,9 @@ func refuseDuplicateKeys(raw []byte, what string) error {
 }
 
 // maxConfigDepth bounds the walk. The table's own deepest value (a
-// constraint literal inside a list inside a tool inside a credential)
-// sits at 6; 32 is the same bound the gateway's canonicaliser uses.
+// constraint literal inside a constraint object, inside a list, inside a
+// tool, inside a credential, inside standing_constraints) is reached at
+// depth 5; 32 is the same bound the gateway's canonicaliser uses.
 const maxConfigDepth = 32
 
 func walkDuplicates(dec *json.Decoder, what string, depth int) error {

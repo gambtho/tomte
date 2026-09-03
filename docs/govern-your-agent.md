@@ -12,6 +12,11 @@ Assumes the governance plane is deployed (`kmx plane`, see
 [tool-governance.md](tool-governance.md), which is the reference for what
 the gateway enforces. This is the procedure.
 
+The agent itself is not this page's job: it must already exist, and
+`kmx agent create <name>` ([kmx.md](kmx.md#kmx-agent-create)) is how you
+make one. Everything below repoints an existing agent at a governed
+seam.
+
 > **Ungoverned by default.** Nothing here happens on its own. An agent
 > whose `tools` point straight at an MCP server calls it with no
 > credential, no allowlist, no argument policy and no audit row — and
@@ -53,7 +58,9 @@ Nothing exotic — but three things must be true:
   selects every pod in the namespace, which is not a boundary.
 - **It speaks streamable-HTTP MCP** — `initialize`,
   `notifications/initialized`, `tools/list`, `tools/call`. Those are the
-  methods the gateway relays; every other method is denied, not relayed.
+  methods the gateway relays. `ping` is answered locally without
+  reaching you; every other method is denied rather than relayed, and
+  JSON-RPC batches are rejected outright.
 
 If the Service targets a *named* port, kmx will not guess the number:
 pass `--pod-port <n>`.
@@ -105,9 +112,10 @@ kmx tools add warehouse \
 This writes `upstreams/warehouse.yaml` — four documents, and they *are*
 the onboarding, the same files you would have written by hand:
 
-1. **the overlay fragment.** Your upstream goes into a ConfigMap of its
-   own (`kaimahi-upstreams-extra`), which the proxy merges over this
-   repo's committed table at boot. Your entry is never inside our four,
+1. **the overlay fragment.** Your upstream goes into an overlay ConfigMap
+   (`kaimahi-upstreams-extra` — one shared map, one `<name>.json` key per
+   onboarded server), which the proxy merges over this repo's committed
+   table at boot. Your entry is never inside our four,
    which is what stops the next `kmx plane` — which re-applies the
    committed table — from discarding it. An overlay that would redefine
    a committed entry is refused rather than resolved by precedence.
@@ -139,16 +147,26 @@ rollout, by a pod that will not start. What the plane understood comes
 back:
 
 ```
-The plane validated the table: kagent-tools, erp, slack, github, warehouse.
-  stock_get: an approval binds sku.
+The plane validated the table: erp, github, kagent-tools, slack, warehouse.
   stock_adjust: an approval binds sku, delta.
+  stock_get: an approval binds sku.
 ```
 
 Then it applies the file behind the [context guard](kmx.md#where-the-command-will-land)
 and restarts the proxy, because the table is read at boot.
 
 `--out -` prints the manifest and mutates nothing. `--no-apply` writes
-the file and stops. Both still validate — validation is a read.
+the file and stops. Neither is offline: both read the Service from your
+cluster and ask the plane to validate, because neither the pod selector
+nor the container port can be derived from a URL, and a manifest that has
+not been validated is the thing this command exists to stop you writing.
+
+A `--no-apply` manifest is a **one-shot** artifact. It carries the
+overlay's `resourceVersion`, so if anyone changes the overlay before you
+apply it — another onboarding, a hand-added standing constraint —
+`kubectl apply` refuses it with a `Conflict` and changes nothing, rather
+than replacing their work with a snapshot taken before it existed.
+Scaffold again to pick their change up.
 
 ## Step 3 — issue the credential and point the agent
 
@@ -193,8 +211,8 @@ kmx audit tool acme-agent
 
 # 3. A tool outside the allowlist is denied, audited, and files a request
 #    carrying the exact call.
-kmx audit tool acme-agent      # ... stock_adjust  denied  403
-kmx approvals                  # ... stock_adjust: sku SKU-1, delta 5
+kmx audit tool acme-agent      # ... stock_adjust  denied  403 ... sku SKU-1, delta 5
+kmx approvals                  # ... stock_adjust ... sku SKU-1, delta 5
 ```
 
 The third is the one that matters, and it is why the `policy_fields`
@@ -204,8 +222,12 @@ call:
 
 ```bash
 kmx approve <id> --uses 1 --ttl 10m
-kmx grants                     # ... yes ... binds call 8f84e4e9f653
+kmx grants                     # ... yes ... call d55d6ddf6f8b
 ```
+
+(the `binds` column carries `call <digest>` — the same digest the audit
+row for the denied call carried, which is what "the approved call is the
+call that ran" means concretely.)
 
 A *different* `delta` is denied again and does not spend the grant — the
 approved call is the call that runs.
@@ -263,8 +285,11 @@ Two things to know before you rely on one, both learned the hard way in
 this repo:
 
 - **Where a constraint exists, it BINDS.** It is a bound, not another way
-  in: a tool with a standing constraint must NOT also be on the
-  allowlist, or the allowlist would let unconstrained calls through.
+  in: the gateway checks the constraint first and never falls through to
+  the allowlist for that credential and tool. So allowlisting a
+  constrained tool does not widen anything — it does something worse, it
+  *reads* as though it does. Leave it off, as the accounts-payable demo
+  leaves `payment_schedule` off.
 - **A constraint bounds only what it names.** A rule on `delta` alone
   bounds the size of an adjustment and says nothing about *which SKU*.
   The accounts-payable demo shipped with exactly that gap and an agent
@@ -284,20 +309,30 @@ than our own demos would be worse than none:
 - **A tool server that needs its own credential.** The gateway can inject
   an upstream's real credential from plane custody (the Slack MCP server
   works that way), but the mount for it is a volume on the proxy's own
-  Deployment, and `kmx tools add` does not edit committed workloads. Add
-  the `volumeMounts`/`volumes` pair to
-  [`k8s/plane/proxy.yaml`](../k8s/plane/proxy.yaml) yourself, then name
-  the mounted path with `credential_file` in the fragment. kmx will
-  still never carry the value (D27).
-- **A server outside the cluster.** `internet: true` upstreams are
-  reached only through the plane's hardened dialer and need an opt-in
-  443 allowance rather than the in-cluster policy pair:
+  Deployment, and `kmx tools add` does not edit committed workloads.
+  **The overlay refuses `credential_file` and `credential_header`
+  outright**, so this is an enforced boundary and not only a convention:
+  a ConfigMap that could name any path the proxy can read, and any host
+  it may be sent to, would be a complete exfiltration primitive for the
+  plane's own admin token. Add the `volumeMounts`/`volumes` pair to
+  [`k8s/plane/proxy.yaml`](../k8s/plane/proxy.yaml) and the entry to the
+  committed table, where both are reviewed as part of this repository.
+  kmx will still never carry the value (D27).
+- **A server outside the cluster.** `internet: true` and `ca_file` are
+  refused in an overlay for the same reason, and hosted upstreams are
+  reached only through the plane's hardened dialer with an opt-in 443
+  allowance rather than the in-cluster policy pair:
   [hosted-upstreams.md](hosted-upstreams.md).
 - **Tool RESULTS.** Argument policy governs inputs. There is no filtering
   or redaction of what a tool returns, and none is implied.
 - **Multi-tenancy.** The allowlist is per-credential, not
-  per-(credential, upstream). Give each agent its own credential rather
-  than sharing one across upstreams with different tool vocabularies.
+  per-(credential, upstream) — so onboarding a server that offers a tool
+  NAME some credential is already allowlisted for makes that tool
+  callable *on the new server* by that credential, with no allowlist
+  change. `kmx tools add` checks for this and warns, naming the
+  credentials; heed it, or rename the tool. Give each agent its own
+  credential rather than sharing one across upstreams with different tool
+  vocabularies.
 
 ## Verified how
 

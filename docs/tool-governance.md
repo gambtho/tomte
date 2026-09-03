@@ -162,6 +162,11 @@ redefine one is refused rather than resolved by precedence, and
 /admin/config/validate` decides whether a candidate overlay would load,
 using the same `config.Parse` the proxy boots with — so a malformed entry
 is refused before it is applied rather than by a pod that will not start.
+An overlay entry may not set `credential_file`, `credential_header`,
+`internet` or `ca_file`: those decide what credential the proxy reads and
+which host outside the cluster it may be sent to, and belong in the
+committed table. Keyed and hosted upstreams are therefore committed-table
+only, by enforcement rather than by convention.
 
 `make ungovern-tools` restores the direct, ungoverned wiring by
 re-applying `k8s/tools-agent.yaml`. Re-run `make plane` after editing

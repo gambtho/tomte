@@ -46,9 +46,12 @@ const (
 	PlaneNamespace = "kaimahi"
 	// AgentNamespace holds kagent's Agents and RemoteMCPServers.
 	AgentNamespace = "kagent"
-	// ProxySelector is the label every plane NetworkPolicy pins the
-	// proxy pod by (k8s/plane/network-policy.yaml).
-	ProxySelector = "app=kaimahi-proxy"
+	// ProxySelectorKey / ProxySelectorValue are the label every plane
+	// NetworkPolicy pins the proxy pod by (k8s/plane/network-policy.yaml).
+	// Both generated policies are emitted FROM these, so the pinning test
+	// that compares them with the committed boundary guarantees something.
+	ProxySelectorKey   = "app"
+	ProxySelectorValue = "kaimahi-proxy"
 )
 
 var (
@@ -189,6 +192,18 @@ type UpstreamSpec struct {
 	// governed credential from. kmx NEVER writes its value — only its
 	// name (D27); `kmx tools govern` mints the token into it.
 	Secret string
+	// OverlayVersion is the resourceVersion the overlay ConfigMap was
+	// read at, empty when it did not exist. It is emitted into the
+	// manifest as an optimistic-concurrency precondition: `kubectl
+	// apply` refuses a stale one with a Conflict and changes nothing.
+	//
+	// That matters because this file is designed to be applied LATER —
+	// `--no-apply` says "review it, then apply it" — and the emitted map
+	// carries every fragment as it stood when it was read. Without the
+	// precondition, applying a file scaffolded on Monday would prune a
+	// fragment somebody added on Tuesday, and the upstream that fragment
+	// constrained would keep running, unbounded.
+	OverlayVersion string
 	// Fragments is the overlay as it will exist AFTER this onboarding:
 	// every fragment already in the cluster's overlay ConfigMap, plus
 	// this one. The emitted ConfigMap is whole, so what an operator
@@ -229,6 +244,18 @@ func (s UpstreamSpec) Fragment() (string, error) {
 		return "", err
 	}
 	return string(out) + "\n", nil
+}
+
+// ValidateNamespace holds a namespace read out of a URL to the shape
+// Kubernetes will accept. net/url already refuses control characters and
+// spaces in a host, so this is not the injection guard — quote() is —
+// but a value that cannot be a namespace should be refused where the
+// message can name the URL, not by kubectl three steps later.
+func ValidateNamespace(ns string) error {
+	if !upstreamNameRE.MatchString(ns) || len(ns) > 63 {
+		return fmt.Errorf("%q is not a Kubernetes namespace name (RFC 1123 label)", ns)
+	}
+	return nil
 }
 
 // ValidateUpstreamName holds the name to the strictest shape it has to

@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -103,15 +104,26 @@ func (a *App) AddUpstream(opt AddUpstreamOptions) error {
 	if err := a.resolveService(&spec, opt.PodPort, port); err != nil {
 		return err
 	}
+	// The scaffolded ingress policy governs every pod the Service's
+	// selector matches — which is not necessarily one workload. A
+	// selector like `tier: backend` would cut four unrelated Deployments
+	// off from every caller but the proxy, and under the default posture
+	// give all four zero egress. kmx will not refuse it (a shared
+	// selector can be legitimate) but it will not let it happen silently
+	// either: the blast radius is named before the guard asks.
+	if err := a.showPolicyBlastRadius(spec); err != nil {
+		return err
+	}
 	frag, err := spec.Fragment()
 	if err != nil {
 		return err
 	}
 	// The overlay ConfigMap is emitted WHOLE — every fragment already on
-	// the cluster plus this one — because a ConfigMap apply replaces
-	// `data`, so an emitted map missing an existing key would silently
-	// un-onboard somebody else's server.
-	spec.Fragments, err = a.readOverlay()
+	// the cluster plus this one. `kubectl apply` prunes any key that was
+	// in the LAST APPLIED configuration and is absent from the new one,
+	// and every apply here is a whole map, so an emitted map missing an
+	// existing key would silently un-onboard somebody else's server.
+	spec.Fragments, spec.OverlayVersion, err = a.readOverlay()
 	if err != nil {
 		return err
 	}
@@ -135,10 +147,17 @@ func (a *App) AddUpstream(opt AddUpstreamOptions) error {
 	// candidate overlay goes to the running proxy, which merges it over
 	// the committed table and calls the same config.Parse it booted
 	// with. If it says yes, the pod that reads this will boot.
-	if err := a.validateOverlay(spec.Fragments); err != nil {
+	var collided bool
+	if err := a.validateOverlay(spec.Fragments, &collided); err != nil {
 		return err
 	}
 
+	for _, t := range tools {
+		if t.VerbLevel() {
+			a.notef("WARNING: %s declares `policy_fields: []` — a VERB-LEVEL binding, the weakest setting.", t.Name)
+			a.notef("  An approval for it covers ANY arguments until the grant is spent, and the audit names only the verb.")
+		}
+	}
 	if opt.Out == "-" {
 		_, err := a.Out.Write([]byte(document))
 		return err
@@ -152,12 +171,6 @@ func (a *App) AddUpstream(opt AddUpstreamOptions) error {
 	}
 	a.notef("Wrote %s — four documents: the overlay fragment, the proxy's egress to this server,", path)
 	a.notef("this server's ingress from the proxy alone, and the RemoteMCPServer whose URL is the gateway.")
-	for _, t := range tools {
-		if t.VerbLevel() {
-			a.notef("WARNING: %s declares `policy_fields: []` — a VERB-LEVEL binding, the weakest setting.", t.Name)
-			a.notef("  An approval for it covers ANY arguments until the grant is spent, and the audit names only the verb.")
-		}
-	}
 	if opt.NoApply {
 		a.notef("Not applied (--no-apply). Review it, then:")
 		a.notef("  kubectl --context %s apply -f %s", a.Cfg.KubeContext, path)
@@ -180,8 +193,14 @@ func (a *App) AddUpstream(opt AddUpstreamOptions) error {
 		return err
 	}
 	a.notef("")
-	a.notef("Upstream %q is in the table and reachable. It has no credential yet, so nothing can call it.", opt.Name)
-	a.notef("Issue one and point an agent at it:")
+	if collided {
+		a.notef("Upstream %q is in the table and reachable — and NOT unreachable: the tool names warned about", opt.Name)
+		a.notef("above are already allowlisted for existing credentials, which can call them here now.")
+	} else {
+		a.notef("Upstream %q is in the table and reachable. No credential allowlists any of its tools,", opt.Name)
+		a.notef("so nothing can call it yet.")
+	}
+	a.notef("Issue a credential and point an agent at it:")
 	a.notef("  kmx tools govern --server %s --secret %s \\", spec.ServerName(), opt.Secret)
 	a.notef("      --credential <credential> --agent <agent> --tools <the tools that agent may call>")
 	return nil
@@ -258,10 +277,6 @@ func (a *App) resolveService(spec *scaffold.UpstreamSpec, override, urlPort int)
 	}
 	spec.PodLabels = svc.Spec.Selector
 
-	if override > 0 {
-		spec.PodPort = override
-		return nil
-	}
 	for _, p := range svc.Spec.Ports {
 		if p.Port != urlPort {
 			continue
@@ -269,6 +284,13 @@ func (a *App) resolveService(spec *scaffold.UpstreamSpec, override, urlPort int)
 		if p.Protocol != "" && p.Protocol != "TCP" {
 			return fmt.Errorf("Service %s/%s port %d is %s; the MCP seam is TCP",
 				spec.ServiceNamespace, spec.Service, urlPort, p.Protocol)
+		}
+		// --pod-port supplies the NUMBER kmx could not resolve; it does
+		// not excuse the Service from publishing the port the URL names,
+		// which is checked above and below whether or not it is given.
+		if override > 0 {
+			spec.PodPort = override
+			return nil
 		}
 		// NetworkPolicy is evaluated on the post-NAT POD address, so the
 		// rule needs the CONTAINER port. An unset targetPort defaults to
@@ -295,36 +317,82 @@ func (a *App) resolveService(spec *scaffold.UpstreamSpec, override, urlPort int)
 		spec.ServiceNamespace, spec.Service, urlPort)
 }
 
+// showPolicyBlastRadius names the pods the scaffolded ingress policy will
+// govern. A read; it never blocks.
+func (a *App) showPolicyBlastRadius(spec scaffold.UpstreamSpec) error {
+	sel := make([]string, 0, len(spec.PodLabels))
+	for k, v := range spec.PodLabels {
+		sel = append(sel, k+"="+v)
+	}
+	sort.Strings(sel)
+	out, err := a.kubectlCapture("-n", spec.ServiceNamespace, "get", "pods",
+		"-l", strings.Join(sel, ","), "-o", "jsonpath={.items[*].metadata.name}")
+	if err != nil {
+		// Not fatal: this is an advisory read, and a cluster that cannot
+		// answer it has not made the policy wrong. Say so rather than
+		// printing a reassuring silence.
+		a.notef("NOTE: could not list the pods %s will govern (%v). Read the selector yourself.",
+			spec.IngressPolicyName(), err)
+		return nil
+	}
+	pods := strings.Fields(strings.TrimSpace(out))
+	switch len(pods) {
+	case 0:
+		a.notef("The selector %s matches no pods right now — the policy is still correct; it opens nothing.",
+			strings.Join(sel, ","))
+	case 1:
+		a.notef("The policy pair governs pod %s (selector %s).", pods[0], strings.Join(sel, ","))
+	default:
+		a.notef("NOTE: the selector %s matches %d pods, not one: %s.",
+			strings.Join(sel, ","), len(pods), strings.Join(pods, ", "))
+		a.notef("  ALL of them will be reachable only from the proxy, and — under --server-egress none —")
+		a.notef("  will reach nothing at all. If they are not all this server, give it a Service whose")
+		a.notef("  selector picks only its own pods.")
+	}
+	return nil
+}
+
 // readOverlay returns the fragments the cluster's overlay ConfigMap
 // already holds. An absent ConfigMap is an empty overlay — the state of
 // every cluster where nobody has onboarded anything.
-func (a *App) readOverlay() (map[string]string, error) {
+func (a *App) readOverlay() (map[string]string, string, error) {
 	out, err := a.kubectlCapture("-n", scaffold.PlaneNamespace, "get", "configmap",
-		scaffold.OverlayConfigMap, "-o", "jsonpath={.data}")
+		scaffold.OverlayConfigMap, "-o", "json")
 	if err != nil {
 		if isNotFound(err) {
-			return map[string]string{}, nil
+			return map[string]string{}, "", nil
 		}
 		// Anything but a genuine NotFound — an unreachable API server,
 		// an RBAC denial, the wrong context — must NOT read as "the
 		// overlay is empty": that would emit a ConfigMap dropping every
 		// upstream somebody else onboarded.
-		return nil, fmt.Errorf("reading the overlay ConfigMap %s: %w", scaffold.OverlayConfigMap, err)
+		return nil, "", fmt.Errorf("reading the overlay ConfigMap %s: %w", scaffold.OverlayConfigMap, err)
 	}
-	data := map[string]string{}
-	out = strings.TrimSpace(out)
-	if out == "" {
-		return data, nil
+	var cm struct {
+		Metadata struct {
+			ResourceVersion string `json:"resourceVersion"`
+		} `json:"metadata"`
+		Data map[string]string `json:"data"`
 	}
-	if err := json.Unmarshal([]byte(out), &data); err != nil {
-		return nil, fmt.Errorf("reading the overlay ConfigMap %s: %w", scaffold.OverlayConfigMap, err)
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &cm); err != nil {
+		return nil, "", fmt.Errorf("reading the overlay ConfigMap %s: %w", scaffold.OverlayConfigMap, err)
 	}
-	return data, nil
+	if cm.Data == nil {
+		cm.Data = map[string]string{}
+	}
+	if cm.Metadata.ResourceVersion == "" {
+		// The version is the apply precondition. An object with no
+		// version to state would be applied unconditionally, which is
+		// the behaviour this exists to remove.
+		return nil, "", fmt.Errorf("the overlay ConfigMap %s has no resourceVersion; refusing to emit an apply "+
+			"that could silently replace another operator's fragments", scaffold.OverlayConfigMap)
+	}
+	return cm.Data, cm.Metadata.ResourceVersion, nil
 }
 
 // validateOverlay asks the RUNNING plane whether this overlay would
 // load. Nothing is stored and nothing changes; this is a read.
-func (a *App) validateOverlay(fragments map[string]string) error {
+func (a *App) validateOverlay(fragments map[string]string, collided *bool) error {
 	return a.session(func(c *admin.Client) error {
 		body := map[string]any{"fragments": map[string]json.RawMessage{}}
 		frags := body["fragments"].(map[string]json.RawMessage)
@@ -336,10 +404,11 @@ func (a *App) validateOverlay(fragments map[string]string) error {
 			return err
 		}
 		var resp struct {
-			OK            bool                `json:"ok"`
-			Error         string              `json:"error"`
-			ToolUpstreams []string            `json:"tool_upstreams"`
-			Declared      map[string][]string `json:"declared"`
+			OK                 bool                `json:"ok"`
+			Error              string              `json:"error"`
+			ToolUpstreams      []string            `json:"tool_upstreams"`
+			Declared           map[string][]string `json:"declared"`
+			AlreadyAllowlisted map[string][]string `json:"already_allowlisted"`
 		}
 		_ = json.Unmarshal(out, &resp)
 		if status != 200 || !resp.OK {
@@ -350,12 +419,40 @@ func (a *App) validateOverlay(fragments map[string]string) error {
 			return fmt.Errorf("the plane refused this upstream table — nothing has been applied:\n  %s", msg)
 		}
 		a.notef("The plane validated the table: %s.", strings.Join(resp.ToolUpstreams, ", "))
-		for tool, fields := range resp.Declared {
-			if len(fields) == 0 {
+		// Sorted: a Go map's range order is random, and an operator
+		// comparing two runs should not have to wonder whether the
+		// declarations changed or only the order they were printed in.
+		tools := make([]string, 0, len(resp.Declared))
+		for tool := range resp.Declared {
+			tools = append(tools, tool)
+		}
+		sort.Strings(tools)
+		for _, tool := range tools {
+			if len(resp.Declared[tool]) == 0 {
 				a.notef("  %s: verb-level binding (no argument is policy-relevant).", tool)
 				continue
 			}
-			a.notef("  %s: an approval binds %s.", tool, strings.Join(fields, ", "))
+			a.notef("  %s: an approval binds %s.", tool, strings.Join(resp.Declared[tool], ", "))
+		}
+		// The gateway's allowlist is per-CREDENTIAL, not per-(credential,
+		// upstream) — a documented property of the plane, and the one
+		// way onboarding can widen something without an allowlist edit.
+		// A credential already allowlisted for one of these tool NAMES
+		// can call it on this new server the moment it is in the table.
+		// Saying nothing here would leave that discoverable only by
+		// reading the gateway's source.
+		collisions := make([]string, 0, len(resp.AlreadyAllowlisted))
+		for tool := range resp.AlreadyAllowlisted {
+			collisions = append(collisions, tool)
+		}
+		sort.Strings(collisions)
+		for _, tool := range collisions {
+			*collided = true
+			a.notef("WARNING: %s is already allowlisted for credential(s) %s.",
+				tool, strings.Join(resp.AlreadyAllowlisted[tool], ", "))
+			a.notef("  The allowlist is per-credential, not per-upstream, so each of those can call %s", tool)
+			a.notef("  on THIS server as soon as it is in the table — with no allowlist change. Rename the tool,")
+			a.notef("  or scope those credentials, if that is not what you want.")
 		}
 		return nil
 	})

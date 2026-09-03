@@ -41,6 +41,9 @@ func GenerateUpstream(spec UpstreamSpec) (string, error) {
 	if err := ValidateUpstreamName(spec.Name); err != nil {
 		return "", err
 	}
+	if err := ValidateNamespace(spec.ServiceNamespace); err != nil {
+		return "", fmt.Errorf("upstream %q: %w", spec.Name, err)
+	}
 	if len(spec.PodLabels) == 0 {
 		return "", fmt.Errorf("upstream %q: no pod labels — the NetworkPolicy pair has nothing to pin", spec.Name)
 	}
@@ -101,8 +104,21 @@ kind: ConfigMap
 metadata:
   name: ` + OverlayConfigMap + `
   namespace: ` + PlaneNamespace + `
-data:
 `)
+	if spec.OverlayVersion != "" {
+		version, err := quote(spec.OverlayVersion)
+		if err != nil {
+			return "", err
+		}
+		b.WriteString(`  # The version this overlay was READ at. It makes the apply
+  # conditional: if anyone has changed the overlay since — another
+  # onboarding, a hand-added standing constraint — kubectl refuses this
+  # with a Conflict and changes nothing, rather than replacing their
+  # work with a snapshot taken before it existed. Scaffold again to
+  # pick their change up.
+  resourceVersion: ` + version + "\n")
+	}
+	b.WriteString("data:\n")
 	keys := make([]string, 0, len(spec.Fragments))
 	for k := range spec.Fragments {
 		keys = append(keys, k)
@@ -150,7 +166,7 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      app: kaimahi-proxy
+      %s: %s
   policyTypes: [Egress]
   egress:
     - to:
@@ -163,11 +179,15 @@ spec:
       ports:
         - protocol: TCP
           port: %d
-`, spec.EgressPolicyName(), PlaneNamespace, ns, sel, spec.PodPort), nil
+`, spec.EgressPolicyName(), PlaneNamespace, ProxySelectorKey, ProxySelectorValue, ns, sel, spec.PodPort), nil
 }
 
 func serverIngressDocument(spec UpstreamSpec) (string, error) {
 	sel, err := matchLabels(spec.PodLabels, 6)
+	if err != nil {
+		return "", err
+	}
+	ns, err := quote(spec.ServiceNamespace)
 	if err != nil {
 		return "", err
 	}
@@ -176,7 +196,7 @@ func serverIngressDocument(spec UpstreamSpec) (string, error) {
 	case spec.ServerDNS:
 		note = `#
 # Out: cluster DNS and nothing else (--server-egress dns). The server may
-# resolve names; it may open no connection to anything.`
+# resolve names; it may open no connection to anything else.`
 		egress = `  egress:
     - to:
         - namespaceSelector:
@@ -203,8 +223,9 @@ func serverIngressDocument(spec UpstreamSpec) (string, error) {
 # Out: NOTHING. Egress is listed with no rules on purpose (--server-egress
 # none, the default) — the strongest statement available that this server
 # holds no credential and reaches no other system: there is no path for
-# one to be used. If it needs DNS or the internet, re-scaffold with
-# --server-egress dns, or write the allowance yourself.`
+# one to be used. If it needs cluster DNS, edit this document (or delete
+# it and this upstream's overlay key, then scaffold again with
+# --server-egress dns). Anything wider than DNS is yours to write.`
 	}
 	return fmt.Sprintf(`---
 # 3. Only the proxy may reach this server.
@@ -233,12 +254,12 @@ spec:
               kubernetes.io/metadata.name: %s
           podSelector:
             matchLabels:
-              app: kaimahi-proxy
+              %s: %s
       ports:
         - protocol: TCP
           port: %d
-%s`, note, spec.IngressPolicyName(), spec.ServiceNamespace, sel, types,
-		PlaneNamespace, spec.PodPort, egress), nil
+%s`, note, spec.IngressPolicyName(), ns, sel, types,
+		PlaneNamespace, ProxySelectorKey, ProxySelectorValue, spec.PodPort, egress), nil
 }
 
 func remoteServerDocument(spec UpstreamSpec) (string, error) {

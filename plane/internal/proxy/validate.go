@@ -17,6 +17,8 @@ package proxy
 
 import (
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"sort"
 
@@ -24,7 +26,7 @@ import (
 )
 
 // maxOverlayBytes bounds the submitted overlay. The committed table is
-// ~4KB; an overlay is one entry per onboarded server.
+// around 3KB; an overlay is one entry per onboarded server.
 const maxOverlayBytes = 256 << 10
 
 type validateRequest struct {
@@ -47,6 +49,13 @@ type validateResponse struct {
 	// answer (a verb-level binding); a tool absent from this map binds
 	// its whole canonical argument object.
 	Declared map[string][]string `json:"declared,omitempty"`
+	// AlreadyAllowlisted maps a tool the overlay declares to the
+	// credentials that ALREADY allowlist that name. The gateway's
+	// allowlist is per-credential and not per-(credential, upstream), so
+	// each of those credentials can call the tool on this new server the
+	// moment it is in the table — with no allowlist change and nothing
+	// else to notice it. Empty is the ordinary case.
+	AlreadyAllowlisted map[string][]string `json:"already_allowlisted,omitempty"`
 }
 
 func (h *handler) validateConfig(w http.ResponseWriter, r *http.Request) {
@@ -59,6 +68,18 @@ func (h *handler) validateConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	frags := make([]config.Fragment, 0, len(req.Fragments))
 	for name, raw := range req.Fragments {
+		// Refuse, rather than filter, a key the BOOT path would ignore.
+		// Filtering here would validate a table the plane is never going
+		// to read — and the docs invite hand-editing the overlay to add
+		// standing constraints, so "my constraint is in the ConfigMap
+		// and validated" must not be compatible with "the plane drops
+		// it without a word".
+		if !config.FragmentName(name) {
+			writeJSON(w, http.StatusBadRequest, validateResponse{Error: fmt.Sprintf(
+				"overlay key %q would be ignored at boot: a fragment must end in .json and may not begin with a dot",
+				name)})
+			return
+		}
 		frags = append(frags, config.Fragment{Name: name, Raw: raw})
 	}
 	sort.Slice(frags, func(i, j int) bool { return frags[i].Name < frags[j].Name })
@@ -101,6 +122,22 @@ func (h *handler) validateConfig(w http.ResponseWriter, r *http.Request) {
 				resp.Declared[tool] = fields
 			}
 		}
+	}
+	declared := make([]string, 0, len(resp.Declared))
+	for tool := range resp.Declared {
+		declared = append(declared, tool)
+	}
+	sort.Strings(declared)
+	if existing, err := h.d.Store.CredentialsAllowlisting(r.Context(), declared); err == nil {
+		if len(existing) > 0 {
+			resp.AlreadyAllowlisted = existing
+		}
+	} else {
+		// A store that cannot answer must not read as "nobody has it":
+		// that is the direction that produces a reassuring silence.
+		slog.Error("admin: allowlist collision check", "err", err)
+		writeJSON(w, http.StatusServiceUnavailable, validateResponse{Error: "cannot read the existing allowlists: " + err.Error()})
+		return
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

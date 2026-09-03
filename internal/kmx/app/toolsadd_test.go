@@ -82,6 +82,7 @@ JSON
   *port-forward*)
     printf 'Forwarding from 127.0.0.1:%s -> 9091\n' "$KMX_TEST_ADMIN_PORT"
     exec sleep 30 ;;
+  *"get pods"*) printf '%s' "$KMX_TEST_PODS"; exit 0 ;;
   *"get service"*)
     if [ "$KMX_TEST_SVC" = "notfound" ]; then
       printf 'Error from server (NotFound): services "acme-warehouse" not found\n' >&2
@@ -92,7 +93,13 @@ JSON
     case "$KMX_TEST_OVERLAY" in
       notfound) printf 'Error from server (NotFound): configmaps "kaimahi-upstreams-extra" not found\n' >&2; exit 1 ;;
       boom)     printf 'Unable to connect to the server: dial tcp: i/o timeout\n' >&2; exit 1 ;;
-      *)        printf '%s' "$KMX_TEST_OVERLAY"; exit 0 ;;
+      *)
+        if [ "$KMX_TEST_RV" = "none" ]; then
+          printf '{"metadata":{},"data":%s}' "$KMX_TEST_OVERLAY"
+        else
+          printf '{"metadata":{"resourceVersion":"%s"},"data":%s}' "$KMX_TEST_RV" "$KMX_TEST_OVERLAY"
+        fi
+        exit 0 ;;
     esac ;;
 esac
 exit 0
@@ -141,7 +148,13 @@ func newAddFixture(t *testing.T, svc, overlay string, validate http.HandlerFunc)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("KMX_TEST_ARGS", f.argsLog)
 	t.Setenv("KMX_TEST_SVC", svc)
+	if os.Getenv("KMX_TEST_PODS") == "" {
+		t.Setenv("KMX_TEST_PODS", "acme-warehouse-5f7c")
+	}
 	t.Setenv("KMX_TEST_OVERLAY", overlay)
+	if os.Getenv("KMX_TEST_RV") != "none" {
+		t.Setenv("KMX_TEST_RV", "4711")
+	}
 	t.Setenv("KMX_TEST_ADMIN_B64", base64.StdEncoding.EncodeToString([]byte("admin-bearer")))
 	t.Setenv("KMX_TEST_ADMIN_PORT", u.Port())
 	r := run.Default()
@@ -210,6 +223,39 @@ func TestAnUnsetTargetPortDefaultsToTheServicePort(t *testing.T) {
 	}
 }
 
+func TestASelectorThatMatchesMoreThanTheServerSaysSoBeforeTheGuardAsks(t *testing.T) {
+	// Found in review: the ingress policy is pinned to the Service's
+	// selector, and a shared selector (`tier: backend`) would cut every
+	// matching workload off from all callers but the proxy — and, under
+	// the default posture, give them zero egress. kmx does not refuse it
+	// (sharing can be legitimate) but it must not happen silently.
+	t.Setenv("KMX_TEST_PODS", "warehouse-1 billing-2 reports-3")
+	f := newAddFixture(t, warehouseService, "notfound", nil)
+	opt := addOpts(f.dir)
+	opt.NoApply = true
+	if err := f.app.AddUpstream(opt); err != nil {
+		t.Fatal(err)
+	}
+	notes := f.errOut.String()
+	for _, want := range []string{"matches 3 pods, not one", "billing-2", "reach nothing at all"} {
+		if !strings.Contains(notes, want) {
+			t.Fatalf("the blast radius was not named (%q missing):\n%s", want, notes)
+		}
+	}
+}
+
+func TestOnePodIsNamedRatherThanWarnedAbout(t *testing.T) {
+	f := newAddFixture(t, warehouseService, "notfound", nil)
+	opt := addOpts(f.dir)
+	opt.NoApply = true
+	if err := f.app.AddUpstream(opt); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(f.errOut.String(), "governs pod acme-warehouse-5f7c") {
+		t.Fatalf("the ordinary case should name the pod, not warn:\n%s", f.errOut)
+	}
+}
+
 func TestAServiceWithNoSelectorIsRefusedRatherThanSelectingEveryPod(t *testing.T) {
 	f := newAddFixture(t, `{"spec":{"ports":[{"port":8090,"targetPort":9090}]}}`, "notfound", nil)
 	err := f.app.AddUpstream(addOpts(f.dir))
@@ -253,6 +299,25 @@ func TestAnExistingOverlayIsCarriedWholeIntoTheEmittedConfigMap(t *testing.T) {
 		if !strings.Contains(string(doc), want) {
 			t.Fatalf("the emitted overlay dropped %q:\n%s", want, doc)
 		}
+	}
+	// And the apply is CONDITIONAL on the version it was read at. This
+	// manifest is meant to be applied later; without the precondition,
+	// applying a file scaffolded on Monday would prune a fragment added
+	// on Tuesday and leave the upstream it constrained running unbounded.
+	if !strings.Contains(string(doc), `resourceVersion: "4711"`) {
+		t.Fatalf("the emitted overlay carries no apply precondition:\n%s", doc)
+	}
+}
+
+func TestAnOverlayWithNoVersionToStateIsRefused(t *testing.T) {
+	// An unconditional apply of a whole-map snapshot is exactly the
+	// behaviour the precondition exists to remove, so an object that
+	// cannot supply one is refused rather than applied without it.
+	t.Setenv("KMX_TEST_RV", "none")
+	f := newAddFixture(t, warehouseService, `{}`, nil)
+	err := f.app.AddUpstream(addOpts(f.dir))
+	if err == nil || !strings.Contains(err.Error(), "no resourceVersion") {
+		t.Fatalf("want a refusal rather than an unconditional apply, got: %v", err)
 	}
 }
 

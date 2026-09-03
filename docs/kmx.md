@@ -324,6 +324,9 @@ and why, is [govern-your-agent.md](govern-your-agent.md).
 | **The overlay is emitted WHOLE** | A ConfigMap apply replaces `data`, so a map missing an existing key would silently un-onboard somebody else's server. An overlay read that is anything but a genuine `NotFound` aborts rather than reading as "nothing is onboarded". |
 | **Validated by the plane, not by a copy of it** | The candidate table goes to `POST /admin/config/validate`, which merges it over the committed one and calls the same `config.Parse` the proxy booted with. Nothing is written or applied until it says yes, and its refusal is the plane's own message. |
 | **`--out -` mutates nothing** | Generate-don't-mutate, as `agent create` has it. Validation still runs: it is a read. |
+| **An overlay may not carry custody** | `credential_file`, `credential_header`, `internet` and `ca_file` are refused in an overlay fragment, by the plane, not just by kmx. Together they name any path the proxy can read and any host it may be sent to — a ConfigMap that could set them would hand the plane's admin token to an attacker on the first relayed call. Keyed and hosted upstreams stay in the committed table. |
+| **The apply is conditional** | The emitted ConfigMap carries the `resourceVersion` it was read at, so a manifest applied later (`--no-apply` invites exactly that) fails with a `Conflict` rather than pruning a fragment somebody added in the meantime — which would leave the upstream that fragment constrained running unbounded. |
+| **A shared Service selector is named, not hidden** | The ingress policy governs every pod the selector matches. kmx lists them, and says plainly when there is more than one. |
 | **Won't overwrite** | Exclusive create, no `--force`. |
 
 ## Governing an agent
