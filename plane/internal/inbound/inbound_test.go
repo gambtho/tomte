@@ -142,7 +142,7 @@ func (f *fakeStore) AdmitInboundEvent(_ context.Context, hook, credential, deliv
 	f.admitted[hook+"/"+delivery] = true
 	id := "evt-" + strconv.Itoa(f.admitCall)
 	f.audits = append(f.audits, store.InboundAuditEntry{ID: id, Hook: hook, CredentialName: credential,
-		DeliveryID: delivery, Decision: "admitted", Status: 202, Agent: agent})
+		DeliveryID: delivery, Decision: "admitted", Status: 202, Agent: agent, ActedFor: actedFor})
 	return id, "grant-1", nil
 }
 
