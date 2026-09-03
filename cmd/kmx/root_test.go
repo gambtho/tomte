@@ -63,6 +63,7 @@ func TestCobraCommandTreeContainsEveryPublicCommand(t *testing.T) {
 		{"plane"}, {"govern"}, {"credentials"}, {"credential", "renew"}, {"ledger"}, {"grants"}, {"audit"},
 		{"use"}, {"budget"}, {"approvals"}, {"approve"}, {"deny"}, {"request"},
 		{"tools", "add"}, {"tools", "govern"}, {"tools", "ungovern"}, {"tools", "allow"}, {"tools", "allowlist"},
+		{"tools", "sandbox"}, {"tools", "sandbox", "status"},
 		{"backup"}, {"restore"}, {"metrics"}, {"status"}, {"down"}, {"completion"}, {"version"},
 	}
 	for _, path := range paths {
@@ -154,6 +155,48 @@ func TestGroupedCommandsRejectUnknownVerb(t *testing.T) {
 		deps, _ := testDependencies(&out, &errOut)
 		if err := execute(args, deps); err == nil {
 			t.Fatalf("%v unexpectedly succeeded", args)
+		}
+	}
+}
+
+// The sandbox installs a privileged DaemonSet, so what it will and will not
+// accept is a safety property, not a style one. Cobra enforces all three now,
+// but the contract is pinned here so a later refactor cannot loosen it
+// silently.
+func TestToolsSandboxRefusesWhatItCannotHonour(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		argv []string
+	}{
+		// A stray word must not be shrugged off into an install.
+		{"a trailing word", []string{"tools", "sandbox", "unexpected"}},
+		{"a word after status", []string{"tools", "sandbox", "status", "extra"}},
+		// The sandbox is node-level: installed once per cluster, and every
+		// governed tool call lands on it whatever credential made it. A
+		// --credential accepted and then ignored is how an operator comes
+		// to believe they scoped something they did not.
+		{"a credential it cannot scope to", []string{"tools", "sandbox", "--credential", "demo"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			deps, _ := testDependencies(&out, &errOut)
+			if err := execute(tc.argv, deps); err == nil {
+				t.Fatalf("%v was accepted; it must be refused", tc.argv)
+			}
+		})
+	}
+}
+
+// The two spellings that must keep working.
+func TestToolsSandboxResolvesInstallAndStatus(t *testing.T) {
+	root := newRootCommand(&commandState{deps: productionDependencies()})
+	for _, path := range [][]string{{"tools", "sandbox"}, {"tools", "sandbox", "status"}} {
+		command, remaining, err := root.Find(path)
+		if err != nil || len(remaining) != 0 {
+			t.Errorf("%v did not resolve: remaining=%v err=%v", path, remaining, err)
+		}
+		if command.RunE == nil {
+			t.Errorf("%v resolved to a command that does nothing", path)
 		}
 	}
 }
