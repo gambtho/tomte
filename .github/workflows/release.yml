@@ -51,12 +51,22 @@ jobs:
           SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
+          # `synthetic` marks the one case where the version was invented by
+          # this job rather than chosen by a person: a manual dry run with no
+          # version given. It exists so the notes step can tell "rehearse a
+          # release" from "rehearse the machinery" — v0.0.0-dryrun.<sha> has
+          # no changelog section and never will.
+          synthetic=false
           if [ "$REF_TYPE" = tag ]; then
             version="$REF_NAME"
             dry_run=false
-          else
-            version="${INPUT_VERSION:-v0.0.0-dryrun.${SHA:0:12}}"
+          elif [ -n "$INPUT_VERSION" ]; then
+            version="$INPUT_VERSION"
             dry_run=true
+          else
+            version="v0.0.0-dryrun.${SHA:0:12}"
+            dry_run=true
+            synthetic=true
           fi
           # Semantic, pre-1.0, `v`-prefixed: what `go install …@<version>`
           # and the Go module proxy accept. A tag this pattern does not
@@ -70,7 +80,8 @@ jobs:
           echo "version=$version"     >> "$GITHUB_OUTPUT"
           echo "dry_run=$dry_run"     >> "$GITHUB_OUTPUT"
           echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
-          echo "building $version (dry_run=$dry_run, prerelease=$prerelease)"
+          echo "synthetic=$synthetic" >> "$GITHUB_OUTPUT"
+          echo "building $version (dry_run=$dry_run, prerelease=$prerelease, synthetic=$synthetic)"
 
       # The plane is a SEPARATE Go module (plane/), and Go resolves a nested
       # module's version from a `plane/`-prefixed tag. A kmx installed with
@@ -109,16 +120,37 @@ jobs:
 
       # Notes come from CHANGELOG.md and the extraction fails when the
       # section is missing, so a version cannot be published undocumented.
+      #
+      # That refusal applies to every version a PERSON named — a tag, or a
+      # dry run given an explicit version, which is how you rehearse a
+      # release before cutting it. It cannot apply to a version this job
+      # invented for a dry run: v0.0.0-dryrun.<sha> has no section, so
+      # requiring one would make the "debug the release job without burning
+      # a version number" path fail before it built anything. That case
+      # reads the Unreleased section instead — the extractor still runs, and
+      # nothing is published either way.
       - name: Release notes exist for this version
         env:
           VERSION: ${{ steps.what.outputs.version }}
+          SYNTHETIC: ${{ steps.what.outputs.synthetic }}
           NOTES: ${{ runner.temp }}/release-notes.md
         run: |
           set -euo pipefail
           # OUTSIDE the checkout, deliberately. Writing this file into the
           # working tree is what made v0.1.0-rc.1 ship with
           # vcs.modified=true stamped into every binary.
-          python3 scripts/release-notes.py "$VERSION" | tee "$NOTES"
+          if [ "$SYNTHETIC" != true ]; then
+            python3 scripts/release-notes.py "$VERSION" | tee "$NOTES"
+          elif python3 scripts/release-notes.py Unreleased > "$NOTES" 2>"$RUNNER_TEMP/notes.err"; then
+            echo "dry run: notes taken from the Unreleased section"
+            cat "$NOTES"
+          else
+            # An empty Unreleased section is a real thing right after a
+            # release is cut, and it must not fail a rehearsal.
+            cat "$RUNNER_TEMP/notes.err" >&2
+            echo "Dry run of $VERSION. Not published." > "$NOTES"
+            echo "dry run: no usable Unreleased section; using a placeholder"
+          fi
           test -s "$NOTES"
 
       # A release is a provenance claim. The tree it is built from must be
