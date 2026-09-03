@@ -329,7 +329,7 @@ matters, because only one of them involves a person.
 |---|---|---|
 | default | you, at the terminal | the admin bearer (`make approve`) |
 | `SLACK_USER=<id>` | nobody | a **synthetic**, correctly signed `app_mention` as that id (`scripts/slack-mention-probe.sh`) |
-| `SLACK_USER=<id> AP_HUMAN=1` | that person | the scenario prints the line and **waits** for them to type it in Slack (`scripts/ap-await-approval.sh`) |
+| `SLACK_USER=<id> AP_HUMAN=1` | that person | the scenario prints the line and **waits** for them to type it in Slack (`scripts/await-approval.sh`) |
 
 The middle row is right on kind and in CI, where Slack cannot reach the
 cluster and the id is invented (`U0CIAPPROVER`). It is exactly wrong

@@ -31,7 +31,7 @@
 #                   signed, by scripts/slack-mention-probe.sh.
 #   AP_HUMAN=1      with SLACK_USER, do not synthesise anything: print the
 #                   line and WAIT for that person to type it in Slack
-#                   (scripts/ap-await-approval.sh). This is the only
+#                   (scripts/await-approval.sh). This is the only
 #                   honest setting against a real workspace — a signed
 #                   event forged in a named colleague's name would prove
 #                   nothing about a human approving a payment.
@@ -128,7 +128,7 @@ request_id() {
 approve() {
   local id=$1 uses=${2:-1}
   if [ -n "$SLACK_USER" ] && [ "$AP_HUMAN" = 1 ]; then
-    CRED_AP="$CRED_AP" bash "$here/ap-await-approval.sh" "$id" "$SLACK_USER" "$uses"
+    CRED_AP="$CRED_AP" bash "$here/await-approval.sh" "$id" "$SLACK_USER" "$uses"
   elif [ -n "$SLACK_USER" ]; then
     WANT="approved request $id" bash "$here/slack-mention-probe.sh" \
       "$SLACK_USER" "approve ${id%%-*} uses=$uses ttl=10m"

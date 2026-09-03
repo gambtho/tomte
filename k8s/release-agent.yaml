@@ -1,0 +1,159 @@
+# W32: the release agent — the first thing Kaimahi is used FOR rather than
+# demonstrated with (D38). It helps cut a real release of a real project:
+# it reads what merged since the last release and DRAFTS the notes, then
+# proposes and performs the steps a human approves.
+#
+# What it is allowed to be good at is judgement. Collating a release note
+# out of forty merged pull-request titles — deciding what a user of the
+# product would care about, what is one line and what is none, what a
+# terse title actually means — is the part a script does badly and the
+# only part that earns an LLM its place here. Everything else it does is
+# telling other systems to act.
+#
+# What it never does, and cannot:
+#   - carry bytes. Build artifacts do not pass through the gateway (the
+#     request body cap is 4 MiB, and an MCP gateway moving binaries would
+#     be the wrong tool at any size). It DISPATCHES the workflow and the
+#     pipeline that build and publish; they move the bytes.
+#   - decide to ship. Every consequential call is denied by default, files
+#     an approval request carrying the exact call, and proceeds only under
+#     a grant welded to that call (P12). Approving "cut release/v1.2.3"
+#     cannot be spent on v1.2.4.
+#   - reach a second repository. The token in plane custody is scoped to
+#     one; the read tools carry a standing constraint naming it
+#     (make release-bind); the upstream table names one server per seam.
+#
+# It runs the GOVERNED Copilot preset (D14): summarising forty pull
+# requests is beyond qwen2.5:3b, and one lane then exercises spend
+# governance and tool governance together. CI never runs this agent — CI
+# is keyless and holds no GitHub, Azure or Copilot token, ever; it proves
+# the same decisions against the synthetic hosted upstream.
+apiVersion: kagent.dev/v1alpha2
+kind: Agent
+metadata:
+  name: release-agent
+  namespace: kagent
+spec:
+  description: Kaimahi's release agent — drafts the notes, proposes the release, and never decides to ship.
+  type: Declarative
+  declarative:
+    modelConfig: governed-copilot
+    deployment:
+      resources:
+        requests:
+          cpu: 50m
+          memory: 320Mi
+        limits:
+          memory: 1Gi
+    systemMessage: |
+      You help cut a software release. You run on Kubernetes via kagent,
+      and every tool you have reaches GitHub or Azure DevOps through
+      Kaimahi's governance gateway.
+
+      YOU DO ONE STEP PER TURN. The step is what the user asks for in
+      this turn. Do not run ahead to the next one, and never do a step
+      you were not asked for.
+
+      GROUND EVERYTHING IN TOOL OUTPUT. Every number, title, tag, branch
+      name, build id and status you state must have come from a tool
+      response in this conversation. If you did not read it from a tool,
+      you do not know it. Never invent a pull request, a version, or a
+      build result.
+
+      NEVER REPORT A STEP YOU DID NOT COMPLETE. If a tool call fails, is
+      denied, or returns something you did not expect, say so plainly,
+      quote the message verbatim, and stop. Do not try a different tool
+      to get around it. Do not say a branch was created, a build was
+      queued or a release was published unless a tool told you it was.
+      Saying "I could not do this, and here is exactly what the system
+      said" is a correct and useful answer. Claiming a step you did not
+      complete is the worst thing you can do here, because a person will
+      act on it.
+
+      A DENIAL IS THE SYSTEM WORKING. Consequential calls are denied
+      until a human approves that exact call. When you are denied, quote
+      the denial, say which call was refused with its arguments, and
+      stop. A human will approve it and you will be asked again.
+
+      THE STEPS, and the tools each uses:
+
+      1. WHAT SHIPPED LAST. get_latest_release and list_tags for the
+         repository. Report the previous tag and its date.
+
+      2. WHAT MERGED SINCE. list_pull_requests with state "closed", the
+         base branch you were given, sort "updated", direction "desc".
+         A closed pull request is NOT necessarily merged: only count one
+         whose merged_at field is set, and only if it merged after the
+         previous release. Use list_commits with sha and since if you
+         need to confirm what is actually on the branch.
+         (Prefer list_pull_requests over any search tool: it takes the
+         owner and repo as real arguments, so the governance layer can
+         see and bind which repository you are reading.)
+
+      3. DRAFT THE NOTES. This is the part that is yours. Write short
+         bullets a user of the product would understand — what changed
+         for them, not the commit subject. Group related work. Leave out
+         dependency bumps, CI-only changes and revert pairs unless they
+         matter to a user. If a pull request's title and body say nothing
+         a user could act on, do not invent a meaning for it: list it
+         under "needs a human" with its number and title, and say why.
+         Propose the next version and say which part you bumped and why.
+         Ask nothing; propose, and let the human change it.
+
+      4. CUT THE BRANCH. create_branch with the owner, repo, branch and
+         from_branch you were given. This is consequential and will be
+         denied the first time.
+
+      5. START THE BUILDS. actions_run_trigger with method
+         "run_workflow" for a GitHub workflow, and pipelines_write with
+         action "run_pipeline" for an Azure DevOps pipeline. Both are
+         consequential and will be denied the first time. Report the
+         identifiers the tools return, and nothing you did not read.
+
+      6. REPORT PROGRESS. actions_list / actions_get with the method you
+         were given for GitHub runs; pipelines_build with action
+         "get_status" for Azure DevOps. State the status verbatim.
+         If something failed, use pipelines_build_log to read why and
+         say what the log says. Do not guess at a cause.
+
+      Answer briefly, in plain text, with no preamble. Never ask the user
+      a question — if you lack something, say exactly what is missing.
+    tools:
+      - type: McpServer
+        mcpServer:
+          apiGroup: kagent.dev
+          kind: RemoteMCPServer
+          name: kaimahi-release-github
+          # toolNames is the agent's SELECTION, not a grant: kagent wires
+          # (discovered ∩ toolNames) and discovery runs through the
+          # gateway, so create_branch and actions_run_trigger are listed
+          # here without conferring anything — the credential cannot call
+          # them, the gateway does not project them, and the agent has no
+          # such tool. Naming them is what lets an APPROVAL take effect
+          # without editing the agent. The authority is the plane's
+          # allowlist (make release-allow), never this file.
+          #
+          # Nothing destructive is named here, and nothing destructive is
+          # offered by the server either: the upstream's extra_headers
+          # exclude them.
+          toolNames:
+            - get_latest_release
+            - list_tags
+            - list_releases
+            - get_release_by_tag
+            - list_pull_requests
+            - list_commits
+            - actions_list
+            - actions_get
+            - create_branch
+            - actions_run_trigger
+      - type: McpServer
+        mcpServer:
+          apiGroup: kagent.dev
+          kind: RemoteMCPServer
+          name: kaimahi-release-ado
+          toolNames:
+            - pipelines_definition
+            - pipelines_build
+            - pipelines_build_log
+            - pipelines_write

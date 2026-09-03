@@ -168,6 +168,21 @@ GITHUB_TOOLS   ?= list_issues,list_pull_requests
 GITHUB_WRITE_TOOL := issue_write
 GITHUB_AGENT_TOOLS ?= $(GITHUB_TOOLS),$(GITHUB_WRITE_TOOL)
 GITHUB_TOOLNAMES_JSON = $(if $(filter -,$(GITHUB_AGENT_TOOLS)),,"$(subst $(comma),"$(comma)",$(GITHUB_AGENT_TOOLS))")
+# W32: the RELEASE seam (docs/release-agent.md) — the first thing Kaimahi
+# is used FOR rather than demonstrated with. Its own credential, agent and
+# allowlist, separate from P10's read-only GitHub demo above, because this
+# credential's token can change a real repository.
+#
+# The READ tools are allowlisted from the start, and `make release-bind`
+# additionally constrains them to one repository. The two consequential
+# ones are not allowlisted and must never be: creating the release branch
+# and dispatching a build are the actions a human approves, one call at a
+# time (P12). There is no destructive tool in either list, and none is
+# offered by the servers either — the upstream table excludes them at the
+# server with X-MCP-Exclude-Tools / X-MCP-Toolsets.
+CRED_RELEASE   ?= release-agent
+RELEASE_TOOLS  ?= get_latest_release,list_tags,list_releases,get_release_by_tag,list_pull_requests,list_commits,actions_list,actions_get,pipelines_definition,pipelines_build,pipelines_build_log
+RELEASE_ACT_TOOLS := create_branch,actions_run_trigger,pipelines_write
 # P13: the accounts-payable seam (the demo's fixture ERP behind the
 # gateway) has its own credential, agent and allowlist. The SIX READ
 # tools are allowlisted from the start. The three with consequences are
@@ -205,7 +220,9 @@ AP_HUMAN       ?= 0
 	backup restore plane-metrics \
 	github-secret github-revoke egress-hosted egress-hosted-off \
 	govern-github github-allow github-audit github-ask github-down \
-	erp erp-image erp-fixtures govern-ap ap-allow ap-audit ap-ask ap-demo ap-injection ap-down
+	erp erp-image erp-fixtures govern-ap ap-allow ap-audit ap-ask ap-demo ap-injection ap-down \
+	release-secret ado-secret release-revoke govern-release release-allow \
+	release-bind release release-audit release-down
 
 # guard: the context-safety net every MUTATING target depends on. Prints
 # the target context/namespaces; demands explicit confirmation for
@@ -1355,6 +1372,110 @@ github-down: guard
 	-$(KUBECTL) -n kagent delete agent hello-github
 	-$(KUBECTL) -n kagent delete remotemcpserver kaimahi-github
 
+## ---- W32: the release agent (docs/release-agent.md) ----
+#
+# Kaimahi's first real user. An agent reads what merged since the last
+# release, DRAFTS the notes, and proposes each consequential call; a human
+# approves the exact call; the workflow and the pipelines it dispatches
+# build and publish. The agent never carries a byte and never decides to
+# ship.
+
+## release-secret: capture the release agent's GitHub token — FINE-GRAINED,
+## one repository, Contents+Actions write and Pull requests read. Applies
+## the hosted allowance. Stdin only.
+##   make release-secret GITHUB_REPO=owner/name
+release-secret: guard
+	@test -n "$(GITHUB_REPO)" || \
+		{ echo 'usage: make release-secret GITHUB_REPO=owner/name  (fine-grained write token on stdin)' >&2; exit 1; }
+	@KUBECTL="$(KUBECTL)" GITHUB_REPO="$(GITHUB_REPO)" bash scripts/release-secret.sh
+	$(KUBECTL) apply -f k8s/egress-hosted.yaml
+	$(KUBECTL) -n kaimahi rollout restart deploy/kaimahi-proxy
+	$(KUBECTL) -n kaimahi rollout status deploy/kaimahi-proxy --timeout=300s
+
+## ado-secret: capture an Azure DevOps ACCESS TOKEN (Entra, not a PAT —
+## the hosted ADO MCP server accepts nothing else) and store it in plane
+## custody. It lives about an hour; re-run it before a release session.
+##   make ado-secret ADO_ORG=<organization>
+ado-secret: guard
+	@test -n "$(ADO_ORG)" || \
+		{ echo 'usage: make ado-secret ADO_ORG=<organization>  (Entra access token on stdin)' >&2; exit 1; }
+	@KUBECTL="$(KUBECTL)" ADO_ORG="$(ADO_ORG)" bash scripts/ado-secret.sh
+	$(KUBECTL) -n kaimahi rollout restart deploy/kaimahi-proxy
+	$(KUBECTL) -n kaimahi rollout status deploy/kaimahi-proxy --timeout=300s
+
+## release-revoke: delete BOTH release tokens and close the hosted
+## allowance. Run it at the end of any session that was only a test.
+release-revoke: guard
+	$(KUBECTL) -n kaimahi delete secret kaimahi-release-pat --ignore-not-found
+	$(KUBECTL) -n kaimahi delete secret kaimahi-ado-token --ignore-not-found
+	$(KUBECTL) delete -f k8s/egress-hosted.yaml --ignore-not-found
+	@echo 'Revoke the GitHub token at github.com/settings/personal-access-tokens too:' >&2
+	@echo 'deleting the Secret stops Kaimahi using it, not GitHub honouring it.' >&2
+
+## govern-release: put the release agent behind the MCP gateway — issue
+## its kmh_ credential (agent-side Secret kaimahi-release-token), set the
+## READ-ONLY allowlist, apply both seams and the agent.
+##
+## Unlike govern-github there is no toolNames patch: this agent's tool
+## SELECTION is fixed in k8s/release-agent.yaml across two servers, and a
+## merge patch would replace the whole array with one of them.
+govern-release: guard
+	@KUBECTL="$(KUBECTL)" GOVERNED_SECRET=kaimahi-release-token \
+		bash scripts/plane-admin.sh issue $(CRED_RELEASE)
+	@KUBECTL="$(KUBECTL)" bash scripts/plane-admin.sh tool-allow $(CRED_RELEASE) "$(RELEASE_TOOLS)"
+	$(KUBECTL) apply -f k8s/kaimahi-release-github.yaml -f k8s/kaimahi-release-ado.yaml
+	$(KUBECTL) -n kagent wait --for=condition=Accepted \
+		remotemcpserver/kaimahi-release-github --timeout=300s
+	$(KUBECTL) -n kagent wait --for=condition=Accepted \
+		remotemcpserver/kaimahi-release-ado --timeout=300s
+	$(KUBECTL) apply -f k8s/release-agent.yaml
+	$(KUBECTL) -n kagent wait --for=condition=Ready agent/release-agent --timeout=300s
+
+## release-allow: replace the release credential's allowlist, e.g.
+##   make release-allow RELEASE_TOOLS=list_tags
+##   make release-allow RELEASE_TOOLS=-      (empty: nothing callable)
+release-allow: guard
+	@KUBECTL="$(KUBECTL)" bash scripts/plane-admin.sh tool-allow $(CRED_RELEASE) "$(RELEASE_TOOLS)"
+
+## release-bind: constrain the release credential's READ tools to ONE
+## repository, at the plane. Re-run after `make plane`.
+##   make release-bind GITHUB_REPO=owner/name
+##   make release-bind GITHUB_REPO=-          (remove the binding)
+release-bind: guard
+	@test -n "$(GITHUB_REPO)" || \
+		{ echo 'usage: make release-bind GITHUB_REPO=owner/name' >&2; exit 1; }
+	@KUBECTL="$(KUBECTL)" CRED_RELEASE=$(CRED_RELEASE) GITHUB_REPO="$(GITHUB_REPO)" \
+		bash scripts/release-bind.sh
+
+## release: cut a release. ONE command — the agent drafts and proposes,
+## this waits for the approvals and polls the builds itself.
+##   make release GITHUB_REPO=owner/name VERSION=v1.2.3 \
+##        [BASE=main] [RELEASE_BRANCH=...] [GH_WORKFLOW=a.yml,b.yml] \
+##        [ADO_PROJECT=... ADO_PIPELINES=12,13] [SLACK_USER=U0EXAMPLE] \
+##        [DRY_RUN=1] [STEP=propose|cut|build|watch]
+##
+## DRY_RUN=1 reads and drafts the notes and stops before the first
+## consequential call — the right first command against a real repository.
+release: guard
+	@KUBECTL="$(KUBECTL)" CRED_RELEASE=$(CRED_RELEASE) \
+		GITHUB_REPO='$(GITHUB_REPO)' VERSION='$(VERSION)' BASE='$(BASE)' \
+		RELEASE_BRANCH='$(RELEASE_BRANCH)' GH_WORKFLOW='$(GH_WORKFLOW)' \
+		ADO_PROJECT='$(ADO_PROJECT)' ADO_PIPELINES='$(ADO_PIPELINES)' \
+		SLACK_USER='$(SLACK_USER)' DRY_RUN='$(DRY_RUN)' STEP='$(STEP)' \
+		RELEASE_CHAT='make chat AGENT=release-agent TARGET=$(TARGET) KIND_CLUSTER=$(KIND_CLUSTER)' \
+		bash scripts/release-run.sh
+
+## release-audit: the release credential's tool-call audit trail
+release-audit:
+	@KUBECTL="$(KUBECTL)" bash scripts/plane-admin.sh tool-audit $(CRED_RELEASE)
+
+## release-down: remove the release agent and both seams. The tokens are a
+## separate decision: make release-revoke.
+release-down: guard
+	-$(KUBECTL) -n kagent delete agent release-agent
+	-$(KUBECTL) -n kagent delete remotemcpserver kaimahi-release-github
+	-$(KUBECTL) -n kagent delete remotemcpserver kaimahi-release-ado
+
 ## ---- P13: the accounts-payable exception demo (docs/ap-demo.md) ----
 #
 # The demo Kaimahi exists to make: an agent investigates an invoice that
@@ -1458,7 +1579,7 @@ ap-ask: $(KAGENT)
 ## AP_HUMAN=1 is the live-workspace setting: the scenario prints each
 ## approval line and WAITS for that person to type it in Slack, instead of
 ## synthesising a signed app_mention in their name. See
-## scripts/ap-await-approval.sh.
+## scripts/await-approval.sh.
 ap-demo: guard
 	@KUBECTL="$(KUBECTL)" CRED_AP=$(CRED_AP) SLACK_USER='$(SLACK_USER)' \
 		AP_HUMAN='$(AP_HUMAN)' \

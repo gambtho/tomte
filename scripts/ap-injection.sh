@@ -28,7 +28,7 @@
 #   AP_AGENT_TURN=0 skips the agent's turn.
 #   AP_HUMAN=1      with SLACK_USER, wait for that person to approve in a
 #                   real Slack rather than synthesising the mention — see
-#                   scripts/ap-await-approval.sh and scripts/ap-demo.sh.
+#                   scripts/await-approval.sh and scripts/ap-demo.sh.
 set -euo pipefail
 umask 077
 
@@ -105,7 +105,7 @@ request_id() {
 
 approve() { # <id> <uses> — see scripts/ap-demo.sh for the three paths
   if [ -n "$SLACK_USER" ] && [ "$AP_HUMAN" = 1 ]; then
-    CRED_AP="$CRED_AP" bash "$here/ap-await-approval.sh" "$1" "$SLACK_USER" "$2"
+    CRED_AP="$CRED_AP" bash "$here/await-approval.sh" "$1" "$SLACK_USER" "$2"
   elif [ -n "$SLACK_USER" ]; then
     WANT="approved request $1" bash "$here/slack-mention-probe.sh" \
       "$SLACK_USER" "approve ${1%%-*} uses=$2 ttl=10m"

@@ -1,0 +1,43 @@
+# W32: the release agent's GitHub seam — GitHub's hosted MCP server behind
+# the enforcing MCP gateway, on the `github-release` upstream.
+#
+# Deliberately a SECOND seam rather than a wider P10 one. `kaimahi-github`
+# (k8s/kaimahi-github.yaml) reaches the same server with a READ-ONLY token
+# and a read-only allowlist, and it keeps exactly the blast radius it was
+# reviewed with. This one reaches it with a token that can change a real
+# repository, so it gets its own upstream entry, its own credential and
+# its own allowlist.
+#
+# Custody: headersFrom resolves the agent's credential from a Secret
+# holding ONLY the Kaimahi-issued kmh_ opaque token (`make govern-release`
+# mints it; the plane stores its sha256). The GitHub token exists only in
+# the plane namespace (Secret kaimahi-release-pat,
+# scripts/release-secret.sh) and is injected by the gateway — never here,
+# never on the agent.
+#
+# The upstream entry also narrows the SERVER: extra_headers set
+# X-MCP-Toolsets, X-MCP-Tools and X-MCP-Exclude-Tools, so the dozens of
+# write tools this server offers (delete_repository, push_files,
+# merge_pull_request, create_or_update_file …) are never offered to us at
+# all. status.discoveredTools is therefore already narrow before the
+# gateway's allowlist projects it further.
+apiVersion: kagent.dev/v1alpha2
+kind: RemoteMCPServer
+metadata:
+  name: kaimahi-release-github
+  namespace: kagent
+spec:
+  description: Kaimahi-governed GitHub for releases — the hosted GitHub MCP server behind the enforcing MCP gateway
+  protocol: STREAMABLE_HTTP
+  url: http://kaimahi-mcp-gateway.kaimahi:8081/upstream/github-release/mcp
+  # A hosted server answers slower than an in-cluster one, and the dialer
+  # re-resolves and re-handshakes on every call by design.
+  timeout: 60s
+  sseReadTimeout: 5m0s
+  terminateOnClose: true
+  headersFrom:
+    - name: Authorization
+      valueFrom:
+        type: Secret
+        name: kaimahi-release-token
+        key: api-key
