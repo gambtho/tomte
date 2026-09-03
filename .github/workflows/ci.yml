@@ -2115,7 +2115,7 @@ jobs:
           make backup FILE=ci-backup.sql | tee backup.out
           test -s ci-backup.sql
           # A dump holds hashes, never a token (and no hosted key exists here).
-          if grep -E 'kmh_[0-9a-f]{64}' ci-backup.sql; then echo 'a token in the backup' >&2; exit 1; fi
+          if grep -qE 'kmh_[0-9a-f]{64}' ci-backup.sql; then echo 'a token in the backup' >&2; exit 1; fi
           # Wipe: the Postgres Deployment AND its PVC go; a fresh, empty
           # database comes up in their place.
           kubectl --context kind-kaimahi-p1 delete -f k8s/plane/postgres.yaml --wait=true
@@ -2838,7 +2838,7 @@ jobs:
           kmx backup kmx-backup.sql | tee backup.out
           grep -q 'plane-backup: wrote kmx-backup.sql' backup.out
           # A dump holds hashes, never a token (no hosted key exists here).
-          if grep -E 'kmh_[0-9a-f]{64}' kmx-backup.sql; then echo 'a token in the backup' >&2; exit 1; fi
+          if grep -qE 'kmh_[0-9a-f]{64}' kmx-backup.sql; then echo 'a token in the backup' >&2; exit 1; fi
           # It is 0600 the moment it exists: it carries the ledger and the
           # audit trails.
           test "$(stat -c %a kmx-backup.sql)" = 600

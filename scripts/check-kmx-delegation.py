@@ -86,6 +86,9 @@ CARRIES_ARGUMENTS = {
     # rest.
     "use", "budget", "approve", "deny", "request",
     "govern-tools", "tool-allow", "tool-allowlist", "backup", "restore",
+    # POD= names one replica; without it the recipe expands to a bare
+    # `kmx metrics`, which the exact-match arm below still pins.
+    "plane-metrics",
 }
 
 # A line that reaches the cluster itself. Anchored to a command position —
@@ -256,6 +259,11 @@ DELEGATION_SELFTEST = [
     ("...and the generic one does not satisfy use-ollama", "use-ollama", "kmx use ollama",
      "bin/kmx use", False),
     ("restore is not backup", "restore", "kmx restore", "bin/kmx backup", False),
+    ("metrics with no POD", "plane-metrics", "kmx metrics", "bin/kmx metrics", True),
+    ("metrics for one replica", "plane-metrics", "kmx metrics",
+     "bin/kmx metrics --pod kaimahi-proxy-1", True),
+    ("...but not some other command that starts the same way", "plane-metrics", "kmx metrics",
+     "bin/kmx metricsx", False),
 ]
 
 

@@ -246,10 +246,11 @@ func parseTools(args []string, toolsCredential string) (string, app.ToolsOptions
 
 	fs := newFlagSet("tools " + verb)
 	fs.StringVar(&opt.Credential, "credential", "", "the kmh_ credential the gateway admits (CRED_TOOLS)")
-	if verb == "govern" || verb == "ungovern" {
-		fs.StringVar(&opt.Agent, "agent", "", "the agent to repoint")
-	}
+	// `--agent` is govern's only. `ungovern` re-applies ONE committed
+	// manifest, which names one agent, so an --agent it could not honour
+	// should not be spellable.
 	if verb == "govern" {
+		fs.StringVar(&opt.Agent, "agent", "", "the agent to repoint")
 		fs.StringVar(&opt.Secret, "secret", "", "agent-side Secret the issued token is stored in")
 		fs.StringVar(&opt.SecretNamespace, "secret-namespace", "", "namespace for that Secret")
 		fs.StringVar(&opt.Tools, "tools", "", "allowlist, comma-separated ('-' for empty: nothing callable)")
@@ -267,7 +268,7 @@ func parseTools(args []string, toolsCredential string) (string, app.ToolsOptions
 		}
 	case "ungovern":
 		if len(positional) != 0 {
-			return "", opt, nil, errors.New("usage: kmx tools ungovern [--agent <name>]")
+			return "", opt, nil, errors.New("usage: kmx tools ungovern")
 		}
 	case "allow":
 		if len(positional) != 1 {

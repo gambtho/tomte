@@ -367,6 +367,10 @@ func TestParseTools(t *testing.T) {
 			wantVerb: "govern", wantCred: "hello-github", wantAgent: "gh"},
 		{name: "govern takes no positional", argv: []string{"govern", "a,b"}, wantErr: true},
 		{name: "ungovern", argv: []string{"ungovern"}, wantVerb: "ungovern", wantCred: "hello-tools"},
+		// `ungovern` re-applies ONE committed manifest, which names one
+		// agent — so an --agent it could not honour is not spellable, and
+		// the App refuses a non-default one set any other way.
+		{name: "ungovern does not take --agent", argv: []string{"ungovern", "--agent", "other"}, wantErr: true},
 		{name: "allow: the list first, the flag after", argv: []string{"allow", "a,b", "--credential", "demo"},
 			wantVerb: "allow", wantCred: "demo", wantFirst: "a,b"},
 		{name: "allow: the flag first, the list after", argv: []string{"allow", "--credential", "demo", "a,b"},

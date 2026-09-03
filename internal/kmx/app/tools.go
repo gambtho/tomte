@@ -173,6 +173,18 @@ func (a *App) GovernTools(opt ToolsOptions) error {
 // the gateway.
 func (a *App) UngovernTools(opt ToolsOptions) error {
 	opt = a.toolsDefaults(opt)
+	// The undo is a RE-APPLY of one committed manifest, and that manifest
+	// names one agent. Ungoverning a different agent would mean un-patching
+	// something kmx has no committed form of — so it is refused rather than
+	// half-done: applying k8s/tools-agent.yaml and then waiting for another
+	// agent's rollout would report success while the agent the operator
+	// named was still riding the gateway.
+	if opt.Agent != config.DefaultToolsAgent {
+		return fmt.Errorf("kmx tools ungovern restores the committed agent %q, not %q.\n"+
+			"  There is no committed ungoverned form of %q to restore; repoint it yourself:\n"+
+			"    kubectl -n %s edit agent %s",
+			config.DefaultToolsAgent, opt.Agent, opt.Agent, config.DefaultNamespace, opt.Agent)
+	}
 	if err := a.Guard(fmt.Sprintf("return agent %q to the ungoverned tool server", opt.Agent),
 		"kmx tools ungovern"); err != nil {
 		return err
