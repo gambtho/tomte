@@ -13,11 +13,11 @@
 
 ## Governance for AI agents running on Kubernetes.
 
-Agents run on [kagent](https://kagent.dev); Kaimahi does not replace or
-reimplement it. What Kaimahi adds is its own: a governance plane that sits at
-every boundary an agent crosses — the models it calls, the tools it reaches,
-and the events that trigger it — so consequential work is metered, bounded and
-audited.
+Kaimahi decides what an agent is allowed to do, and proves what it did.
+
+Every model call, every tool call and every event that triggers an agent
+passes through a plane that meters it, bounds it, and records it — so
+delegating consequential work does not mean giving up control.
 
 ### Control model spend
 
@@ -45,6 +45,9 @@ against the budget, and each event consuming one bounded grant.
   <img src="docs/assets/architecture.svg"
        alt="A Kubernetes agent routes model calls through the Kaimahi LLM proxy and tool calls through its MCP gateway; bounded approvals can widen either path temporarily">
 </p>
+
+The agents themselves run on [kagent](https://kagent.dev), which Kaimahi
+governs rather than reimplements.
 
 Governance is opt-in per agent. The documentation identifies ungoverned paths
 and current limitations.
