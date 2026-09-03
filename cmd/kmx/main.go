@@ -42,6 +42,7 @@ COMMANDS
   ctx [<context>]              show, or select, the kube context kmx acts on
   up                           kind cluster + Ollama + the model + kagent + the agents
   agent create <name>          scaffold agents/<name>.yaml and apply it
+                               --image for a BYO agent, --isolation for placement
   agent chat <name> [message]  ask an agent one question (via ` + "`kagent invoke`" + `)
                                add --json for the raw A2A task; piped output
                                is always raw
@@ -398,6 +399,8 @@ func agentCreate(a *app.App, args []string) error {
 	fs.StringVar(&opt.Out, "out", "", "where to write the manifest (default agents/<name>.yaml; '-' for stdout)")
 	fs.BoolVar(&opt.NoApply, "no-apply", false, "write the manifest and stop")
 	fs.BoolVar(&opt.DryRun, "dry-run", false, "server-side dry run against the live CRDs instead of applying")
+	fs.StringVar(&opt.Image, "image", "", "run a BYO image that serves A2A on :8080, instead of a declarative agent")
+	fs.StringVar(&opt.Isolation, "isolation", "", "placement profile for a BYO agent: virtual-node | none")
 	names, err := parseInterspersed(fs, args)
 	if err != nil {
 		return err
