@@ -24,6 +24,8 @@ type CreateOptions struct {
 	Out          string // empty: agents/<name>.yaml
 	NoApply      bool
 	DryRun       bool
+	Image        string // non-empty: a BYO agent serving A2A on :8080
+	Isolation    string // placement profile, or "none"
 }
 
 // CreateAgent scaffolds an agent, then applies it.
@@ -64,6 +66,17 @@ func (a *App) CreateAgent(opt CreateOptions) error {
 		return err
 	}
 
+	placement, err := scaffold.ParsePlacement(opt.Isolation)
+	if err != nil {
+		return err
+	}
+	// A BYO image has no modelConfig and no tools to reference, so the seams
+	// a declarative agent gets by reference are carried across as env.
+	var governance []scaffold.EnvVar
+	if opt.Image != "" {
+		governance = scaffold.GovernanceEnv(governed)
+	}
+
 	document, err := scaffold.Generate(scaffold.Spec{
 		Name:         opt.Name,
 		Namespace:    namespace,
@@ -72,6 +85,9 @@ func (a *App) CreateAgent(opt CreateOptions) error {
 		Instructions: instructions,
 		Tools:        tools,
 		Governed:     governed,
+		Image:        opt.Image,
+		Placement:    placement,
+		Governance:   governance,
 	})
 	if err != nil {
 		return err
@@ -89,6 +105,33 @@ func (a *App) CreateAgent(opt CreateOptions) error {
 		return err
 	}
 	fmt.Fprintf(a.Out, "wrote %s\n", path)
+
+	if opt.Image != "" {
+		// The BYO cliff, said out loud. spec.byo has no modelConfig and no
+		// tools, so what a declarative agent gets by reference is now
+		// environment — and kmx cannot check the image reads it.
+		a.notef("BYO agent: kagent will deploy %s and expect A2A on :8080.\n"+
+			"         It has no modelConfig and no tools field — those exist only on\n"+
+			"         declarative agents — so the governed seams travel as env instead.", opt.Image)
+		if len(governance) > 0 {
+			a.notef("Injected the governed seams into the pod's env:")
+			for _, e := range governance {
+				if e.SecretRef != "" {
+					a.notef("           %s <- secret %s/%s", e.Name, e.SecretRef, e.Value)
+					continue
+				}
+				a.notef("           %s = %s", e.Name, e.Value)
+			}
+			a.notef("CONFIGURED, NOT PROVEN: kmx cannot verify the image honours these.\n" +
+				"         `kmx ledger` is the evidence — a row there means it did.")
+		}
+		if placement != nil {
+			a.notef("%s", placement.Note)
+		} else {
+			a.notef("No placement profile: this pod schedules like any other. `--isolation\n" +
+				"         virtual-node` puts it on an ACI virtual node instead.")
+		}
+	}
 
 	if !governed {
 		a.notef("WARNING: %q is ungoverned — no budget, no ledger, no audit in front of it.\n"+
