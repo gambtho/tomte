@@ -42,14 +42,27 @@ type prefixWriter struct {
 	out    io.Writer
 	prefix string
 	buf    []byte
+	// err latches the FIRST failure writing to the underlying stream.
+	// Losing a lane's output must not read as a lane that ran quietly:
+	// the failure is reported to the command writing through this
+	// writer (os/exec surfaces it from Wait) and again by runLanes, so
+	// a bring-up whose output went nowhere cannot report success.
+	err error
 }
 
 func (w *prefixWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	for _, b := range p {
+	if w.err != nil {
+		return 0, w.err
+	}
+	for i, b := range p {
 		if b == '\n' || b == '\r' {
-			w.emit()
+			if err := w.emit(); err != nil {
+				// io.Writer's contract: report how much was consumed
+				// before the failure, and the failure.
+				return i, err
+			}
 			continue
 		}
 		w.buf = append(w.buf, b)
@@ -61,18 +74,31 @@ func (w *prefixWriter) Write(p []byte) (int, error) {
 // line — dropping it would silently reflow output that was deliberately
 // spaced — but a line that is only a line ending prints as the prefix alone,
 // which is noise, so those are dropped.
-func (w *prefixWriter) emit() {
+//
+// The write error is latched and returned rather than discarded: fmt.Fprintf
+// to a closed pipe or a full disk fails, and a lane that swallowed that would
+// finish "successfully" having printed nothing.
+func (w *prefixWriter) emit() error {
 	if len(w.buf) == 0 {
-		return
+		return nil
 	}
-	fmt.Fprintf(w.out, "%s%s\n", w.prefix, w.buf)
+	_, err := fmt.Fprintf(w.out, "%s%s\n", w.prefix, w.buf)
 	w.buf = w.buf[:0]
+	if err != nil && w.err == nil {
+		w.err = err
+	}
+	return err
 }
 
-func (w *prefixWriter) flush() {
+// flush emits whatever partial line is left and reports the latched failure,
+// if any — including one from an earlier Write.
+func (w *prefixWriter) flush() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.emit()
+	if err := w.emit(); err != nil {
+		return err
+	}
+	return w.err
 }
 
 // runLanes runs every lane at once and returns after all of them have
@@ -123,8 +149,12 @@ func (a *App) runLanes(lanes []lane) error {
 		}(i, l, b)
 	}
 	wg.Wait()
-	for _, w := range writers {
-		w.flush()
+	for i, w := range writers {
+		if err := w.flush(); err != nil {
+			// A lane can only be called successful if what it said was
+			// actually written: an unreported bring-up is not a quiet one.
+			errs = append(errs, fmt.Errorf("%s: output could not be written: %w", lanes[i].name, err))
+		}
 	}
 	return errors.Join(errs...)
 }

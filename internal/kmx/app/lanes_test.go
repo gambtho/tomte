@@ -169,3 +169,50 @@ func TestLinesFromDifferentLanesAreNeverSpliced(t *testing.T) {
 		}
 	}
 }
+
+// failingWriter is a stream that cannot be written to — a closed pipe, a
+// full disk. Every write fails.
+type failingWriter struct{ writes int }
+
+func (f *failingWriter) Write(p []byte) (int, error) {
+	f.writes++
+	return 0, errors.New("broken pipe")
+}
+
+// Output that could not be written must not read as a lane that ran quietly.
+func TestAFailedWriteIsReportedToTheCommandWritingIt(t *testing.T) {
+	var mu sync.Mutex
+	w := &prefixWriter{mu: &mu, out: &failingWriter{}, prefix: "[x] "}
+	n, err := w.Write([]byte("a line\n"))
+	if err == nil {
+		t.Fatal("a failed write must be reported, not swallowed")
+	}
+	if n >= len("a line\n") {
+		t.Errorf("a failed write must not claim every byte was consumed, got %d", n)
+	}
+	// The failure is latched: a later write reports it too, rather than
+	// succeeding into a stream that is gone.
+	if _, err := w.Write([]byte("another line\n")); err == nil {
+		t.Error("the latched failure must be reported by later writes")
+	}
+	if err := w.flush(); err == nil {
+		t.Error("flush must report the latched failure")
+	}
+}
+
+func TestRunLanesFailsWhenALaneOutputCannotBeWritten(t *testing.T) {
+	a := laneApp(&bytes.Buffer{})
+	a.Err = &failingWriter{}
+	err := a.runLanes([]lane{
+		{"ollama", func(b *App) error { fmt.Fprintln(b.Err, "pulling"); return nil }},
+		{"kagent", func(b *App) error { fmt.Fprintln(b.Err, "waiting"); return nil }},
+	})
+	if err == nil {
+		t.Fatal("lanes whose output went nowhere must not report success")
+	}
+	for _, want := range []string{"output could not be written", "broken pipe"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("missing %q in %v", want, err)
+		}
+	}
+}
