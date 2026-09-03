@@ -115,10 +115,10 @@ prefix.
 | P9: run it for real — stateless multi-replica plane, exact budgets, metrics (D24) | W19 worker | PR #46 MERGED (43fd748) ahead of the coordinator's pass; verified against main (delta sheet below) | own kind cluster; touches Makefile/ci.yml/k8s/plane/proxy.yaml and the plane; #37/#42 (owner-handled) touch the Makefile too — second to merge rebases |
 | P10: hosted upstreams — GitHub's hosted MCP server through a hardened dialer (D25) | W20 worker | PR #51 MERGED (d79b469) ahead of the coordinator's pass; verified against main (delta sheet below) | lane closed |
 | P11: `kmx` milestone 1 — the developer journey as one Go binary (D27) | W21 worker | PR #57 MERGED (e3e3c84); coordinator verified on its own cluster incl. the clone-free install, guard parity and a tampered kagent cache (delta sheet below) | lane closed; #53's Podman recovery carried across, not lost |
-| P11: `kmx` milestone 2 — `kmx govern` and the plane, clone-free (D28) | W22 worker | READY 2026-09-02 — prompt below; W21 merged and verified, so this is clear to launch | kind only and fully keyless; fetches the plane at kmx's own sha from the Go proxy, embeds `k8s/`, publishes nothing |
-| P12: argument-level policy — standing constraints + an approval bound to the call (D29, widened by D31) | W23 worker | SHAPED 2026-09-02 — prompt below; launches after W22, or in parallel if the user re-applies the parallel-set rules | touches the gateway, the store, a migration, the approvals path and the Slack notifier; no new upstream |
+| P11: `kmx` milestone 2 — `kmx govern` and the plane, clone-free (D28) | W22 worker | PR #64 MERGED; coordinator verified clone-free on its own cluster — the plane fetched at kmx's own revision, build_info carrying the sha (delta sheet below) | lane closed; follow-ups #66/#67 fixed the clone-free job | kind only and fully keyless; fetches the plane at kmx's own sha from the Go proxy, embeds `k8s/`, publishes nothing |
+| P12: argument-level policy — standing constraints + an approval bound to the call (D29, widened by D31) | W23 worker | PR #62 MERGED; coordinator verified live — a constraint overrides the allowlist, a grant with a spare use could not be redirected, duplicate keys refused (delta sheet below) | lane closed | touches the gateway, the store, a migration, the approvals path and the Slack notifier; no new upstream |
 | P13: the accounts-payable exception demo — the scenario on top of P12 (D29, D30) | W24 worker | SHAPED 2026-09-02 — prompt below; launches after W23 (P12) merges | fixture ERP server + ConfigMap corpus, the payee-substitution injection case, Slack as the surface; kind + CI, no AKS run unless the user calls one |
-| CI: the e2e job takes ~15 min on every PR (D32) | W25 worker | SHAPED 2026-09-02 — prompt below; runs in parallel with W22/W23 but MERGES LAST (both edit ci.yml) | investigation-led: 934s over 68 serial steps, bring-up 186s, the model pull only 16s of it |
+| CI: the e2e job takes ~15 min on every PR (D32) | W25 worker | PR #65 MERGED; coordinator verified 934s to 483s with all 62 assertion bodies byte-identical (delta sheet below) | lane closed | investigation-led: 934s over 68 serial steps, bring-up 186s, the model pull only 16s of it |
 | Brand assets + architecture diagram + org/front-door plans | user-run lane (outside the board's prompt set) | PR #33 MERGED (+ kaimahi-agents/.github#1); main CI green | brand validator in the hygiene job |
 | README front door + CONTRIBUTING.md | user-run lane (outside the board's prompt set) | PR #34 MERGED; main CI green | anchored front-door checker in hygiene: section order enforced, no `npx kaimahi create` mention before the quickstart ends — PR #16's README hunk must land under "A scaffolder CLI: considered, not built" (was "Proposed CLI direction" until D23) |
 | CLI decisions + PR #16 review | user + coordinator | D19 ruled; coordinator review rounds done (2026-09-01/02) | not a build lane; parallelises with everything |
@@ -1013,11 +1013,11 @@ the Makefile comment for `AKS_NETWORK_POLICY` (W15 deviation 3).
 
 ## Open items after P8b (2026-09-02)
 
-- **P9, P10 and P11 milestone 1 DONE** (#46, #51, #57 — all verified
-  below). **Milestone 1's lane is CLOSED, so W22 (milestone 2) is clear
-  to launch now**; W23 (P12) follows it, or runs in parallel if the
-  parallel-set rules are re-applied, and W24 (P13) needs W23. Still
-  queued behind them: Postgres durability (HA or a managed database on the AKS
+- **P9, P10, P11 (both milestones), P12 and the CI speed lane are all
+  DONE and verified** (#46, #51, #57, #64, #62, #65 — delta sheets
+  below). **The next lane is W24 (P13, the accounts-payable demo)**: its
+  prompt is below and P12, the capability it stands on, has landed. Still
+  queued behind it: Postgres durability (HA or a managed database on the AKS
   path), OAuth-based hosted servers (Slack's own), hostname-level egress
   on AKS (Cilium FQDN), `kmx` milestone 3 (budget, approvals,
   backup/restore, the connector families — everything D28(3) left in
@@ -2366,6 +2366,116 @@ in the PR.
 ```
 
 ## Delta sheets from finished lanes
+
+### P12 — argument-level policy (PR #62, merged 2026-09-03)
+
+Verified against main at `c753b1a` on the coordinator's own cluster
+`coord-p12`, built and driven entirely from a CLONE-FREE kmx. Cluster
+deleted when this sheet landed. **The whole guarantee was exercised, not
+read.** Setup: `k8s_get_events` was put on hello-tools' STANDING
+ALLOWLIST *and* given a standing constraint `namespace in [default]` —
+the case that decides whether a constraint is a real control or
+decoration.
+
+The five audit rows the run produced, in order, are the lane:
+
+| call | decision | detail | digest |
+|------|----------|--------|--------|
+| `namespace default` | allowed 200 | `within standing constraint` | 77245d044835 |
+| `namespace kube-system` | denied 403 | outside the standing constraint; request filed | 8f84e4e9f653 |
+| `namespace kube-system` | allowed 200 | `granted 848bf9f1…` | **8f84e4e9f653** |
+| `namespace ollama` | denied 403 | outside the standing constraint; request filed | fd38e63c15cf |
+| duplicated key | denied 400 | `request body carries a duplicate JSON key` | — |
+
+- **A constraint OVERRIDES the allowlist.** `k8s_get_events` was
+  allowlisted and the `kube-system` call was still refused. Had the
+  allowlist won, the control would have been decorative; it does not.
+  Confirmed in the code too (gateway.go: a constraint is "a BOUND, not
+  merely another way in").
+- **The approval binds to the call.** Rows 2 and 3 carry the SAME digest
+  — the call a human approved is provably the call that ran. Row 4 is
+  the test that matters: with a live grant in hand carrying a SPARE USE
+  (`uses 1/2`, `binds call 8f84e4e9f653`), a different namespace was
+  denied and the grant was NOT spent on it. That is D29's guarantee
+  demonstrated rather than asserted: being manipulated into asking is
+  not sufficient.
+- **The approver sees the transaction.** `make approvals` showed
+  `k8s_get_events: namespace kube-system`, not just the verb.
+- **The smuggling vector found in the blind-spot pass is closed.**
+  A duplicated `namespace` key INSIDE `arguments` — where Go reads
+  last-wins and an upstream may read first-wins — is refused 400 before
+  any enforcement decision, and audited.
+- **Code read (independent of the run):** `canon.go` is a streaming
+  decoder refusing duplicates at ANY depth, bounding depth (32) and
+  nodes (20000), with `UseNumber` so an amount cannot be mangled through
+  a float and `SetEscapeHTML(false)` so arguments reach the upstream as
+  written. Migration 00008 is additive and CLOSES the NULL-digest class
+  — verified in the store, not taken on trust: minting a tool grant from
+  a digest-less request is refused outright, with the two honest ways
+  forward named.
+
+**Rulings:** the lane is accepted as built, including its choice to
+refuse duplicate keys rather than collapse them (W23 offered either with
+justification; refusal is the fail-closed direction and matches the
+standing guidance).
+
+**Carry-forward:** the constraint vocabulary is deliberately small
+(comparisons and set membership). The AP scenario (P13) needs nothing
+more; anything richer is a decision, not a lane's choice.
+
+### P11 milestone 2 — `kmx plane` and `kmx govern` (PR #64, merged 2026-09-03)
+
+Verified on `coord-p12` from a binary installed with `go install
+…/cmd/kmx@c753b1a` into an empty directory — no checkout anywhere.
+
+- **`up` → `plane` → `govern` all succeeded clone-free.** The mechanism
+  is exactly D28(1): the log shows `fetching and building the plane at
+  kmx's own revision v0.0.0-20260903043700-c753b1a2b68b (linux/amd64),
+  checksummed by Go's sum database`, then `go install
+  …/plane/cmd/kaimahi-proxy@<that version>`, a local `docker build` onto
+  distroless, and `kind load docker-image`. Nothing published, no
+  registry, no clone.
+- **The same-tag trap is handled**: the image keeps the pinned
+  `kaimahi-proxy:p10` tag (the lane took the "keep the tag" option) and
+  `kmx plane` issues the `rollout restart` the Makefile has always
+  issued, so a rebuilt image under an unchanged spec still takes effect.
+- **The D28 carry-forward is FIXED and verified on the running plane**:
+  `kaimahi_build_info{go_version="go1.26.2",version="c753b1a2b68b"}` —
+  the revision survives a module-proxy build, where before it would have
+  read "unknown" because `vcs.revision` is not set on that path.
+- `kmx govern` applied both governed presets and switched the agent with
+  the NotFound discrimination intact.
+
+### W25 — the e2e proof in four parallel shards (PR #65, merged 2026-09-03)
+
+The ruling that mattered was "what is proven must not shrink", so that
+is what was checked, mechanically rather than by reading:
+
+- **The assertion set is byte-identical.** Parsing both workflow
+  versions: 62 unique named steps in the old `e2e-hello-world`, 62 in
+  the union of `e2e-runtime`/`e2e-spend`/`e2e-tools`/`e2e-resilience`,
+  **zero removed, zero added, and all 62 `run` bodies identical**. No
+  probe was deleted, downgraded, path-filtered or moved to main-only.
+- **Wall clock 934s to 483s** (48%), measured from real runs, shards
+  balanced at 391-477s. Honest cost, recorded: total runner-minutes
+  roughly doubled, since each shard builds its own cluster. Acceptable
+  on a public repo's hosted runners; worth remembering if that changes.
+- **The required check cannot pass vacuously.** `e2e-hello-world` is now
+  a fan-in gate: `always()`, fails on any non-success shard, and refuses
+  to report success on an empty shard set.
+- **The hygiene guard was widened correctly** — it discovers shards
+  DYNAMICALLY by prefix (so a renamed or added shard cannot escape it),
+  pins the gate's `needs` to exactly that set, forbids the gate owning
+  cluster steps, and asserts `kmx-clone-free` has no checkout, which is
+  that job's entire premise. Tamper-tested by dropping one shard from
+  the gate's `needs`: caught.
+
+**Noted, not a defect in this lane:** the `kmx-clone-free` job needed
+two post-merge fixes (#66 wrong build-info label and probe, #67
+port-forwarding to a draining pod). That job is the only proof the path
+real users take works, and a broken one is indistinguishable from a
+vacuous one until somebody looks — it deserves attention on the next
+failure rather than a re-run.
 
 ### P11 milestone 1 — `kmx`, the developer journey as one Go binary (PR #57, merged 2026-09-02)
 
