@@ -495,6 +495,22 @@ jobs:
   #                       Overlapping Ollama with kagent measured 116s
   #                       against 118s serial — nothing to win there, and
   #                       caching the model would save 16s of 934.
+  #
+  #                       Sharing the bring-up across the shards was
+  #                       measured too, and does not pay. Each job is its
+  #                       own VM, so what could be shared is the ~5.1GB of
+  #                       images, not the cluster: with every image already
+  #                       on the node `make up` is 87s instead of 188s, but
+  #                       `kind load image-archive` takes 94s to put them
+  #                       there (~54MB/s into containerd, SLOWER than the
+  #                       node pulls them from the registry). Trimmed to
+  #                       just the images kind's node image does not ship it
+  #                       is still a net loss before a cache restore is
+  #                       counted. The bring-up floor is bytes on the wire.
+  #                       (And the shards could not share one cluster even
+  #                       if they could reach it: this one wipes the
+  #                       database, that one kills replicas, another
+  #                       enforces default-deny.)
   #   `make plane`        60s, of which ~30s is a docker build that needs no
   #                       cluster. Building it in the background during the
   #                       bring-up measured 53s against 60s and is NOT done
