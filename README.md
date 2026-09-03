@@ -11,13 +11,16 @@
 > schema-valid only, proposed, or unbuilt. The name is provisional — see
 > [docs/NAMING.md](docs/NAMING.md).
 
-## Governance for AI agents running on Kubernetes.
+## Build and govern cloud-native AI agents on Kubernetes.
 
-Kaimahi decides what an agent is allowed to do, and proves what it did.
+`kmx` is the developer entry point: an empty machine to a running,
+conversational agent in minutes, scaffolded as YAML you can read, diff and
+own.
 
-Every model call, every tool call and every event that triggers an agent
-passes through a plane that meters it, bounds it, and records it — so
-delegating consequential work does not mean giving up control.
+Governance is the pillar underneath, not a bolt-on. Every model call, every
+tool call and every event that triggers an agent passes through a plane that
+meters it, bounds it, and records it — so delegating consequential work does
+not mean giving up control.
 
 ### Control model spend
 
