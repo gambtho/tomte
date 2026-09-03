@@ -327,7 +327,7 @@ and why, is [govern-your-agent.md](govern-your-agent.md).
 | **An overlay may not carry custody** | `credential_file`, `credential_header`, `internet` and `ca_file` are refused in an overlay fragment, by the plane, not just by kmx. Together they name any path the proxy can read and any host it may be sent to — a ConfigMap that could set them would hand the plane's admin token to an attacker on the first relayed call. Keyed and hosted upstreams stay in the committed table. |
 | **The apply is conditional** | The emitted ConfigMap carries the `resourceVersion` it was read at, so a manifest applied later (`--no-apply` invites exactly that) fails with a `Conflict` rather than pruning a fragment somebody added in the meantime — which would leave the upstream that fragment constrained running unbounded. |
 | **A shared Service selector is named, not hidden** | The ingress policy governs every pod the selector matches. kmx lists them, and says plainly when there is more than one. |
-| **Won't overwrite** | Exclusive create, no `--force`. |
+| **Won't overwrite the manifest** | Exclusive create, no `--force`. This is about the FILE: `kubectl apply` will happily update a same-named `NetworkPolicy` or `RemoteMCPServer` in the cluster. Those names are derived from the upstream name, and an upstream already in the overlay is refused — so a collision means an object of that name created outside this path, and the apply output names what it changed. |
 
 ## Governing an agent
 

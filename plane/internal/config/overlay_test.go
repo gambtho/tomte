@@ -111,6 +111,37 @@ func TestAnOverlayMayNotPutTheProxysOwnCustodyUnderItsControl(t *testing.T) {
 			t.Fatalf("an overlay set %s and was not refused", field)
 		}
 	}
+	// Alternate case is the bypass CodeRabbit found on #87, and it was
+	// real: Go's decoder matches object keys to struct tags
+	// case-insensitively, so "Credential_File" missed a name-only
+	// denylist, `DisallowUnknownFields` accepted it because it DID match
+	// a field, and the proxy would have read the admin token and sent it
+	// to the named host. Verified against the decoder before the fix.
+	for _, spelling := range []string{
+		`{"tool_upstreams": {"x": {"url": "https://a.example/mcp", "Credential_File": "/etc/kaimahi/admin/token"}}}`,
+		`{"tool_upstreams": {"x": {"url": "https://a.example/mcp", "CREDENTIAL_FILE": "/etc/kaimahi/admin/token"}}}`,
+		`{"tool_upstreams": {"x": {"url": "https://a.example/mcp", "INTERNET": true}}}`,
+		`{"tool_upstreams": {"x": {"url": "https://a.example/mcp", "Ca_File": "/etc/x.crt"}}}`,
+		`{"tool_upstreams": {"x": {"url": "http://x.acme:80/mcp", "Credential_Header": "x-api-key"}}}`,
+	} {
+		cfg, err := mergeParse(t, Fragment{Name: "f.json", Raw: []byte(spelling)})
+		if err == nil {
+			t.Fatalf("an alternate-case custody field was accepted: %s\n  decoded as credential_file=%q internet=%v",
+				spelling, cfg.ToolUpstreams["x"].CredentialFile, cfg.ToolUpstreams["x"].Internet)
+		}
+		if !strings.Contains(err.Error(), "an overlay may not set") {
+			t.Fatalf("%s: want the custody refusal, got: %v", spelling, err)
+		}
+	}
+	// A spelling the decoder does NOT fold to a custody field is still
+	// refused, by DisallowUnknownFields — a different message, the same
+	// outcome. Asserted so "refused" is not confused with "matched".
+	if _, err := mergeParse(t, Fragment{Name: "f.json", Raw: []byte(
+		`{"tool_upstreams": {"x": {"url": "http://x.acme:80/mcp", "credentialfile": "/etc"}}}`)}); err == nil ||
+		!strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("want an unknown-field refusal, got: %v", err)
+	}
+
 	// The committed table keeps them: slack and github depend on exactly
 	// these fields, and this must not have broken them.
 	keyed := `{

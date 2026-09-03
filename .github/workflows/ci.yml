@@ -2390,6 +2390,9 @@ jobs:
           # cleaned up here so nothing after this step inherits them.
           kubectl --context kind-kaimahi-p1 delete networkpolicy -n acme kaimahi-upstream-depot-ingress --ignore-not-found
           kubectl --context kind-kaimahi-p1 delete networkpolicy -n kaimahi kaimahi-upstream-depot-egress --ignore-not-found
+          # The RemoteMCPServer is the file's fourth document and lands
+          # for the same reason (found in review on #87).
+          kubectl --context kind-kaimahi-p1 delete remotemcpserver -n kagent kaimahi-depot --ignore-not-found
       - name: "Onboarding: an overlay may not put the proxy's own custody under its control"
         if: steps.changes.outputs.docs_only != 'true'
         run: |

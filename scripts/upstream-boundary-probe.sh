@@ -15,8 +15,13 @@
 #                                       CONTROL  must SUCCEED
 #
 # The control is a service the same pod may legitimately reach, so a
-# successful control proves this pod has working DNS and networking and
-# that the block is policy. The other direction — the proxy CAN reach
+# successful control proves this pod has working DNS and networking, that
+# `nc` is behaving, and that the block is therefore policy. That last one
+# matters: busybox does not advertise `nc -z` in its usage text (it works
+# — measured on busybox 1.36.1, exit 0 to an open port and 1 to a closed
+# one) and if a future image dropped it, EVERY probe would report
+# "blocked". The control is what makes that a loud failure rather than a
+# false pass. The other direction — the proxy CAN reach
 # the server — is proven by the governed tool call itself
 # (scripts/tool-call-probe.sh), which is a stronger positive than
 # anything this script could open.

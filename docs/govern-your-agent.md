@@ -4,8 +4,15 @@ Every other doc here governs something this repository ships. This one
 starts from what you have: **an agent, and an MCP server we have never
 seen.** By the end the agent calls that server through the enforcing
 gateway, under a credential, an allowlist, and an audit trail with its
-name on it — and no pod in the cluster can reach the server any other
-way.
+name on it — and the only NetworkPolicy admitting traffic to that server
+is the one that admits the proxy.
+
+That last clause is deliberately narrower than "no pod can reach it".
+NetworkPolicy rules are **additive**: a second policy selecting the same
+pods can allow what this one does not, and nothing in this path can stop
+one being written. So what you have is measured rather than asserted —
+`scripts/upstream-boundary-probe.sh` below reads the cluster's real
+behaviour, which is the only claim worth making.
 
 Assumes the governance plane is deployed (`kmx plane`, see
 [spend.md](spend.md)) and that you have read
@@ -125,7 +132,9 @@ the onboarding, the same files you would have written by hand:
 3. **your server's ingress, from the proxy alone.** This is the half that
    makes governance a boundary rather than a convention: without it any
    pod in the cluster could call your server directly, around the
-   allowlist, the constraints, the grants and the audit.
+   allowlist, the constraints, the grants and the audit. It is the only
+   policy this path writes for those pods; it cannot bind one written
+   elsewhere.
 4. **the RemoteMCPServer**, whose URL is the gateway and whose
    `headersFrom` names an agent-side Secret. kmx accepts a credential in
    no form — no flag, no environment variable, no file — so this names a
@@ -133,11 +142,17 @@ the onboarding, the same files you would have written by hand:
 
 By default the ingress policy also gives your server **no egress at
 all** (`policyTypes: [Ingress, Egress]` with no egress rules): the
-strongest available statement that it holds no credential and reaches no
-other system. If it needs cluster DNS, use `--server-egress dns`. If it
-already has egress you must not touch, use `--server-egress keep` — and
-the manifest then says, in the file, that its egress is unbounded and
-yours to bound.
+strongest statement this file can make that it holds no credential and
+reaches no other system. Additive again — another policy selecting these
+pods can grant egress and this one cannot prevent it; what it guarantees
+is that *it* grants none. If the server needs cluster DNS, use
+`--server-egress dns`. If it already has egress you must not touch, use
+`--server-egress keep` — and the manifest then says, in the file, that
+its egress is unbounded and yours to bound.
+
+Both directions are worth checking rather than assuming:
+`kubectl -n <namespace> get networkpolicy` lists every policy selecting
+those pods, not only this one.
 
 **Before anything is written or applied**, kmx sends the candidate table
 to the running plane, which merges it over the committed one and parses

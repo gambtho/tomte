@@ -58,9 +58,9 @@ const DefaultConfigDir = "/etc/kaimahi/upstreams.d"
 var mergeableBlocks = []string{"tool_upstreams", "standing_constraints"}
 
 // custodyFields are the tool_upstreams keys an OVERLAY entry may not set.
-// They are refused by NAME rather than by decoding into ToolUpstream, so
-// a field added to that struct later is not silently admitted here: the
-// list is a denial, and a denial that drifts open is worse than none.
+// The list exists so a field added to ToolUpstream must be classified
+// deliberately (TestEveryToolUpstreamFieldIsClassifiedAsSafeOrDenied) —
+// a denial that drifts open is worse than none.
 var custodyFields = []string{"credential_file", "credential_header", "internet", "ca_file"}
 
 // Fragment is one operator-added overlay file: its name (for error
@@ -204,21 +204,53 @@ func Merge(base []byte, frags []Fragment) ([]byte, error) {
 // refuseCustodyFields rejects an overlay entry that tries to put the
 // proxy's own custody, or its reach outside the cluster, under the
 // control of a ConfigMap that exists to be edited.
+//
+// It checks the DECODED entry, not the key names, and that distinction
+// is the whole correctness of this function. Go's decoder matches object
+// keys to struct tags case-INSENSITIVELY, so a name-only denylist is
+// bypassed by "Credential_File" or "INTERNET": the key misses the list,
+// `DisallowUnknownFields` accepts it because it does match a field, and
+// the proxy then reads the admin token and sends it wherever the entry
+// says. (Confirmed against the decoder, not reasoned about.) Decoding
+// through the same type the proxy uses cannot disagree with the proxy.
+//
+// The key scan is kept as a second gate — case-insensitively — so the
+// message names the spelling the operator actually wrote.
 func refuseCustodyFields(fragment, upstream string, raw json.RawMessage) error {
-	var entry map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &entry); err != nil {
-		return fmt.Errorf("config: overlay %s: tool upstream %q: want an object, got %s",
-			fragment, upstream, firstBytes(raw))
-	}
-	for _, field := range custodyFields {
-		if _, ok := entry[field]; !ok {
-			continue
-		}
+	refuse := func(field string) error {
 		return fmt.Errorf("config: overlay %s: tool upstream %q sets %q, which an overlay may not set. "+
 			"An overlay describes an in-cluster, keyless tool server; %s decide what credential the proxy "+
 			"reads and which host outside the cluster it may be sent to, and belong in the committed table "+
 			"(k8s/plane/upstreams.yaml) where they are reviewed as part of this repository",
 			fragment, upstream, field, strings.Join(custodyFields, ", "))
+	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &keys); err != nil {
+		return fmt.Errorf("config: overlay %s: tool upstream %q: want an object, got %s",
+			fragment, upstream, firstBytes(raw))
+	}
+	for key := range keys {
+		for _, field := range custodyFields {
+			if strings.EqualFold(key, field) {
+				return refuse(key)
+			}
+		}
+	}
+	// The authoritative check: whatever spelling got through above, this
+	// is what the proxy would actually act on.
+	var entry ToolUpstream
+	if err := json.Unmarshal(raw, &entry); err != nil {
+		return fmt.Errorf("config: overlay %s: tool upstream %q: %w", fragment, upstream, err)
+	}
+	switch {
+	case entry.CredentialFile != "":
+		return refuse("credential_file")
+	case entry.CredentialHeader != "":
+		return refuse("credential_header")
+	case entry.Internet:
+		return refuse("internet")
+	case entry.CAFile != "":
+		return refuse("ca_file")
 	}
 	return nil
 }
