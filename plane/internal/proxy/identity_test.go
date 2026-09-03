@@ -63,13 +63,13 @@ func TestEveryLedgerRowNamesWhoTheCallWasFor(t *testing.T) {
 	t.Run("a person, when a run names one", func(t *testing.T) {
 		f := newFakeStore()
 		f.addToken("kmh_ok", store.Credential{Name: "ap-agent", ExpiresAt: &future})
-		f.actor = store.Attribution{ActedFor: "slack:U0CIPERSON", RunID: "11111111-2222-3333-4444-555555555555"}
+		f.actor = store.Attribution{ActedFor: "slack:U0CIPERSON", RunID: "run-under-test"}
 		mux := proxy.NewDataMux(testDeps(f, freeUpstream(t)))
 
 		require.Equal(t, http.StatusOK, doChat(t, mux, "kmh_ok", "/upstream/ollama/v1/chat/completions", chatBody).Code)
 		require.Len(t, f.ledger, 1)
 		require.Equal(t, "slack:U0CIPERSON", f.ledger[0].ActedFor)
-		require.Equal(t, "11111111-2222-3333-4444-555555555555", f.ledger[0].RunID)
+		require.Equal(t, "run-under-test", f.ledger[0].RunID)
 	})
 
 	t.Run("nobody, and it says so", func(t *testing.T) {

@@ -691,8 +691,11 @@ func (b *Bridge) process(j job) {
 	// The run expires a minute past the invoke timeout, so a replica
 	// that dies mid-turn cannot leave an open run poisoning every later
 	// call for that credential (P9's reservation discipline).
-	runID, err := b.d.Store.OpenRun(ctx, j.h.BudgetCredential, j.actedFor,
-		"inbound:"+j.hook, j.delivery, j.eventID, b.d.InvokeTimeout+time.Minute)
+	// One run per credential the agent authenticates with: it spends
+	// MODEL tokens under its budget credential and makes TOOL calls
+	// under its gateway credential, and a run opened on only one of
+	// them would leave half the turn in the audit trail unattributed.
+	runIDs, err := b.openRuns(ctx, j)
 	if err != nil {
 		// Fail closed: an event whose spend the plane could not
 		// attribute is not honoured, the same rule as an event it
@@ -707,11 +710,13 @@ func (b *Bridge) process(j job) {
 	defer func() {
 		cctx, ccancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer ccancel()
-		if err := b.d.Store.CloseRun(cctx, runID); err != nil {
-			// The run expires on its own; say so rather than leaving an
-			// operator to wonder why later calls read 'unknown'.
-			slog.Error("inbound: closing the agent run failed; it will expire on its own",
-				"hook", j.hook, "run", runID, "err", err)
+		for _, id := range runIDs {
+			if err := b.d.Store.CloseRun(cctx, id); err != nil {
+				// The run expires on its own; say so rather than leaving
+				// an operator to wonder why later calls read 'unknown'.
+				slog.Error("inbound: closing the agent run failed; it will expire on its own",
+					"hook", j.hook, "run", id, "err", err)
+			}
 		}
 	}()
 
@@ -724,6 +729,34 @@ func (b *Bridge) process(j job) {
 		e.Decision, e.Detail = "completed", "task "+out.taskID
 	}
 	b.audit(ctx, e)
+}
+
+// openRuns opens one run per DISTINCT credential the triggered agent
+// authenticates with. All or nothing: a partially attributed turn would
+// put a person's name on the model calls and 'none' on the tool calls,
+// which reads as "nobody did that part" — the exact false claim this
+// lane exists to remove. Any failure closes what was opened and the
+// event is not invoked.
+func (b *Bridge) openRuns(ctx context.Context, j job) ([]string, error) {
+	wanted := []string{j.h.BudgetCredential}
+	if j.h.ToolCredential != "" && j.h.ToolCredential != j.h.BudgetCredential {
+		wanted = append(wanted, j.h.ToolCredential)
+	}
+	var ids []string
+	for _, credential := range wanted {
+		id, err := b.d.Store.OpenRun(ctx, credential, j.actedFor,
+			"inbound:"+j.hook, j.delivery, j.eventID, b.d.InvokeTimeout+time.Minute)
+		if err != nil {
+			cctx, ccancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			for _, open := range ids {
+				_ = b.d.Store.CloseRun(cctx, open)
+			}
+			ccancel()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
 }
 
 type outcome struct {
