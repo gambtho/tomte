@@ -1303,13 +1303,16 @@ ap-ask: $(KAGENT)
 ##   make ap-demo [SLACK_USER=U0EXAMPLE]
 ap-demo: guard
 	@KUBECTL="$(KUBECTL)" CRED_AP=$(CRED_AP) SLACK_USER='$(SLACK_USER)' \
+		AP_CHAT='make chat AGENT=ap-agent TARGET=$(TARGET) KIND_CLUSTER=$(KIND_CLUSTER)' \
 		bash scripts/ap-demo.sh
 
 ## ap-injection: the manipulated invoice — the agent may comply; the call
 ## is denied anyway, audited with the changed payee, and cannot ride the
 ## approval the earlier call earned.
 ap-injection: guard
-	@KUBECTL="$(KUBECTL)" CRED_AP=$(CRED_AP) bash scripts/ap-injection.sh
+	@KUBECTL="$(KUBECTL)" CRED_AP=$(CRED_AP) SLACK_USER='$(SLACK_USER)' \
+		AP_CHAT='make chat AGENT=ap-agent TARGET=$(TARGET) KIND_CLUSTER=$(KIND_CLUSTER)' \
+		bash scripts/ap-injection.sh
 
 ## ap-down: remove the P13 demo (agent, gateway seam, ERP)
 ap-down: guard

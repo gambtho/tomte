@@ -37,7 +37,11 @@ KUBECTL="${KUBECTL:-kubectl}"
 CRED_AP="${CRED_AP:-ap-agent}"
 SLACK_USER="${SLACK_USER:-}"
 AP_AGENT_TURN="${AP_AGENT_TURN:-1}"
-MAKE="${MAKE:-make}"
+# The chat command, handed down by the Makefile so the agent turn lands
+# on the SAME cluster as everything else — a bare `make chat` here would
+# use the default KIND_CLUSTER whatever the caller asked for. Word
+# splitting is deliberate.
+AP_CHAT="${AP_CHAT:-make chat AGENT=ap-agent}"
 export KUBECTL
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -57,6 +61,29 @@ EXC_VENDOR=MER-4471
 step() { printf '\n\033[1m== %s\033[0m\n' "$*" >&2; }
 note() { printf '   %s\n' "$*" >&2; }
 fail() { printf '\nap-demo: %s\n' "$*" >&2; exit 1; }
+
+# The agent's turn is one large A2A task object. Print the reply and the
+# tool calls it made — the story — rather than the whole JSON, which is
+# what `make chat` shows and is unreadable in a demo.
+show_turn() {
+  python3 - "$1" <<'EOF' || tail -20 "$1"
+import json, re, sys
+raw = open(sys.argv[1]).read()
+m = re.search(r"^\{.*\}$", raw, re.M | re.S)
+if not m:
+    sys.exit("no task object in the agent's output")
+d = json.loads(m.group(0))
+for msg in d.get("history", []):
+    for p in msg.get("parts", []):
+        if (p.get("metadata") or {}).get("kagent_type") == "function_call":
+            print("   tool call: %s %s" % (p["data"]["name"], json.dumps(p["data"].get("args", {}))))
+print("   state: %s" % d.get("status", {}).get("state"))
+for a in d.get("artifacts", []):
+    for p in a.get("parts", []):
+        if p.get("text"):
+            print("\n" + p["text"].strip() + "\n")
+EOF
+}
 
 call()  { bash "$here/tool-call-probe.sh" "$1" "$2"; }
 deny()  { bash "$here/tool-denial-probe.sh" "$1" "$2"; }
@@ -106,14 +133,14 @@ TXT
 # --- 1. the investigation (informational) --------------------------------
 if [ "$AP_AGENT_TURN" = 1 ] && $KUBECTL -n kagent get agent ap-agent >/dev/null 2>&1; then
   step "The agent investigates $EXC_INVOICE (informational — nothing below asserts on it)"
-  if ! $MAKE chat AGENT=ap-agent TASK="Investigate invoice $EXC_INVOICE and resolve it." \
-      > "$work/chat.out" 2>&1; then
+  # shellcheck disable=SC2086 # AP_CHAT is a command line, not a word
+  if ! $AP_CHAT TASK="Investigate invoice $EXC_INVOICE and resolve it." > "$work/chat.out" 2>&1; then
     note "the agent's turn did not complete; the scenario continues without it"
   fi
-  tail -40 "$work/chat.out" >&2 || true
+  show_turn "$work/chat.out" >&2 || true
   note "Whatever it concluded, it cannot act on it without what follows."
 else
-  step "Skipping the agent's turn (AP_AGENT_TURN=$AP_AGENT_TURN, or ap-agent is not deployed)"
+  step "No agent turn (AP_AGENT_TURN=$AP_AGENT_TURN, or ap-agent is not deployed) — the scenario below does not need one"
 fi
 
 # --- 2. routine: the standing constraint does the work, silently ---------

@@ -327,10 +327,21 @@ make down        # the whole cluster
 
 ## If something does not match
 
-- **`make erp` fails with "the ERP did not report a loaded corpus".** The
-  corpus does not add up, and the server refused to serve it. Its log
-  names the line: `kubectl -n kaimahi logs -l app=kaimahi-erp`. Run
-  `go test ./internal/erp/` to see the same failure without a cluster.
+- **`make erp-fixtures` hangs on the rollout, then fails.** The corpus
+  does not add up and the new pod refused to serve it, so the rollout
+  never completes — and the OLD pod keeps answering, which is the point:
+  a broken edit does not take the ERP down, it fails to replace it. The
+  reason is on the new pod:
+
+  ```text
+  ERROR erp: refusing to serve an inconsistent corpus
+    err="fixtures: purchase order \"PO-2291\" ordered 400, but receiving
+    accounts for 310 received + 89 backordered"
+  ```
+
+  `kubectl -n kaimahi logs -l app=kaimahi-erp` shows it, and
+  `go test ./internal/erp/` reproduces the same failure with no cluster
+  at all.
 - **`make govern-ap` hangs waiting for the RemoteMCPServer.** kagent
   discovers tools *through* the gateway, so the ERP has to be up first —
   run `make erp` before it.

@@ -2288,7 +2288,8 @@ jobs:
         run: |
           make govern-ap
           make tool-allowlist CRED_TOOLS=ap-agent | tee ap-allowlist.out
-          grep -qx 'ap-agent: invoice_get, invoice_list, po_get, receiving_get, contract_get, payment_policy_get' ap-allowlist.out
+          # The allowlist reads back sorted, not in the order it was set.
+          grep -qx 'ap-agent: contract_get, invoice_get, invoice_list, payment_policy_get, po_get, receiving_get' ap-allowlist.out
           for t in payment_schedule dispute_open vendor_notify; do
             if grep -q "$t" ap-allowlist.out; then
               echo "$t is allowlisted — it must be bounded or approved, not configured" >&2; exit 1
@@ -2385,7 +2386,7 @@ jobs:
             grep -qE "ap-agent +tool +$tool .*slack:U0CIAPPROVER +call [0-9a-f]{12}" ap-grants.out \
               || { echo "no slack-decided, call-bound grant for $tool" >&2; exit 1; }
           done
-          make approval-audit CRED=ap-agent | tee ap-approval-audit.out
+          make approval-audit | tee ap-approval-audit.out
           grep -E 'ap-agent +tool +payment_schedule +approved +slack:U0CIAPPROVER .*payment_schedule: invoice_id INV-88134, amount_cents 3255000, payee_id MER-4471' ap-approval-audit.out
           grep -E 'ap-agent +tool +dispute_open +approved +slack:U0CIAPPROVER .*dispute_open: invoice_id INV-88134, amount_cents 600000' ap-approval-audit.out
           grep -E 'ap-agent +tool +vendor_notify +approved +slack:U0CIAPPROVER .*vendor_notify: vendor_id MER-4471' ap-approval-audit.out
