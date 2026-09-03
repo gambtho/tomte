@@ -46,8 +46,12 @@ against the budget, and each event consuming one bounded grant.
        alt="A Kubernetes agent routes model calls through the Kaimahi LLM proxy and tool calls through its MCP gateway; bounded approvals can widen either path temporarily">
 </p>
 
-The agents themselves run on [kagent](https://kagent.dev), which Kaimahi
-governs rather than reimplements.
+The agents themselves run on **[kagent](https://kagent.dev)**, an
+open-source runtime that makes an agent a Kubernetes resource: you
+`kubectl apply` an `Agent` YAML, and its controller runs the pod, wires up
+the model and the MCP tools, and ships a CLI and dashboard to talk to it.
+Kaimahi governs that runtime rather than reimplementing it — it adds no
+agent runtime of its own.
 
 Governance is opt-in per agent. The documentation identifies ungoverned paths
 and current limitations.
