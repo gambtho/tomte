@@ -254,7 +254,7 @@ jobs:
       - name: Hosted upstreams are marked, keyed from plane custody, and no GitHub token is in the tree
         run: |
           python3 - <<'EOF'
-          import json, pathlib, sys, yaml
+          import json, pathlib, re, sys, yaml
           from urllib.parse import urlparse
           cm = yaml.safe_load(pathlib.Path("k8s/plane/upstreams.yaml").read_text())
           t = json.loads(cm["data"]["upstreams.json"])
@@ -285,6 +285,29 @@ jobs:
           assert len(tools) == 1 and tools[0]["mcpServer"]["name"] == "kaimahi-github", tools
           assert agent["spec"]["declarative"]["modelConfig"] == "governed-copilot", "the demo agent is not on a governed model preset"
           print("hosted upstreams: copilot + github marked internet; every unmarked entry in-cluster; github wiring Secret-only")
+          # P13: the accounts-payable demo is CONFIGURATION, and this is
+          # where that configuration is checked — the ERP holds no
+          # credential of any kind, its consequential tools declare the
+          # fields an approval binds and an audit summary reads, and the
+          # AP agent's payments are bounded at $10,000.00. A silent edit
+          # to any of it fails here, on every PR, with no cluster.
+          erp = t["tool_upstreams"]["erp"]
+          assert not any(k in erp for k in ("credential_file", "credential", "token", "api_key")), erp
+          assert not erp.get("internet"), erp
+          assert erp["tools"]["payment_schedule"]["policy_fields"] == ["invoice_id", "amount_cents", "payee_id"], erp
+          assert erp["tools"]["dispute_open"]["policy_fields"] == ["invoice_id", "amount_cents"], erp
+          assert erp["tools"]["vendor_notify"]["policy_fields"] == ["vendor_id"], erp
+          cs = t["standing_constraints"]["ap-agent"]["payment_schedule"]
+          assert cs == [{"field": "amount_cents", "op": "lte", "value": 1000000}], cs
+          # The tool the constraint bounds must NOT also be handed out by
+          # the allowlist the Makefile sets: a constraint binds, and a
+          # reader who saw it allowlisted would draw the wrong conclusion.
+          allow = re.search(r"^AP_TOOLS\s*\?=\s*(.+)$", pathlib.Path("Makefile").read_text(), re.M)
+          assert allow, "AP_TOOLS is gone from the Makefile"
+          named = allow.group(1).strip().split(",")
+          assert named == ["invoice_get", "invoice_list", "po_get", "receiving_get",
+                           "contract_get", "payment_policy_get"], named
+          print("ap: erp keyless; payment_schedule bounded at $10,000.00 and not allowlisted")
           EOF
           set +e
           grep -rIn --exclude-dir=.git -E 'github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{30,}' .
@@ -2305,18 +2328,9 @@ jobs:
           n=$(kubectl --context kind-kaimahi-p1 -n kagent get secret kaimahi-ap-token \
             -o jsonpath='{.data.api-key}' | base64 -d | grep -cE '^kmh_[0-9a-f]{64}$')
           test "$n" = 1
-          python3 - <<'EOF'
-          import json, pathlib, yaml
-          t = json.loads(yaml.safe_load(pathlib.Path("k8s/plane/upstreams.yaml").read_text())["data"]["upstreams.json"])
-          erp = t["tool_upstreams"]["erp"]
-          assert "credential_file" not in erp and not erp.get("internet"), erp
-          assert erp["tools"]["payment_schedule"]["policy_fields"] == ["invoice_id", "amount_cents", "payee_id"], erp
-          assert erp["tools"]["dispute_open"]["policy_fields"] == ["invoice_id", "amount_cents"], erp
-          assert erp["tools"]["vendor_notify"]["policy_fields"] == ["vendor_id"], erp
-          cs = t["standing_constraints"]["ap-agent"]["payment_schedule"]
-          assert cs == [{"field": "amount_cents", "op": "lte", "value": 1000000}], cs
-          print("erp: keyless, tools declared; ap-agent bounded to payments <= $10,000.00")
-          EOF
+          # What the committed table DECLARES is asserted in the hygiene
+          # job, on the file, with no cluster — so it also runs on a
+          # docs-only PR. Here the subject is the deployed credential.
       - name: "AP: all six read tools are callable, audited under the agent's own name"
         if: steps.changes.outputs.docs_only != 'true'
         run: |
