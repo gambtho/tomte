@@ -2022,7 +2022,7 @@ jobs:
           grep -E 'hello-tools +kagent-tools +tools/call .*slack:U0CIPERSON *$' tool-audit-slack-tools.out
           # The run is CLOSED when the turn ends: a call after it reads
           # 'none' again, not the person who has gone home.
-          bash scripts/tool-call-probe.sh k8s_get_resources '{"kind": "ConfigMap", "namespace": "default"}'
+          bash scripts/tool-call-probe.sh k8s_get_resources '{"resource_type": "ConfigMap", "namespace": "default"}'
           make tool-audit CRED_TOOLS=hello-tools | tee tool-audit-after-run.out
           head -2 tool-audit-after-run.out
           test "$(sed -n '2p' tool-audit-after-run.out | grep -c 'none *$')" = 1

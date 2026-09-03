@@ -99,15 +99,15 @@ inbound trail:
 
 ```console
 $ make ledger
-created (UTC)       credential   upstream  model               in    out  cents source   status acted for
-2026-09-03T20:14:02 hello-world  ollama    qwen2.5:3b         368      3     0 free     200    slack:U0123ABC
-2026-09-03T20:09:41 hello-world  ollama    qwen2.5:3b         291     12     0 free     200    none
+created (UTC)       credential   upstream  model                in    out  cents source   status acted for
+2026-09-03T20:55:41 hello-world  ollama    qwen2.5:3b          724     35      0 free     200    slack:U0123ABC
+2026-09-03T20:54:12 hello-world  ollama    qwen2.5:3b          371     25      0 free     200    none
 ```
 
 ```console
 $ make tool-audit CRED_TOOLS=hello-tools
-created (UTC)       credential   upstream     method       tool                     decision  status detail                                       call                                         acted for
-2026-09-03T20:14:19 hello-tools  kagent-tools tools/call   k8s_get_resources        allowed      200                                              -                                            slack:U0123ABC
+created (UTC)       credential   upstream     method       tool                     decision status detail                                       call                                         acted for
+2026-09-03T20:55:36 hello-tools  kagent-tools tools/call   k8s_get_resources        allowed     200                                              k8s_get_resources: (…) [3494fcafa57a]        slack:U0123ABC
 ```
 
 Both rows above are the same agent turn, under two different
@@ -161,8 +161,8 @@ diagnosed. Three places say it first:
 ```console
 $ make credentials
 credential       cap cents  cap tokens   expires (UTC)          state     created (UTC)
-hello-tools      -          -            2026-09-05T11:02:55    EXPIRING  2026-09-03T11:02:55
-hello-world      -          -            2026-10-03T11:02:31    ok        2026-09-03T11:02:31
+hello-world      -          -            2026-09-03T22:56:34    EXPIRING  2026-09-03T20:52:41
+hello-tools      -          -            2026-10-03T20:53:10    ok        2026-09-03T20:53:10
 inbound-demo     -          -            -                      no expiry 2026-08-30T09:14:02
 ```
 
@@ -183,7 +183,7 @@ job is to trend to zero.
 
 ```console
 $ make chat
-… expired credential "hello-world": it expired at 2026-09-03T19:11:44Z;
+… expired credential "hello-world": it expired at 2026-09-03T19:56:30Z;
   renew it with 'make credential-renew NAME=hello-world TTL=720h', or
   re-issue the credential and re-point its Secret
 ```
