@@ -8,6 +8,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"runtime/debug"
 	"slices"
@@ -274,10 +275,8 @@ func (a *App) buildFromModuleProxy() error {
 		}
 	}
 	started := time.Now().Add(-time.Second)
-	if err := installer.Run("go", plan.Args...); err != nil {
-		return fmt.Errorf("cannot build the plane at revision %s: %w\n"+
-			"  If this revision is not yet on the public Go proxy (a commit that has not merged),\n"+
-			"  build from a checkout instead: kmx plane --source <path to the repo>", rev, err)
+	if err := a.goInstallPlane(&installer, plan, rev); err != nil {
+		return err
 	}
 	// Where the binary landed is a decision, not a search: an older binary
 	// left in the same place by an earlier run must not be packaged as if
@@ -448,4 +447,48 @@ func (a *App) planeDeploy() error {
 	}
 	return a.kubectlRun("-n", admin.Namespace, "rollout", "status",
 		"deploy/kaimahi-proxy", "--timeout=300s")
+}
+
+// planeNotOnProxyYet matches the one `go install` failure that is a race
+// rather than a fault: the proxy has not finished indexing the nested
+// plane/ module at this revision, so Go falls back to the ROOT module and
+// reports the package missing from it.
+//
+// It is anchored on both halves — "found, but does not contain package" for
+// the fallback, and the plane's own package path — so a genuine missing
+// package elsewhere cannot be mistaken for it and silently retried.
+//
+// Verified by hand on f9914d4: `go install` failed twice, `go list -m
+// .../plane@f9914d4` resolved the module (which is what makes the proxy
+// fetch it), and the identical install then succeeded and produced the
+// binary. The post-merge job races the proxy because it starts seconds
+// after the push; a person installing a merged sha later never sees it.
+var planeNotOnProxyYet = regexp.MustCompile(
+	`module .* found, but does not contain package .*/plane/cmd/kaimahi-proxy`)
+
+// goInstallPlane runs the install, waiting out the proxy race.
+//
+// Bounded and narrow on purpose. Only the race above is retried; every other
+// build failure is returned on the first attempt, because waiting sixty
+// seconds to repeat a compile error helps nobody. The same shape as chat's
+// transport retry, for the same reason: the class of failure decides whether
+// repeating it is honest.
+func (a *App) goInstallPlane(installer *run.Runner, plan planebuild.Install, rev string) error {
+	const attempts = 5
+	for attempt := 1; ; attempt++ {
+		out, _, err := installer.CaptureCombined("go", plan.Args...)
+		if err == nil {
+			return nil
+		}
+		if attempt == attempts || !planeNotOnProxyYet.MatchString(out) {
+			return fmt.Errorf("cannot build the plane at revision %s: %w\n%s\n"+
+				"  If this revision is not yet on the public Go proxy (a commit that has not merged),\n"+
+				"  build from a checkout instead: kmx plane --source <path to the repo>",
+				rev, err, strings.TrimSpace(out))
+		}
+		wait := time.Duration(attempt*10) * time.Second
+		a.notef("the Go proxy has not indexed the plane module at %s yet; retrying in %s (%d/%d)",
+			rev, wait, attempt, attempts-1)
+		time.Sleep(wait)
+	}
 }
