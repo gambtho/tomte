@@ -75,10 +75,14 @@ func (a *App) Up(step string) error {
 		// One line: `kmx up` is the RUNTIME. Governance is a deliberate
 		// second step, and saying nothing here would leave an operator to
 		// infer it from an empty ledger.
-		a.notef("\nRuntime only: the Kaimahi governance plane is NOT deployed yet.\n" +
-			"Nothing is metered, budgeted or ledgered until it is:\n" +
-			"  kmx plane       # the proxy and its ledger\n" +
-			"  kmx govern " + config.DefaultCredential + "  # put " + config.DefaultAgent + " behind it (docs/spend.md)")
+		// The credential is the RESOLVED one, not the default: with CRED set,
+		// a copied `kmx govern hello-world` would govern a different
+		// credential than the one `kmx govern` and `kmx ledger` then use.
+		a.notef("\nRuntime only: the Kaimahi governance plane is NOT deployed yet.\n"+
+			"Nothing is metered, budgeted or ledgered until it is:\n"+
+			"  kmx plane       # the proxy and its ledger\n"+
+			"  kmx govern %s  # put %s behind it (docs/spend.md)",
+			a.Cfg.Credential, config.DefaultAgent)
 		a.notef("\nTalk to the agent:  kmx agent chat %s \"%s\"", config.DefaultAgent, config.DefaultTask)
 	}
 	return nil

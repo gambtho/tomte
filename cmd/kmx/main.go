@@ -39,7 +39,7 @@ COMMANDS
   agent create <name>          scaffold agents/<name>.yaml and apply it
   agent chat <name> [message]  ask an agent one question (via ` + "`kagent invoke`" + `)
   plane                        deploy the governance plane (proxy + ledger)
-  govern <credential>          issue the credential and put an agent behind the plane
+  govern [<credential>]        issue the credential and put an agent behind the plane
   ledger [<credential>]        the spend ledger and month-to-date totals
   grants [<credential>]        grants, with liveness
   audit tool|approval [<cred>] the enforcement points' audit trails
