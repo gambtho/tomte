@@ -479,10 +479,11 @@ jobs:
   # ---- the end-to-end proof, in four shards (W25) --------------------------
   #
   # Everything P1 through P12 proves about a running cluster lives below.
-  # It used to be ONE job of 68 serial steps on one cluster: 934s, of which
-  # 186s was the bring-up and 748s was a serial tail of probes. It is now
-  # four jobs that each bring up their own cluster and run one part of the
-  # tail, plus an aggregator (`e2e-hello-world`, the name the protect-main
+  # It used to be ONE job of 68 serial steps on one cluster (P12 branch,
+  # run 33707312808): 934s, of which 186s was the bring-up and 748s was a
+  # serial tail of probes — hygiene and go-plane are ~40s each, so this job
+  # WAS CI's wall-clock. It is now four jobs that each bring up their own
+  # cluster and run one part of the tail, plus an aggregator (`e2e-hello-world`, the name the protect-main
   # ruleset requires) that reports whether all four passed.
   #
   # The arithmetic, from measured runs and not estimates (run 33707312808
