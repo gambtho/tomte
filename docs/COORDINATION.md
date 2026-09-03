@@ -123,9 +123,9 @@ prefix.
 | `kmx` milestone 3 — the core plane verbs (D28(3), D33) | W27 worker | PR #81 MERGED; coordinator verified live — wait_switched carried, a destructive backup/restore round trip, approvals showing the call (delta sheet below) | lane closed |
 | W32: the release agent — Kaimahi's first real user (D38) | unassigned | SHAPED 2026-09-03 — prompt below; runs BEFORE W31 so that lane gets real friction |narrow agent: drafts and proposes, human approves, CI moves bytes; ADO via its official hosted MCP server |
 | W31: `create-kaimahi-agent` — nothing to a working agent, fast (D36, D37) | unassigned | SHAPED 2026-09-03 — prompt below; the D36 lane, highest priority | prerequisite and time reduction FIRST (5 prereqs, 5-10 min today); packaging second; MCP deferred |
-| W28: ship it — version, release, a published install path, a documented upgrade (D34, D35) | unassigned | SHAPED 2026-09-03 — prompt below; PARALLEL with W30 | unblocked by D34; publishes to free namespaces only, asserts no trademark |
+| W28: ship it — version, release, a published install path, a documented upgrade (D34, D35) | W28 worker | PR #85 MERGED (8e08603) — ran from the prompt handed over directly, because THIS ROW and D34/D35 were stranded on a squash-merged branch (see the recovery note in the open items) | coordinator verification owed |
 | W29: govern your own agent — the generic onboarding path (D35) | unassigned | SHAPED 2026-09-03 — prompt below; runs ALONE | the product-defining gap: nothing documents adding your own MCP server or governing an agent you already run |
-| W30: identity on the call, and credentials that expire (D35) | unassigned | SHAPED 2026-09-03 — prompt below; PARALLEL with W28 | plane internals + a migration; the two security-review answers we do not have |
+| W30: identity on the call, and credentials that expire (D35) | W30 worker | PR #86 MERGED (5f49235) — same: built from the handed-over prompt while its board record was stranded | coordinator verification owed |
 | Brand assets + architecture diagram + org/front-door plans | user-run lane (outside the board's prompt set) | PR #33 MERGED (+ kaimahi-agents/.github#1); main CI green | brand validator in the hygiene job |
 | README front door + CONTRIBUTING.md | user-run lane (outside the board's prompt set) | PR #34 MERGED; main CI green | anchored front-door checker in hygiene: section order enforced, no `npx kaimahi create` mention before the quickstart ends — PR #16's README hunk must land under "A scaffolder CLI: considered, not built" (was "Proposed CLI direction" until D23) |
 | CLI decisions + PR #16 review | user + coordinator | D19 ruled; coordinator review rounds done (2026-09-01/02) | not a build lane; parallelises with everything |
@@ -1194,6 +1194,16 @@ the Makefile comment for `AKS_NETWORK_POLICY` (W15 deviation 3).
   a fresh one (conservative, but be deliberate when money moves); and
   `plane/internal/redact` scrubs known SECRET VALUES from logs — it is
   not a business-data redactor and must not be reused as one.
+- **Board records were LOST TWICE by the same mechanism, and the fix is a
+  process change** (2026-09-03). A board PR was squash-merged between two
+  of the coordinator's pushes to its branch, so every commit after the
+  first was orphaned: once for D32/W25, and again — six commits — for
+  D34, D35, D36, D37, D38, W28-W32 and the D36 coherence work. Both
+  times the lanes ran anyway, from prompts handed over in chat, so the
+  work is right and only the RECORD was missing; both times it was the
+  user who noticed. **Rule from here: one board PR carries one change,
+  and the coordinator re-checks merge state before any push to an
+  existing branch.** Appending to an open board PR is what broke, twice.
 - **Naming (D26)**: the two briefs are with the user; `kmx` is now a
   second provisional name and rides the same counsel brief.
 - **P10 carry-forward** (reported by the lane, not changed): an egress
