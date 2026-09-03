@@ -1762,15 +1762,21 @@ jobs:
             # build_info only needs the listener. 2>/dev/null on the ATTEMPTS
             # only — the forward legitimately takes a moment, and a screenful
             # of "connection refused" would bury the message that matters.
-            if curl -fsS -o /dev/null http://127.0.0.1:19092/livez 2>/dev/null; then ready=1; break; fi
+            # --max-time bounds each ATTEMPT. curl has no default transfer
+            # timeout, so a forward that accepts TCP without ever answering
+            # would hang here forever — and the failure path below, the whole
+            # point of which is to print kubectl's output, would never run.
+            if curl -fsS --max-time 2 -o /dev/null http://127.0.0.1:19092/livez 2>/dev/null; then ready=1; break; fi
             sleep 0.2
           done
           test -n "$ready" || {
-            echo "the plane's ops port never answered on 127.0.0.1:19092 after 30s (pod $pod); kubectl said:"
+            echo "the plane's ops port never answered on 127.0.0.1:19092 (pod $pod, 150 attempts); kubectl said:"
             sed 's/^/  /' port-forward.log
             exit 1
           }
-          curl -fsS http://127.0.0.1:19092/metrics | grep '^kaimahi_build_info{' | tee build-info.out
+          # Bounded for the same reason: a hung read here would hold the job
+          # until its 45-minute timeout instead of failing in seconds.
+          curl -fsS --max-time 30 http://127.0.0.1:19092/metrics | grep '^kaimahi_build_info{' | tee build-info.out
 
           # ONE assertion, asked twice: once about the revision this job
           # installed, once about a revision it certainly is not. Two
