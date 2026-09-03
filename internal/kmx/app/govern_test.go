@@ -29,7 +29,12 @@ case "$*" in
 JSON
     exit 0 ;;
   *"get secret kaimahi-admin"*) printf '%s' "$KMX_TEST_ADMIN_B64"; exit 0 ;;
-  *port-forward*) exec sleep 30 ;;
+  *"get secret kaimahi-governed-token"*) printf '%s' "$KMX_TEST_BOUND"; exit 0 ;;
+  *port-forward*)
+    # A real kubectl announces the bind before anything may be sent through
+    # it; kmx waits for exactly this line, so the fake has to print it.
+    printf 'Forwarding from 127.0.0.1:%s -> 9091\n' "$KMX_TEST_ADMIN_PORT"
+    exec sleep 30 ;;
   *"get agent hello-world"*)
     if [ -n "$KMX_TEST_AGENT_ERR" ]; then
       printf '%s\n' "$KMX_TEST_AGENT_ERR" >&2
@@ -84,6 +89,8 @@ func newGovernFixture(t *testing.T, agentErr string, issue http.HandlerFunc) *go
 	t.Setenv("KMX_TEST_STDIN", f.stdin)
 	t.Setenv("KMX_TEST_AGENT_ERR", agentErr)
 	t.Setenv("KMX_TEST_ADMIN_B64", base64.StdEncoding.EncodeToString([]byte("admin-bearer")))
+	t.Setenv("KMX_TEST_ADMIN_PORT", u.Port())
+	t.Setenv("KMX_TEST_BOUND", os.Getenv("KMX_TEST_BOUND"))
 
 	cfg := &config.Config{
 		KindCluster: "kaimahi-p1",
@@ -152,9 +159,13 @@ func TestGovernRefusesToSkipTheSwitchOnAnAmbiguousRead(t *testing.T) {
 	}
 }
 
-// A genuine NotFound is the managed-cluster ordering, where governance is
-// stood up before the agents exist. It proceeds, says so, and still applies
-// the presets — so the agent is created governed when it arrives.
+// A genuine NotFound is the ordering where governance is stood up before the
+// agents exist. It proceeds and still applies the presets — and it must be
+// honest about what happens next: `kmx up` creates hello-world on the
+// KEYLESS preset, so an agent created after this runs ungoverned until
+// govern is run again. A NOTE promising otherwise would be the same
+// "reassuring message, exit 0, agent spending outside the plane" the
+// NotFound discrimination above exists to prevent.
 func TestGovernNotesAGenuinelyAbsentAgentAndStillAppliesThePresets(t *testing.T) {
 	f := newGovernFixture(t,
 		`Error from server (NotFound): agents.kagent.dev "hello-world" not found`,
@@ -162,8 +173,12 @@ func TestGovernNotesAGenuinelyAbsentAgentAndStillAppliesThePresets(t *testing.T)
 	if err := f.app.Govern("hello-world", governOptions()); err != nil {
 		t.Fatalf("govern: %v", err)
 	}
-	if !strings.Contains(f.errOut.String(), "does not exist yet") {
-		t.Errorf("the absent agent was not reported:\n%s", f.errOut.String())
+	note := f.errOut.String()
+	if !strings.Contains(note, "does not exist yet") {
+		t.Errorf("the absent agent was not reported:\n%s", note)
+	}
+	if !strings.Contains(note, config.KeylessModelConfig) || !strings.Contains(note, "kmx govern hello-world") {
+		t.Errorf("the NOTE promises governance the runtime will not deliver:\n%s", note)
 	}
 	piped := f.piped()
 	for _, want := range []string{"governed-ollama", "governed-copilot"} {
@@ -246,5 +261,53 @@ func TestAnAlreadyIssuedCredentialIsReconciledNotOverwritten(t *testing.T) {
 	if !strings.Contains(err.Error(), "shown exactly once") ||
 		!strings.Contains(err.Error(), "DELETE FROM credential") {
 		t.Errorf("the refusal does not tell the operator how to recover: %v", err)
+	}
+}
+
+// Two credentials, one Secret: the second must be refused BEFORE it is
+// issued.
+//
+// `kmx govern demo` while kaimahi-governed-token holds hello-world's token
+// would otherwise mint demo's credential, overwrite the Secret, and destroy
+// the only copy of hello-world's token — the plane keeps only its hash, so
+// hello-world would stay live and permanently unusable. Refusing before the
+// POST also means no orphan credential row is left behind.
+func TestASecondCredentialWillNotOverwriteAnotherOnesToken(t *testing.T) {
+	t.Setenv("KMX_TEST_BOUND", "hello-world")
+	issuedAnyway := false
+	f := newGovernFixture(t, "", func(w http.ResponseWriter, r *http.Request) {
+		issuedAnyway = true
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]string{"token": "kmh_" + strings.Repeat("d", 64)})
+	})
+	err := f.app.Govern("demo", governOptions())
+	if err == nil {
+		t.Fatal("govern demo overwrote the Secret holding hello-world's token")
+	}
+	if !strings.Contains(err.Error(), `not "demo"`) || !strings.Contains(err.Error(), "--secret") {
+		t.Errorf("the refusal does not name the conflict and the way out: %v", err)
+	}
+	if issuedAnyway {
+		t.Error("the credential was minted before the conflict was detected, leaving an orphan row")
+	}
+	if strings.Contains(f.piped(), "kind: Secret") {
+		t.Errorf("a Secret was applied anyway:\n%s", f.piped())
+	}
+}
+
+// The same Secret, the same credential, re-run: that is idempotence, not a
+// conflict.
+func TestGoverningTheSameCredentialAgainIsFine(t *testing.T) {
+	t.Setenv("KMX_TEST_BOUND", "hello-world")
+	f := newGovernFixture(t, `Error from server (NotFound): agents.kagent.dev "hello-world" not found`,
+		func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusConflict)
+			w.Write([]byte(`{"error":"credential exists"}`))
+		})
+	if err := f.app.Govern("hello-world", governOptions()); err != nil {
+		t.Fatalf("re-governing the same credential failed: %v", err)
+	}
+	if !strings.Contains(f.errOut.String(), "keeping both") {
+		t.Errorf("the already-issued case was not reconciled:\n%s", f.errOut.String())
 	}
 }

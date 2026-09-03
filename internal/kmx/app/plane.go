@@ -194,16 +194,22 @@ func (a *App) planeSource(flag string) (string, error) {
 		}
 		return "", nil
 	default:
-		root := strings.TrimSpace(flag)
-		abs, err := filepath.Abs(root)
+		given := strings.TrimSpace(flag)
+		abs, err := filepath.Abs(given)
 		if err != nil {
 			return "", err
 		}
-		if _, ok := planebuild.DetectSourceFS(abs); !ok {
-			return "", fmt.Errorf("--source %s is not a checkout of this repository (no go.mod for github.com/kaimahi-agents/kaimahi with a plane/ module under it)", root)
+		// The detected ROOT is what gets built, not the path as given.
+		// Detection walks UP, so `--source docs` inside a clone validates
+		// against the repository two levels above it; building `docs/plane`
+		// would then fail with a path error instead of doing the obvious
+		// thing.
+		root, ok := planebuild.DetectSourceFS(abs)
+		if !ok {
+			return "", fmt.Errorf("--source %s is not a checkout of this repository (no go.mod for github.com/kaimahi-agents/kaimahi with a plane/ module under it)", given)
 		}
-		a.notef("plane source: %s", abs)
-		return abs, nil
+		a.notef("plane source: %s", root)
+		return root, nil
 	}
 }
 
@@ -211,9 +217,15 @@ func (a *App) planeSource(flag string) (string, error) {
 // `make plane-image` has always run, so a checkout has ONE image recipe and
 // a change to how the image is built is exercised by the PR that makes it.
 func (a *App) buildFromSource(root string) error {
+	// The revision stamped into the binary for kaimahi_build_info. Say when
+	// it cannot be read: an image built here publishes
+	// kaimahi_build_info{version="unknown"}, which is the very label the
+	// rest of this change exists to make trustworthy.
 	version := "unknown"
 	if out, err := a.Run.Capture("git", "-C", root, "rev-parse", "--short=12", "HEAD"); err == nil && out != "" {
 		version = out
+	} else {
+		a.notef("NOTE: cannot read %s's git revision, so the plane will report kaimahi_build_info{version=\"unknown\"}", root)
 	}
 	return a.Run.Run(a.Cfg.ContainerEngine, "build",
 		"--build-arg", "VERSION="+version, "-t", PlaneImage, filepath.Join(root, "plane"))
@@ -326,7 +338,12 @@ func (a *App) loadImage() error {
 // planeSecrets bootstraps the plane's own secrets idempotently: the Postgres
 // password and the admin API bearer, both in the kaimahi namespace.
 //
-// This is scripts/plane-secrets.sh. Existing Secrets are KEPT — regenerating
+// This is scripts/plane-secrets.sh, with one deliberate difference: the
+// namespace is APPLIED from the embedded k8s/plane/namespace.yaml rather
+// than created bare, so it carries whatever that manifest carries and a
+// later `kmx plane` step cannot be the first thing to define it.
+//
+// Existing Secrets are KEPT — regenerating
 // the pg password under a live database would lock the proxy out — and the
 // generated values travel only through the pipe into kubectl. The script had
 // to write them to 0600 files first, because `kubectl create secret

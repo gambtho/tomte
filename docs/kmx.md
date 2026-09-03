@@ -86,7 +86,7 @@ swap plus a credential the agent cannot read past.
 | `kmx audit tool\|approval [<cred>]` | the enforcement points' audit trails |
 | `kmx status` | agents, modelconfigs and pods |
 | `kmx down` | delete the kind cluster kmx created |
-| `kmx version` | the pinned kagent and model versions |
+| `kmx version` | the pinned kagent and model versions, the plane's image tag, and the revision `kmx plane` would fetch it at |
 
 Reading, updating and deleting agents are not kmx's job — kubectl and the
 kagent CLI already do them, and `kmx agent list` says so and prints the
@@ -108,7 +108,7 @@ run.
 | `MODEL` | `qwen2.5:3b` | model pulled into Ollama |
 | `CHAT_PORT` | `8083` | local port for the controller forward |
 | `ADMIN_PORT` | `19091` | local port for the plane's admin forward |
-| `CRED` | `hello-world` | the credential `govern` issues and the reads default to |
+| `CRED` | `hello-world` | the credential `govern` issues, and the one `ledger` reads by default (`grants` and `audit` default to **all** credentials) |
 | `KAIMAHI_CONFIRM` | unset | confirm a non-kind context, by name |
 | `KMX_HOME` | `~/.config/kmx` | where the selected context and the cached kagent binary live |
 

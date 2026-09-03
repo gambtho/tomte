@@ -671,12 +671,14 @@ use-ollama: guard
 
 ifeq ($(TARGET),kind)
 ## plane: build + deploy the Kaimahi proxy and its Postgres ledger
-# kmx owns the kind path (D28): it builds the proxy image at its own
-# revision — from this checkout, because `--source .` is passed — bootstraps
-# the plane's secrets, applies k8s/plane/ UNRENDERED, and always restarts the
+# kmx owns the kind path (D28): it builds the proxy image, bootstraps the
+# plane's secrets, applies k8s/plane/ UNRENDERED, and always restarts the
 # proxy, since a rebuilt image under the same tag leaves the spec unchanged.
-# Passing the checkout is what keeps CI proving the code a PR changes rather
-# than whatever the public Go proxy last published.
+#
+# `--source .` is the load-bearing argument. Without it kmx FETCHES the plane
+# from the public Go proxy at its own revision, which is the right answer for
+# someone who has no clone and the wrong one here: a pull request that
+# changes plane/ must be proved against the code it changes.
 plane: $(KMX)
 	@$(KMX_ENV) $(KMX) plane --source .
 else

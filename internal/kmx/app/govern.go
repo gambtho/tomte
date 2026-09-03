@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/kaimahi-agents/kaimahi/internal/kmx/admin"
+	"github.com/kaimahi-agents/kaimahi/internal/kmx/config"
 )
 
 // GovernOptions are `kmx govern`'s knobs, defaulted to what `make govern`
@@ -72,8 +73,15 @@ func (a *App) Govern(credential string, opt GovernOptions) error {
 				return err
 			}
 		}
-		a.notef("NOTE: agent %s does not exist yet — it will be created governed once it is, because %s is now on the cluster",
-			opt.Agent, opt.Preset)
+		// Say what actually happens, not what would be reassuring. `kmx up`
+		// creates hello-world on the KEYLESS preset (k8s/hello-world.yaml
+		// pins it), so an agent created after this runs UNGOVERNED until
+		// govern is run again. The Makefile's managed branch says the same
+		// thing for the same reason.
+		a.notef("NOTE: agent %s does not exist yet, so nothing was switched. %s is on the cluster,\n"+
+			"  but an agent created later starts on the keyless preset %s — re-run\n"+
+			"  `kmx govern %s` once %s exists, or it will spend outside the plane.",
+			opt.Agent, opt.Preset, config.KeylessModelConfig, credential, opt.Agent)
 		return nil
 	default:
 		return fmt.Errorf("cannot tell whether agent %s exists (refusing to leave it ungoverned): %w", opt.Agent, err)
@@ -81,12 +89,31 @@ func (a *App) Govern(credential string, opt GovernOptions) error {
 }
 
 // issueCredential mints the credential and stores its token as the
-// agent-side Secret, reconciling the already-issued case exactly as
-// scripts/plane-admin.sh does.
+// agent-side Secret, reconciling the already-issued case as
+// scripts/plane-admin.sh does (minus its `GOVERNED_SECRET=-` form, which
+// discards the token for P7b's signed hooks — an inbound feature kmx does
+// not have).
 //
-// The token is shown EXACTLY ONCE, at issue time, and cannot be recovered —
-// which is what makes the 409 branch below more than politeness.
+// The token is shown EXACTLY ONCE, at issue time, and cannot be recovered.
+// That is what makes both the check before the POST and the 409 branch below
+// more than politeness.
 func (a *App) issueCredential(client *admin.Client, credential string, opt GovernOptions) error {
+	// Whose token is in that Secret? Asked BEFORE issuing, because the
+	// answer can forbid the whole operation: `kmx govern demo` while the
+	// Secret holds hello-world's token would otherwise mint demo's
+	// credential, overwrite the Secret, and destroy the only copy of
+	// hello-world's token — leaving a live credential nothing can use. The
+	// 409 branch refuses exactly this once the credential already exists;
+	// the first issue of a SECOND name has to refuse it too, and refusing
+	// before the POST also avoids leaving an orphan credential row behind.
+	bound, err := a.boundCredential(opt)
+	if err != nil {
+		return err
+	}
+	if bound != "" && bound != credential {
+		return a.wrongCredentialError(bound, credential, opt)
+	}
+
 	status, body, err := client.Do(http.MethodPost, "/admin/credentials", map[string]string{"name": credential})
 	if err != nil {
 		return err
@@ -126,16 +153,40 @@ func (a *App) issueCredential(client *admin.Client, credential string, opt Gover
 	return nil
 }
 
+// boundCredential returns the credential the agent-side Secret holds the
+// token for, or "" when there is no such Secret.
+//
+// Only a genuine NotFound is "no Secret". Any other read failure aborts: an
+// unreadable Secret answered as absent is how the overwrite this check
+// exists to prevent would happen anyway.
+func (a *App) boundCredential(opt GovernOptions) (string, error) {
+	bound, err := a.kubectlCapture("-n", opt.SecretNamespace, "get", "secret", opt.Secret,
+		"-o", `jsonpath={.metadata.annotations.kaimahi\.dev/credential}`)
+	if err != nil {
+		if isNotFound(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("cannot read Secret %s to tell whose token it holds (refusing to overwrite it blind): %w",
+			opt.Secret, err)
+	}
+	return strings.TrimSpace(bound), nil
+}
+
+func (a *App) wrongCredentialError(bound, credential string, opt GovernOptions) error {
+	return fmt.Errorf("Secret %s holds the token for credential %q, not %q — refusing.\n"+
+		"  That token is the only copy; overwriting it would leave %q live in the plane and unusable.\n"+
+		"  Name a different Secret: kmx govern %s --secret <name>",
+		opt.Secret, bound, credential, bound, credential)
+}
+
 // reconcileExistingCredential decides what an HTTP 409 means, given what the
 // agent-side Secret is bound to.
 func (a *App) reconcileExistingCredential(credential string, opt GovernOptions) error {
-	bound, err := a.kubectlCapture("-n", opt.SecretNamespace, "get", "secret", opt.Secret,
-		"-o", `jsonpath={.metadata.annotations.kaimahi\.dev/credential}`)
-	if err != nil && !isNotFound(err) {
-		return fmt.Errorf("credential %q already exists, and Secret %s cannot be read to tell whether it holds that credential's token: %w",
-			credential, opt.Secret, err)
+	bound, err := a.boundCredential(opt)
+	if err != nil {
+		return err
 	}
-	switch strings.TrimSpace(bound) {
+	switch bound {
 	case credential:
 		a.notef("Credential %q already issued and %s is bound to it; keeping both.", credential, opt.Secret)
 		return nil
@@ -147,8 +198,7 @@ func (a *App) reconcileExistingCredential(credential string, opt GovernOptions) 
 			"      psql -U kaimahi -c \"DELETE FROM credential WHERE name='%s'\"",
 			credential, opt.Secret, a.Cfg.KubeContext, admin.Namespace, credential)
 	default:
-		return fmt.Errorf("Secret %s holds the token for credential %q, not %q — refusing",
-			opt.Secret, bound, credential)
+		return a.wrongCredentialError(bound, credential, opt)
 	}
 }
 

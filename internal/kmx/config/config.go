@@ -1,8 +1,9 @@
 // Package config resolves kmx's settings.
 //
-// Every knob keeps the name the Makefile already uses — KIND_CLUSTER,
-// KUBE_CTX, CONTAINER_ENGINE, KAGENT_VERSION, MODEL, CHAT_PORT,
-// KAIMAHI_CONFIRM — so that the delegating make targets need to pass
+// Every knob keeps the name this repository already uses — KIND_CLUSTER,
+// KUBE_CTX, CONTAINER_ENGINE, KAGENT_VERSION, MODEL, CHAT_PORT, CRED and
+// KAIMAHI_CONFIRM from the Makefile, ADMIN_PORT from
+// scripts/plane-admin.sh — so that the delegating make targets need to pass
 // nothing: an operator's `KIND_CLUSTER=mine make up` and their
 // `KIND_CLUSTER=mine kmx up` are the same run. Where the Makefile has a
 // default, that default is repeated here verbatim; the two are pinned

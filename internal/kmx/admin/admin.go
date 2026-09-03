@@ -8,9 +8,15 @@
 //     `kubectl port-forward` to the pod — i.e. CLUSTER credentials gate every
 //     operation before the admin bearer token does. That ordering is the
 //     point, not an implementation detail.
-//   - The forward binds 127.0.0.1 explicitly. If the port is already taken,
-//     kubectl must FAIL rather than bind only the v6 side while requests go
-//     to whatever squats on the v4 loopback.
+//   - The forward binds 127.0.0.1 explicitly, and kmx waits for kubectl's own
+//     "Forwarding from" line before it sends anything. Both halves are
+//     load-bearing: the pin makes kubectl FAIL when the port is taken rather
+//     than bind only the v6 side, and the line is the only proof that the
+//     socket we are about to talk to is OURS. Probing /healthz first would
+//     have accepted a 200 from a stale forward to a DIFFERENT cluster — and
+//     then issued a credential in that plane while the Secret and the preset
+//     switch landed in this one. (`kmx agent chat` learned this the same way,
+//     against a real accident.)
 //   - Fail closed: every call checks for a well-formed positive, and no
 //     redirect is ever followed on an authenticated request.
 //   - Custody: the admin bearer token exists only in this process's memory.
@@ -28,7 +34,10 @@ import (
 	"net/http"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/kaimahi-agents/kaimahi/internal/kmx/run"
 )
 
 // Namespace is where the plane lives.
@@ -38,6 +47,15 @@ const Namespace = "kaimahi"
 // ADMIN_PORT, so a stale forward from either implementation is noticed by
 // the other rather than silently talked to.
 const DefaultPort = "19091"
+
+// The forward's readiness wait: the script's 150 × 0.2s, twice over (once
+// for kubectl's bind, once for the plane behind it). Variables rather than
+// constants so the tests can exercise the timeout paths without spending
+// half a minute on each.
+var (
+	pollAttempts = 150
+	pollInterval = 200 * time.Millisecond
+)
 
 // Kube is the sliver of kmx's kubectl plumbing this package needs. It is an
 // interface so the tests can watch every argument that would be passed to a
@@ -51,11 +69,11 @@ type Kube interface {
 
 // Client is an open admin session: a live port-forward plus the bearer.
 type Client struct {
-	base   string
-	token  string
-	http   *http.Client
-	pf     *exec.Cmd
-	stderr *bytes.Buffer
+	base  string
+	token string
+	http  *http.Client
+	pf    *exec.Cmd
+	log   *syncBuffer
 	// done closes when the forward's process exits, so a forward that dies
 	// immediately (the port is taken, the deployment is missing) is a
 	// failure in milliseconds rather than a 30-second wait.
@@ -88,13 +106,15 @@ func Open(k Kube, port string, log io.Writer) (*Client, error) {
 			Timeout:       60 * time.Second,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
-		stderr: &bytes.Buffer{},
+		log: &syncBuffer{},
 	}
 
 	// --address pins IPv4 explicitly; see the package comment.
 	c.pf = k.Command("-n", Namespace, "port-forward", "--address", "127.0.0.1",
 		"deploy/kaimahi-proxy", port+":9091")
-	c.pf.Stdout, c.pf.Stderr = io.Discard, c.stderr
+	// kubectl announces the bind on stdout and its failures on stderr; both
+	// are evidence, so both are kept.
+	c.pf.Stdout, c.pf.Stderr = c.log, c.log
 	if err := c.pf.Start(); err != nil {
 		return nil, fmt.Errorf("cannot port-forward to the plane's admin port: %w", err)
 	}
@@ -104,38 +124,69 @@ func Open(k Kube, port string, log io.Writer) (*Client, error) {
 		close(c.done)
 	}()
 
-	// 30s, polled like the script's 150 × 0.2s. A forward that dies (the
-	// port is taken, the deployment is missing) is noticed immediately
-	// rather than waited out.
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		if c.healthy() {
-			if log != nil {
-				fmt.Fprintf(log, "kubectl -n %s port-forward deploy/kaimahi-proxy %s:9091 # (the admin port is on no Service)\n",
-					Namespace, port)
-			}
-			return c, nil
-		}
-		if time.Now().After(deadline) {
-			break
+	// First: is this forward ours? Wait for kubectl to say it bound the
+	// port, and stop early if the process exits (the port is taken, the
+	// deployment is missing).
+	want := "Forwarding from 127.0.0.1:" + port
+	bound := run.Poll(pollAttempts, pollInterval, func() bool {
+		if strings.Contains(c.log.String(), want) {
+			return true
 		}
 		select {
 		case <-c.done:
-			// The forward exited. One more health check has already run
-			// above, so nothing was missed; stop waiting.
-			deadline = time.Now()
-		case <-time.After(200 * time.Millisecond):
+			return true // it exited; the check below reports the failure
+		default:
+			return false
 		}
+	})
+	if !bound || !strings.Contains(c.log.String(), want) {
+		c.Close()
+		return nil, fmt.Errorf("the admin port-forward never came up on 127.0.0.1:%s:\n  %s\n"+
+			"  Refusing to continue: if another cluster's forward holds this port, the\n"+
+			"  operation would have landed THERE. Use ADMIN_PORT=<free port>.",
+			port, c.detail())
 	}
-	c.Close()
-	detail := strings.TrimSpace(c.stderr.String())
-	if detail == "" {
-		detail = "no output from kubectl"
+
+	// Only then: is the plane answering behind it?
+	answered := run.Poll(pollAttempts, pollInterval, func() bool { return c.healthy() })
+	if !answered {
+		c.Close()
+		return nil, fmt.Errorf("the plane's admin API did not answer on the forward to 127.0.0.1:%s:\n  %s\n"+
+			"  The forward is up, so this is the proxy, not the port. Check `kubectl -n %s get pods`.",
+			port, c.detail(), Namespace)
 	}
-	return nil, fmt.Errorf("the admin port-forward never came up on 127.0.0.1:%s:\n  %s\n"+
-		"  Refusing to continue: if another cluster's forward holds this port, the\n"+
-		"  operation would have landed THERE. Use ADMIN_PORT=<free port>.",
-		port, strings.ReplaceAll(detail, "\n", "\n  "))
+	if log != nil {
+		fmt.Fprintf(log, "kubectl -n %s port-forward deploy/kaimahi-proxy %s:9091 # (the admin port is on no Service)\n",
+			Namespace, port)
+	}
+	return c, nil
+}
+
+// detail is kubectl's own output, indented for a multi-line error.
+func (c *Client) detail() string {
+	out := strings.TrimSpace(c.log.String())
+	if out == "" {
+		out = "no output from kubectl"
+	}
+	return strings.ReplaceAll(out, "\n", "\n  ")
+}
+
+// syncBuffer collects the forward's output while its goroutine writes it.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 func (c *Client) healthy() bool {

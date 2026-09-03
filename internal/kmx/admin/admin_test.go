@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeKube records every kubectl kmx would run, and stands in for the
@@ -22,7 +23,9 @@ import (
 type fakeKube struct {
 	token string
 	calls [][]string
-	sleep string
+	// forward is the shell command the fake kubectl runs in place of
+	// `port-forward`. A real one announces the bind on stdout and stays up.
+	forward string
 }
 
 func (f *fakeKube) Capture(args ...string) (string, error) {
@@ -32,15 +35,29 @@ func (f *fakeKube) Capture(args ...string) (string, error) {
 
 func (f *fakeKube) Command(args ...string) *exec.Cmd {
 	f.calls = append(f.calls, args)
-	// A stand-in for `kubectl port-forward`: something that stays running
-	// until Close kills it. The test server below is already listening on
-	// the port, so the health check succeeds exactly as it would through a
-	// real forward.
-	return exec.Command(f.sleep, "60")
+	// A stand-in for `kubectl port-forward`. The test server is already
+	// listening on the port, so once this announces the bind the health
+	// check succeeds exactly as it would through a real forward.
+	return exec.Command("sh", "-c", f.forward)
+}
+
+// forwarding is what a healthy `kubectl port-forward` does: announce the
+// bind, then stay up until it is killed.
+func forwarding(port string) string {
+	return "echo 'Forwarding from 127.0.0.1:" + port + " -> 9091'; exec sleep 60"
 }
 
 // freePort asks the kernel for a loopback port nothing is listening on, so
 // the "the forward never came up" path can be exercised for real.
+// impatient shortens the readiness wait, so a test that exercises a timeout
+// does not spend the real one on it.
+func impatient(t *testing.T) {
+	t.Helper()
+	attempts, interval := pollAttempts, pollInterval
+	pollAttempts, pollInterval = 3, time.Millisecond
+	t.Cleanup(func() { pollAttempts, pollInterval = attempts, interval })
+}
+
 func freePort(t *testing.T) string {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -68,12 +85,11 @@ func serve(t *testing.T, handler http.HandlerFunc) (*httptest.Server, string) {
 
 func open(t *testing.T, handler http.HandlerFunc) (*Client, *fakeKube) {
 	t.Helper()
-	sleep, err := exec.LookPath("sleep")
-	if err != nil {
-		t.Skip("no sleep binary to stand in for the port-forward")
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no shell to stand in for the port-forward")
 	}
 	_, port := serve(t, handler)
-	k := &fakeKube{token: "s3cret-admin-token", sleep: sleep}
+	k := &fakeKube{token: "s3cret-admin-token", forward: forwarding(port)}
 	c, err := Open(k, port, io.Discard)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -141,27 +157,57 @@ func TestTokensNeverLeaveTheProcess(t *testing.T) {
 	}
 }
 
-// A stale forward of somebody else's — or a plane that is not deployed —
-// must fail loudly. Silently talking to whatever holds the port is how an
-// operation lands on the wrong cluster.
-func TestOpenFailsClosedWhenTheForwardNeverComesUp(t *testing.T) {
-	sleep, err := exec.LookPath("sleep")
-	if err != nil {
-		t.Skip("no sleep binary")
+// A forward that never binds must fail loudly — and the interesting case is
+// not "nothing answers", it is "something answers".
+//
+// The port is the default for BOTH implementations, so a `make ledger` (or a
+// second kmx) against another cluster can be holding it. kubectl then dies
+// with "address already in use" while a perfectly healthy plane — somebody
+// else's — answers /healthz. Probing health first would accept that, and
+// `kmx govern` would issue the credential in THAT plane while the Secret and
+// the preset switch landed in this one. Waiting for kubectl's own
+// "Forwarding from" line is what makes the socket provably ours.
+func TestOpenRefusesAForwardThatIsNotOurs(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no shell")
 	}
+	// A healthy plane is listening on the port; our forward dies at once.
+	_, port := serve(t, health(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("a request was sent through somebody else's forward")
+	}))
+	k := &fakeKube{
+		token:   "t",
+		forward: "echo 'Unable to listen on port " + port + ": address already in use' >&2; exit 1",
+	}
+	c, err := Open(k, port, io.Discard)
+	if err == nil {
+		c.Close()
+		t.Fatal("Open accepted a port held by another cluster's forward")
+	}
+	if !strings.Contains(err.Error(), "never came up") {
+		t.Errorf("unexpected failure: %v", err)
+	}
+	// The refusal quotes kubectl, so the operator can see WHY.
+	if !strings.Contains(err.Error(), "address already in use") {
+		t.Errorf("the refusal drops kubectl's own explanation: %v", err)
+	}
+}
+
+// The forward is ours but the plane behind it is not answering: a different
+// failure, and it must say so rather than blame the port.
+func TestOpenSaysWhenThePlaneItselfIsSilent(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no shell")
+	}
+	impatient(t)
 	port := freePort(t)
-	k := &fakeKube{token: "t", sleep: sleep}
-	// Nothing is listening on the port and the "forward" exits at once.
-	k.sleep = "false"
-	if _, err := exec.LookPath("false"); err != nil {
-		t.Skip("no false binary")
-	}
+	k := &fakeKube{token: "t", forward: forwarding(port)}
 	c, err := Open(k, port, io.Discard)
 	if err == nil {
 		c.Close()
 		t.Fatal("Open succeeded with no admin API behind the forward")
 	}
-	if !strings.Contains(err.Error(), "never came up") {
+	if !strings.Contains(err.Error(), "did not answer") {
 		t.Errorf("unexpected failure: %v", err)
 	}
 }
@@ -169,7 +215,7 @@ func TestOpenFailsClosedWhenTheForwardNeverComesUp(t *testing.T) {
 // An empty kaimahi-admin Secret must not be read as an empty bearer that
 // then fails one call later with a confusing 401.
 func TestOpenRefusesAnEmptyAdminSecret(t *testing.T) {
-	k := &fakeKube{token: "  "}
+	k := &fakeKube{token: "  ", forward: "true"}
 	if _, err := Open(k, "19099", io.Discard); err == nil ||
 		!strings.Contains(err.Error(), "missing or empty") {
 		t.Fatalf("empty admin Secret: got %v", err)

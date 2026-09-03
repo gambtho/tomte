@@ -55,6 +55,14 @@ func TestVersionReadsBothStampings(t *testing.T) {
 			want: "v1.2.3",
 		},
 		{
+			// Shortening is for a 40-character sha, not for a version.
+			// Truncated to 12 this would read "v0.1.0-beta." and name no
+			// release at all.
+			name: "a long tag is not shortened into nonsense",
+			main: "v0.1.0-beta.1",
+			want: "v0.1.0-beta.1",
+		},
+		{
 			// A pre-release suffix is not a revision; taking the last field
 			// unconditionally would publish revision="rc1".
 			name: "a pre-release tag is not mistaken for a revision",

@@ -80,18 +80,25 @@ func (a *App) UsePreset(agent, preset string, apply []string) error {
 	if agentGenAfter == agentGen && presetGenAfter != presetGen {
 		a.notef("NOTE: preset %q changed while %s was already on it — waiting for kagent to cut a new revision (was %s)",
 			preset, agent, revBefore)
-		var last string
+		// A failed READ aborts, as the shell's `|| exit 1` did. Polling
+		// through it would spend 120s and then report a timeout, hiding the
+		// actual reason — and "the API server went away" is not "kagent is
+		// slow".
+		var readErr error
 		rolled := run.Poll(60, 2*time.Second, func() bool {
 			rev, err := a.deploymentRevision(agent)
 			if err != nil {
-				return false
+				readErr = err
+				return true
 			}
-			last = rev
 			return newer(rev, revBefore)
 		})
+		if readErr != nil {
+			return readErr
+		}
 		if !rolled {
 			return fmt.Errorf("deploy/%s: revision still %s after 120s — kagent did not roll for the changed preset; refusing to call it switched",
-				agent, last)
+				agent, revBefore)
 		}
 	}
 
@@ -131,15 +138,21 @@ func (a *App) waitSwitched(agent string) error {
 	// Wait until the only pod carrying the agent's label is on the new
 	// template.
 	var last string
+	var readErr error
 	single := run.Poll(60, 2*time.Second, func() bool {
 		pods, err := a.kubectlCapture("-n", config_kagentNamespace, "get", "pods", "-l", "kagent="+agent,
 			"-o", `jsonpath={range .items[*]}{.metadata.labels.pod-template-hash}{"\n"}{end}`)
 		if err != nil {
-			return false
+			// The shell aborted here too (`pods=$(...) || exit 1`).
+			readErr = fmt.Errorf("cannot list deploy/%s's pods while waiting for the switch: %w", agent, err)
+			return true
 		}
 		last = strings.TrimSpace(pods)
 		return last == hash
 	})
+	if readErr != nil {
+		return readErr
+	}
 	if !single {
 		a.notef("deploy/%s: still not exactly one pod on template %s after 120s (saw %q):", agent, hash, last)
 		_ = a.kubectlRun("-n", config_kagentNamespace, "get", "pods", "-l", "kagent="+agent, "-o", "wide")

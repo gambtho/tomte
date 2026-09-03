@@ -252,15 +252,19 @@ func versionFrom(mainVersion string, settings []debug.BuildSetting) string {
 		}
 	}
 	// A VCS stamping wins: it is the more direct statement, and it is the
-	// only one that can also say the tree was dirty.
-	if rev == "" {
+	// only one that can also say the tree was dirty. It is a full 40-char
+	// sha, so it is shortened; a MODULE VERSION is not, and must not be —
+	// truncating "v0.1.0-beta.1" to 12 characters would publish
+	// "v0.1.0-beta." and name no release at all.
+	if rev != "" {
+		if len(rev) > 12 {
+			rev = rev[:12]
+		}
+	} else {
 		rev = revisionFromModuleVersion(mainVersion)
 	}
 	if rev == "" {
 		return "unknown"
-	}
-	if len(rev) > 12 {
-		rev = rev[:12]
 	}
 	if dirty {
 		rev += "-dirty"

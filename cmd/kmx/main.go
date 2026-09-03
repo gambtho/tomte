@@ -1,10 +1,10 @@
-// Command kmx is one entry point for the developer journey this repository
-// has shipped since P1: a cluster, a model, kagent, two agents, a
-// conversation — and the same journey CI runs, because the Makefile now
-// delegates to this binary rather than keeping a second copy of it.
+// Command kmx is one entry point for the journey this repository has shipped
+// since P1: a cluster, a model, kagent, two agents, a conversation, the
+// governance plane in front of them — and the same journey CI runs, because
+// the Makefile's kind path delegates to this binary rather than keeping a
+// second copy of it.
 //
-// Install (the only install path in milestone 1 — nothing is published,
-// D26/D27):
+// Install (the only install path — nothing is published, D26/D27/D28):
 //
 //	go install github.com/kaimahi-agents/kaimahi/cmd/kmx@<sha>
 //
@@ -12,7 +12,8 @@
 // `kagent invoke`, and the pinned kagent binary is fetched and
 // checksum-verified exactly as the Makefile fetches it. What kmx owns is the
 // part kagent's CLI does not: bringing up this project's cluster, this
-// project's model and agents, and doing it behind a context guard.
+// project's model and agents, putting them behind this project's governance
+// plane, and doing all of it behind a context guard.
 package main
 
 import (
@@ -49,7 +50,7 @@ COMMANDS
 GLOBAL FLAGS
   --context <name>   act on this kube context for one command (beats KUBE_CTX)
 
-ENVIRONMENT (the Makefile's names, with the Makefile's defaults)
+ENVIRONMENT (the names the Makefile and the scripts already use)
   KIND_CLUSTER      cluster to create/delete            (kaimahi-p1)
   KUBE_CTX          context to act on                   (kind-$KIND_CLUSTER)
   CONTAINER_ENGINE  docker | podman                     (docker)
@@ -57,7 +58,7 @@ ENVIRONMENT (the Makefile's names, with the Makefile's defaults)
   MODEL             model pulled into Ollama            (qwen2.5:3b)
   CHAT_PORT         local port for the controller       (8083)
   ADMIN_PORT        local port for the plane's admin    (19091)
-  CRED              credential govern issues, reads use (hello-world)
+  CRED              credential govern issues, ledger reads  (hello-world)
   KAIMAHI_CONFIRM   confirm a non-kind context by name  (unset)
 
 NOT IN THIS MILESTONE
