@@ -1,0 +1,190 @@
+name: release
+
+# The tag is the source of truth. Everything below is derived from it: the
+# version the binaries report, the notes, and whether this is a pre-release.
+#
+# Keyless, like the rest of this project's CI (D14). The only credential is
+# the GITHUB_TOKEN GitHub mints for the run, scoped to `contents: write`
+# because creating a release IS a write to this repository's contents. No
+# repository secret is added, and none is needed: nothing is pushed to a
+# package registry, a container registry or a Homebrew tap.
+on:
+  push:
+    tags: ["v*"]
+  # The same build, published nowhere — how the release path is exercised
+  # from a branch before a tag exists (and how a broken release job is
+  # debugged without burning a version number).
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to stamp for a dry run (a real tag is never needed)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      # Creating the release. Nothing else is written.
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The plane-tag check below needs the tags, and the build needs
+          # clean VCS stamping — a shallow checkout gives both as long as
+          # tags come with it.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Decide what is being built
+        id: what
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$REF_TYPE" = tag ]; then
+            version="$REF_NAME"
+            dry_run=false
+          else
+            version="${INPUT_VERSION:-v0.0.0-dryrun.${SHA:0:12}}"
+            dry_run=true
+          fi
+          # Semantic, pre-1.0, `v`-prefixed: what `go install …@<version>`
+          # and the Go module proxy accept. A tag this pattern does not
+          # match must not produce binaries claiming to be a version.
+          if ! printf '%s' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "refusing to build '$version': not a semantic v<major>.<minor>.<patch>[-prerelease] version" >&2
+            exit 1
+          fi
+          prerelease=false
+          case "$version" in *-*) prerelease=true ;; esac
+          echo "version=$version"     >> "$GITHUB_OUTPUT"
+          echo "dry_run=$dry_run"     >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          echo "building $version (dry_run=$dry_run, prerelease=$prerelease)"
+
+      # The plane is a SEPARATE Go module (plane/), and Go resolves a nested
+      # module's version from a `plane/`-prefixed tag. A kmx installed with
+      # `go install …/cmd/kmx@v0.1.0` fetches the plane at v0.1.0 — which
+      # resolves to the tag `plane/v0.1.0`. Without that tag, `kmx plane`
+      # fails for every user of this release and there is no way to fix it
+      # after the fact except a new version. Refuse to publish first.
+      - name: The plane's module tag exists, at this same commit
+        if: steps.what.outputs.dry_run == 'false'
+        env:
+          VERSION: ${{ steps.what.outputs.version }}
+        run: |
+          set -euo pipefail
+          plane_tag="plane/$VERSION"
+          if ! git rev-parse -q --verify "refs/tags/$plane_tag" >/dev/null; then
+            echo "missing tag '$plane_tag'." >&2
+            echo "  \`kmx plane\` on this release would run: go install .../plane/cmd/kaimahi-proxy@$VERSION" >&2
+            echo "  which Go resolves through that tag. Tag the same commit and push it:" >&2
+            echo "    git tag $plane_tag $VERSION && git push origin $plane_tag" >&2
+            exit 1
+          fi
+          want=$(git rev-parse "$VERSION^{commit}")
+          got=$(git rev-parse "$plane_tag^{commit}")
+          if [ "$want" != "$got" ]; then
+            echo "'$plane_tag' points at $got but '$VERSION' points at $want — the binary and the plane would be different code" >&2
+            exit 1
+          fi
+          echo "$plane_tag -> $got, same commit as $VERSION"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # Notes come from CHANGELOG.md and the extraction fails when the
+      # section is missing, so a version cannot be published undocumented.
+      - name: Release notes exist for this version
+        env:
+          VERSION: ${{ steps.what.outputs.version }}
+        run: |
+          set -euo pipefail
+          python3 scripts/release-notes.py "$VERSION" | tee release-notes.md
+          test -s release-notes.md
+
+      - name: Build the binaries
+        env:
+          VERSION: ${{ steps.what.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          # Platforms, and why exactly these: kmx drives a Linux container
+          # runtime (kind), so the machine running it is a Linux host or a
+          # Mac running one in a VM — amd64 and arm64 cover both, and are
+          # the same four platforms the pinned kagent CLI publishes, which
+          # kmx downloads for the SAME machine. Windows is served through
+          # WSL, which is linux/amd64; a native windows/amd64 build would
+          # be an untested claim, not a platform.
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            goos="${target%/*}"; goarch="${target#*/}"
+            out="dist/kmx-$goos-$goarch"
+            echo "building $out"
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
+              go build -trimpath \
+                -ldflags "-s -w -X github.com/kaimahi-agents/kaimahi/internal/kmx/version.Tag=$VERSION" \
+                -o "$out" ./cmd/kmx
+          done
+          ls -l dist
+
+      # The binary must say what it is. This is the assertion the whole lane
+      # exists for, and it runs on the actual artifact — the runner is
+      # linux/amd64, so that is the one that can be executed here.
+      - name: The released binary reports its own version
+        env:
+          VERSION: ${{ steps.what.outputs.version }}
+        run: |
+          set -euo pipefail
+          got=$(./dist/kmx-linux-amd64 version | head -1)
+          echo "$got"
+          test "$got" = "kmx $VERSION (release build)"
+
+      - name: Checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          # Names only, no directory component: the file is meant to be
+          # downloaded next to the binary and checked with
+          # `sha256sum --ignore-missing -c checksums.txt`, which is what
+          # docs/releases.md tells an adopter to run. (The kagent CLI's own
+          # .sha256 files carry the BUILDER's path, and kmx has to parse
+          # around it — internal/kmx/kagentcli. Do not repeat that here.)
+          sha256sum kmx-* > checksums.txt
+          cat checksums.txt
+          # Prove the instruction in the docs actually works, here, before
+          # anyone downloads anything.
+          sha256sum --ignore-missing -c checksums.txt
+
+      - name: Publish the release
+        if: steps.what.outputs.dry_run == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.what.outputs.version }}
+          PRERELEASE: ${{ steps.what.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          flags=(--title "$VERSION" --notes-file release-notes.md --verify-tag)
+          if [ "$PRERELEASE" = true ]; then flags+=(--prerelease); fi
+          gh release create "$VERSION" "${flags[@]}" dist/kmx-* dist/checksums.txt
+
+      # A dry run publishes nothing; the artifacts are how its output is
+      # inspected (and how a clean machine can be handed the exact bytes a
+      # release would have contained).
+      - name: Upload the dry-run artifacts
+        if: steps.what.outputs.dry_run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: kmx-${{ steps.what.outputs.version }}
+          path: dist/
+          if-no-files-found: error
