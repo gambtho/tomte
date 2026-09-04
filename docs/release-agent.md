@@ -294,8 +294,24 @@ Note that the hosted server's tool schema is not the local server's:
 schema from a live `tools/list` before declaring policy fields against a
 hosted server, rather than from the repository behind it.
 
-**The cost, stated where it will be met:** an access token lives about an
-hour. A release session begins by refreshing it. The seam does not break
+**The cost, and it is larger than it looks:** an access token lives about
+an hour, and a release session is longer than that. On the first real run
+it expired twice. Each time the visible symptom was the agent reporting
+*"there is no pipelines_build tool in my toolset"* — because the seam had
+gone `Accepted=False` with `Unauthorized`, and kagent had dropped its
+tools. The cause and the symptom are nowhere near each other, and nothing
+in the message points at a credential.
+
+Two things follow. `scripts/release-run.sh` **refreshes the token itself**
+before every step that touches Azure DevOps: it runs on the operator's
+machine, `az` is already there, and the gateway reads the credential file
+per request so no restart is needed. And it checks the seam's `Accepted`
+condition first, so an expired credential says so instead of arriving as
+a missing tool.
+
+The deeper fix is not here: the plane holds a captured bearer and has no
+way to renew one. A credential that outlives a human approval cycle needs
+the plane to refresh it, which is a capability this lane did not build. The seam does not break
 when it dies — the server answers 401, the gateway audits it, nothing is
 half-done — but it is real friction, and P16's credential deadlines exist
 for the same reason.

@@ -115,6 +115,55 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 admin() { bash "$here/plane-admin.sh" "$@"; }
+
+# refresh_ado — put a FRESH Azure DevOps token into plane custody.
+#
+# The credential is an Entra access token and it lives about an hour. A
+# release session is longer than that: on the first real run it expired
+# twice, and each time the visible symptom was the agent saying "there is
+# no pipelines_build tool in my toolset" — because the seam had gone
+# Accepted=False with Unauthorized and kagent had dropped its tools. The
+# cause and the symptom are nowhere near each other.
+#
+# So the driver refreshes it rather than asking a person to. It runs on
+# the operator's machine, `az` is already there, and the gateway reads
+# the credential file per request, so no restart is needed — only the
+# kubelet's projection delay. Capturing a credential is otherwise a
+# human's job here (D27); this is the same capture, done on the
+# operator's behalf at the moment it is needed, with the token never
+# leaving a pipe.
+refresh_ado() {
+  [ -n "$ado_org" ] || return 0
+  command -v az >/dev/null || { note "az not found — leaving the Azure DevOps token as it is"; return 0; }
+  local tok; tok=$(mktemp); trap 'rm -f "$tok"' RETURN
+  if ! az account get-access-token --scope https://mcp.dev.azure.com/.default \
+        --query accessToken -o tsv > "$tok" 2>/dev/null || [ ! -s "$tok" ]; then
+    note "could not mint an Azure DevOps token; the stored one stays in place"
+    return 0
+  fi
+  $KUBECTL -n kaimahi create secret generic kaimahi-ado-token --from-file=token="$tok" \
+    --dry-run=client -o yaml | $KUBECTL apply -f - >/dev/null
+  note "Azure DevOps token refreshed in plane custody."
+}
+
+# ado_seam_ok — say what is actually wrong, rather than letting it reach
+# the operator as "the agent has no such tool".
+ado_seam_ok() {
+  [ -n "$ado_org" ] || return 0
+  local msg
+  msg=$($KUBECTL -n kagent get remotemcpserver kaimahi-release-ado \
+    -o jsonpath='{range .status.conditions[?(@.type=="Accepted")]}{.status}|{.message}{end}' 2>/dev/null || true)
+  case "$msg" in
+    True*) return 0 ;;
+    *Unauthorized*)
+      fail "the Azure DevOps seam is refusing to authenticate:
+    $msg
+  That is the credential, not the tools. Re-run — the driver refreshes it —
+  or capture one by hand: make ado-secret ADO_ORG=$ado_org" ;;
+    "") note "the Azure DevOps seam is not deployed; skipping its health check" ;;
+    *) fail "the Azure DevOps seam is not accepted: $msg" ;;
+  esac
+}
 step()  { printf '\n\033[1m== %s\033[0m\n' "$*" >&2; }
 note()  { printf '   %s\n' "$*" >&2; }
 fail()  { printf '\nrelease-run: %s\n' "$*" >&2; exit 1; }
@@ -288,6 +337,7 @@ do_build() {
       "actions_run_trigger: method run_workflow, owner $owner, repo $name, workflow_id $wf, ref $branch" \
 "Call actions_run_trigger with method run_workflow, owner $owner, repo $name, workflow_id $wf, ref $branch. Make exactly that one call and report what the tool returned."
   done
+  refresh_ado
   for pid in $ado_pipelines; do
     [ -n "$pid" ] || continue
     consequential pipelines_write \
@@ -359,6 +409,7 @@ do_publish() {
 # the agent's prompt verbatim.
 do_watch() {
   [ -n "$gh_workflows$ado_pipelines" ] || { note "nothing to watch"; return 0; }
+  refresh_ado
   step "Watching the builds (up to ${WATCH_TIMEOUT}s, every ${WATCH_POLL}s)"
   local deadline=$(( $(date +%s) + WATCH_TIMEOUT )) n=0
   while [ "$(date +%s)" -lt "$deadline" ]; do
@@ -404,6 +455,13 @@ if [ -n "$ado_pipelines" ] && ! $KUBECTL -n kaimahi get secret kaimahi-ado-token
   fail "Azure DevOps pipelines were asked for, but Secret kaimahi/kaimahi-ado-token is missing.
   Run: make ado-secret ADO_ORG=<organization>   (that token lives about an hour)"
 fi
+
+# A fresh credential before any of it: the expiry is shorter than the
+# process, so refreshing once at the start is not enough either — every
+# ADO-touching step re-checks below.
+refresh_ado
+sleep "${ADO_PROJECTION_WAIT:-8}"
+ado_seam_ok
 
 case "$STEP" in
   propose) do_propose ;;
