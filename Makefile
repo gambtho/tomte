@@ -222,7 +222,7 @@ AP_HUMAN       ?= 0
 	govern-github github-allow github-audit github-ask github-down \
 	erp erp-image erp-fixtures govern-ap ap-allow ap-audit ap-ask ap-demo ap-injection ap-down \
 	release-secret ado-secret release-revoke govern-release release-allow \
-	release-bind release release-audit release-down
+	release-bind release release-audit release-down release-refresh
 
 # guard: the context-safety net every MUTATING target depends on. Prints
 # the target context/namespaces; demands explicit confirmation for
@@ -1467,6 +1467,19 @@ release: guard
 		ADO_ARTIFACTS='$(ADO_ARTIFACTS)' ASSET_GLOBS='$(ASSET_GLOBS)' \
 		SLACK_USER='$(SLACK_USER)' DRY_RUN='$(DRY_RUN)' STEP='$(STEP)' \
 		RELEASE_CHAT='make chat AGENT=release-agent TARGET=$(TARGET) KIND_CLUSTER=$(KIND_CLUSTER)' \
+		bash scripts/release-run.sh
+
+## release-refresh: re-mint the Azure DevOps token into plane custody and
+## reconnect the seam. `make release` does this itself; this target is for
+## everything else — a bare `make chat` against the release agent does NOT
+## refresh, and an expired token reaches you as "the agent has no such
+## tool" rather than as an expired token.
+##   make release-refresh ADO_ORG=<organization>
+release-refresh: guard
+	@test -n "$(ADO_ORG)" || \
+		{ echo 'usage: make release-refresh ADO_ORG=<organization>' >&2; exit 1; }
+	@KUBECTL="$(KUBECTL)" CRED_RELEASE=$(CRED_RELEASE) ADO_ORG='$(ADO_ORG)' \
+		STEP=refresh GITHUB_REPO=placeholder/placeholder VERSION=v0 \
 		bash scripts/release-run.sh
 
 ## release-audit: the release credential's tool-call audit trail

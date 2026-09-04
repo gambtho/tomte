@@ -486,7 +486,7 @@ if [ "$DRY_RUN" = 1 ]; then
   note "DRY_RUN=1 — the agent will read and draft, and stop before the first"
   note "consequential call. Nothing will be created."
 fi
-for secret in kaimahi-release-pat; do
+[ "$STEP" = refresh ] || for secret in kaimahi-release-pat; do
   $KUBECTL -n kaimahi get secret "$secret" >/dev/null 2>&1 \
     || fail "Secret kaimahi/$secret is missing — run: make release-secret GITHUB_REPO=$repo"
 done
@@ -507,6 +507,9 @@ case "$STEP" in
   build)   do_build ;;
   watch)   do_watch ;;
   publish) do_propose; do_publish ;;
+  # Nothing but the credential refresh and the seam check above, which
+  # every step already ran by the time we get here.
+  refresh) note "Azure DevOps credential refreshed and the seam is connected." ;;
   all)
     do_propose
     if [ "$DRY_RUN" = 1 ]; then
@@ -518,7 +521,7 @@ case "$STEP" in
     do_watch
     [ -z "$ado_builds" ] || do_publish
     ;;
-  *) fail "unknown STEP '$STEP' (want propose, cut, build, watch, publish or all)" ;;
+  *) fail "unknown STEP '$STEP' (want propose, cut, build, watch, publish, refresh or all)" ;;
 esac
 
 step "The record: every decision this credential got"
