@@ -97,10 +97,29 @@ matches_glob() {
 # A token minted NOW, not one captured at the start of the session. The
 # transfer takes minutes and the plane's stored token lives about an
 # hour; this step is the one that would meet that deadline.
-step "Minting an Azure DevOps token for the transfer"
-az account get-access-token --scope https://mcp.dev.azure.com/.default \
+#
+# AND FOR THE RIGHT RESOURCE. This talks to the Azure DevOps REST API at
+# dev.azure.com, which is NOT the resource the MCP server is
+# (https://mcp.dev.azure.com). A token minted for the MCP scope is
+# refused here — as a 302 to a sign-in page rather than a 401, which is
+# how it presented the first time and is worth recognising: an HTML
+# redirect where JSON was expected means the token was not accepted, not
+# that the URL was wrong.
+#
+# ADO_API_SCOPE overrides. The default is the Azure DevOps resource's URI
+# form; if your tenant only accepts the application-id form, pass it —
+# that identifier is not committed here, because this repository refuses
+# to carry Azure identifiers even public ones
+# (scripts/check-no-azure-ids.sh).
+ADO_API_SCOPE="${ADO_API_SCOPE:-https://app.vssps.visualstudio.com/.default}"
+step "Minting an Azure DevOps API token for the transfer"
+az account get-access-token --scope "$ADO_API_SCOPE" \
   --query accessToken -o tsv > "$work/ado.tok" 2>"$work/ado.err" || {
-  cat "$work/ado.err" >&2; echo 'could not mint an Azure DevOps token' >&2; exit 1; }
+  cat "$work/ado.err" >&2
+  echo "could not mint a token for $ADO_API_SCOPE" >&2
+  echo 'Pass ADO_API_SCOPE=<azure devops application id>/.default if your tenant' >&2
+  echo 'wants the application-id form instead of the resource URI.' >&2
+  exit 1; }
 test -s "$work/ado.tok" || { echo 'az returned an empty token' >&2; exit 1; }
 { printf 'Authorization: Bearer '; cat "$work/ado.tok"; printf '\n'; } > "$work/ado.hdr"
 
@@ -116,6 +135,13 @@ for b in "${builds[@]}"; do
     -o "$work/arts-$b.json" -w '%{http_code}' \
     "$api/build/builds/$b/artifacts?api-version=7.1" > "$work/status" || true
   status=$(cat "$work/status")
+  if [ "$status" = 302 ] || [ "$status" = 401 ]; then
+    echo "the Azure DevOps REST API refused this token (HTTP $status)." >&2
+    echo "The token was minted for $ADO_API_SCOPE, which is not the resource" >&2
+    echo "dev.azure.com accepts. Re-run with ADO_API_SCOPE set to the Azure" >&2
+    echo "DevOps resource your tenant issues for (its URI or application-id form)." >&2
+    exit 1
+  fi
   [ "$status" = 200 ] || { echo "listing artifacts for build $b answered HTTP $status" >&2
                            head -c 300 "$work/arts-$b.json" >&2; exit 1; }
   ADO_ARTIFACTS="$ado_artifacts" python3 - "$work/arts-$b.json" "$b" >> "$work/plan" <<'EOF'
