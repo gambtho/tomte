@@ -91,15 +91,19 @@ func (a *App) ShowWorkflow(name string, opt WorkflowOptions) error {
 	if err != nil {
 		return err
 	}
-	values, err := b.Bind(opt.Set, b.StepNames())
+	// No step list: `show` runs nothing, so a parameter a STEP would need
+	// is not demanded here. That matters for the release workflow, whose
+	// build ids do not exist until its build step has run — being unable
+	// to look at the shape of a workflow until you have values you can
+	// only get by running it would be a poor way in.
+	values, err := b.Bind(opt.Set, nil)
 	if err != nil {
-		// A `show` with no parameters is a legitimate thing to want: it
-		// is how an operator finds out what the parameters ARE. So the
-		// problems are printed and the shape is still described.
+		// A `show` with no parameters at all is a legitimate thing to
+		// want: it is how an operator finds out what the parameters ARE.
 		fmt.Fprintf(a.Out, "%s\n\n%s\n\n%v\n\n", b.Name, b.Summary, err)
 		return a.describeParameters(b)
 	}
-	r, err := b.Render(values, b.StepNames(), nil)
+	r, err := b.RenderForReview(values, nil)
 	if err != nil {
 		return err
 	}
@@ -132,11 +136,17 @@ func (a *App) ShowWorkflow(name string, opt WorkflowOptions) error {
 	for _, s := range r.Steps {
 		fmt.Fprintf(a.Out, "  %-28s %-14s", s.Label, s.Kind)
 		switch {
+		case s.Blocked != "":
+			fmt.Fprintf(a.Out, "(needs more: %s)\n", s.Blocked)
 		case s.Tool != "":
 			fmt.Fprintf(a.Out, "%s\n", s.Summary())
 		default:
 			fmt.Fprintf(a.Out, "an agent turn\n")
 		}
+	}
+	fmt.Fprintf(a.Out, "\n")
+	if err := a.describeParameters(b); err != nil {
+		return err
 	}
 
 	// The ungoverned steps get their own section rather than a line in
@@ -199,7 +209,11 @@ func (a *App) GovernWorkflow(name string, opt WorkflowOptions) error {
 	if err != nil {
 		return err
 	}
-	values, err := b.Bind(opt.Set, b.StepNames())
+	// The GOVERNANCE is the seams' allowlist and bounds; it uses no
+	// parameter that only a step needs. Demanding those here would make
+	// an operator supply a build id to set up a workflow that has not
+	// run yet.
+	values, err := b.Bind(opt.Set, nil)
 	if err != nil {
 		return err
 	}
@@ -237,7 +251,7 @@ func (a *App) GovernWorkflow(name string, opt WorkflowOptions) error {
 		// and render again with the table's declared ORDER — which is
 		// what the audit summary reads and therefore what the driver
 		// will have to match a pending request on.
-		r, err := b.Render(values, b.StepNames(), nil)
+		r, err := b.Render(values, nil, nil)
 		if err != nil {
 			return err
 		}
@@ -260,7 +274,7 @@ func (a *App) GovernWorkflow(name string, opt WorkflowOptions) error {
 		if err := checkSeams(b, upstreams, declared); err != nil {
 			return err
 		}
-		rendered, err = b.Render(values, b.StepNames(), declared)
+		rendered, err = b.Render(values, nil, declared)
 		return err
 	}); err != nil {
 		return err

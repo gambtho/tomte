@@ -68,6 +68,10 @@ type RenderedStep struct {
 	Exec       *RenderedExec
 	Poll       *PollSpec
 	OnFailure  string
+	// Blocked says why this step could not be resolved, and is set only
+	// by RenderForReview. A run never sees one: `kmx workflow run`
+	// refuses at Bind rather than starting a workflow it cannot finish.
+	Blocked string
 }
 
 // RenderedExec is an action on the operator's machine, resolved.
@@ -85,7 +89,24 @@ type RenderedExec struct {
 // /admin/config/validate); pass nil to render without a cluster, in which
 // case the blueprint's own `requires` is used and Check must be run
 // before anything is applied.
+// RenderForReview is Render for `kmx workflow show`, which is asked
+// BEFORE an operator knows every value — the release workflow's build
+// ids do not exist until its build step has run. A step that cannot be
+// resolved is marked `Blocked` and described, instead of taking the
+// whole render down and leaving the operator with no way to see the
+// shape of the thing they are being asked to supply values for.
+func (b *Blueprint) RenderForReview(v Values, declared map[string][]string) (*Rendered, error) {
+	r, err := b.render(v, b.StepNames(), declared, true)
+	return r, err
+}
+
+// Render resolves a blueprint against parameters and the steps that will
+// run. An unresolved reference is an error: nothing runs half-resolved.
 func (b *Blueprint) Render(v Values, steps []string, declared map[string][]string) (*Rendered, error) {
+	return b.render(v, steps, declared, false)
+}
+
+func (b *Blueprint) render(v Values, steps []string, declared map[string][]string, review bool) (*Rendered, error) {
 	r := &Rendered{Blueprint: b, Values: v, Constraints: map[string]map[string][]RenderedConstraint{}}
 
 	allow := map[string]bool{}
@@ -128,11 +149,27 @@ func (b *Blueprint) Render(v Values, steps []string, declared map[string][]strin
 			continue
 		}
 		if s.When != "" && !v.Supplied(s.When) {
+			// In a run, a step whose condition is unmet simply does not
+			// happen. In a review it still has to be VISIBLE: an
+			// operator deciding whether to trust a workflow needs to see
+			// the steps they have not enabled, not a shorter list.
+			if review {
+				r.Steps = append(r.Steps, RenderedStep{
+					Name: s.Name, Kind: s.Kind, Label: s.Name,
+					Blocked: "not in this run — needs --set " + s.When,
+				})
+			}
 			continue
 		}
 		expanded, err := r.renderStep(s, declared)
 		if err != nil {
-			return nil, err
+			if !review {
+				return nil, err
+			}
+			r.Steps = append(r.Steps, RenderedStep{
+				Name: s.Name, Kind: s.Kind, Label: s.Name, Blocked: err.Error(),
+			})
+			continue
 		}
 		r.Steps = append(r.Steps, expanded...)
 	}
