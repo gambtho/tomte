@@ -276,8 +276,12 @@ func (a *App) GovernWorkflow(name string, opt WorkflowOptions) error {
 	// somebody tightened by hand would take away the operator's own
 	// escape hatch. So: identical is a no-op, different is refused with
 	// the diff, and --replace is a deliberate act.
+	unchanged := false
 	switch existing, present := fragments[key]; {
 	case present && sameJSON(existing, fragment):
+		// Writing the identical bytes back would still roll the proxy,
+		// which is a real outage window spent on a no-op.
+		unchanged = true
 		a.notef("The standing bounds on the cluster are already exactly these; nothing to write.")
 	case present && !opt.Replace:
 		diff, derr := jsonDiff(existing, fragment)
@@ -296,7 +300,7 @@ func (a *App) GovernWorkflow(name string, opt WorkflowOptions) error {
 		return err
 	}
 
-	if fragment != "" {
+	if fragment != "" && !unchanged {
 		if err := a.writeOverlayFragment(key, fragment, version); err != nil {
 			return err
 		}
@@ -314,12 +318,28 @@ func (a *App) GovernWorkflow(name string, opt WorkflowOptions) error {
 	}
 
 	a.notef("")
+	seams := sortedSeamNames(b)
+	verb := "is"
+	if len(seams) != 1 {
+		verb = "are"
+	}
 	a.notef("Workflow %q is governed. What is NOT governed, and this command did not do:", b.Name)
-	a.notef("  - the seams themselves. %s are in the plane's committed table; a blueprint names them.",
-		strings.Join(sortedSeamNames(b), " and "))
+	pronoun := "it"
+	if len(seams) != 1 {
+		pronoun = "them"
+	}
+	a.notef("  - the seams themselves. %s %s already in the plane's table; a blueprint names %s.",
+		strings.Join(seams, " and "), verb, pronoun)
 	a.notef("  - the credential %q and its Secret. That is `kmx tools govern`.", b.Credential)
 	a.notef("  - any credential material at all (D27).")
-	a.notef("Run it with: kmx workflow run %s --dry-run …", b.Name)
+	// Named the way the operator named it: a `--file` blueprint has no
+	// name kmx can resolve, and telling them to type one that will not
+	// work is worse than saying nothing.
+	how := b.Name
+	if opt.File != "" {
+		how = "--file " + opt.File
+	}
+	a.notef("Run it with: kmx workflow run %s --dry-run …", how)
 	return nil
 }
 
@@ -380,6 +400,7 @@ func (a *App) validateWorkflowOverlay(c *admin.Client, fragments map[string]stri
 		Error         string              `json:"error"`
 		ToolUpstreams []string            `json:"tool_upstreams"`
 		Declared      map[string][]string `json:"declared"`
+		TableDeclared map[string][]string `json:"table_declared"`
 	}
 	_ = json.Unmarshal(out, &resp)
 	if status != 200 || !resp.OK {
@@ -389,7 +410,17 @@ func (a *App) validateWorkflowOverlay(c *admin.Client, fragments map[string]stri
 		}
 		return nil, nil, fmt.Errorf("the plane refused this governance — nothing has been applied:\n  %s", msg)
 	}
-	return resp.ToolUpstreams, resp.Declared, nil
+	// `declared` answers only about the submitted overlay — the endpoint
+	// was built for `kmx tools add`, which is onboarding the tools it is
+	// asking about. A blueprint NAMES seams it did not define, so the
+	// question it needs answered is about the whole merged table.
+	if resp.TableDeclared == nil {
+		return nil, nil, fmt.Errorf("this plane does not report the policy fields of its merged upstream table, " +
+			"so a blueprint's `requires` cannot be checked against it — and applying one unchecked would bind " +
+			"whatever happened to be configured.\n" +
+			"  The plane is older than this kmx. Upgrade it:\n    kmx plane")
+	}
+	return resp.ToolUpstreams, resp.TableDeclared, nil
 }
 
 // writeOverlayFragment sets ONE key with a merge patch, never a

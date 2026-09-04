@@ -169,6 +169,12 @@ where `make release-bind` was run — it says so and names the command that
 removes it, because the plane refuses two fragments defining one
 credential rather than resolving by precedence.
 
+**It needs a plane new enough to answer.** Checking `requires` means
+asking the plane what its merged table declares, and that is a field the
+admin API gained in this change. Against an older plane the command
+refuses rather than applying a blueprint unchecked, and says to run
+`kmx plane`.
+
 ## What the driver does that a script should not have to re-learn
 
 `kmx workflow run` is one driver for every blueprint. It carries the

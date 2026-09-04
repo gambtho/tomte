@@ -133,6 +133,22 @@ func (p PolicySet) Declared(tool string) (fields []string, ok bool) {
 	return f, ok
 }
 
+// AllDeclared returns every tool's policy-relevant fields, as one map.
+//
+// A tool name means one thing across the whole table — conflicting
+// declarations are refused at load — so this is the complete answer to
+// "what does an approval bind here", which is what a caller declaring a
+// workflow against this plane has to be able to ask (D42). The returned
+// map is a copy: the policy set is read by every request and must not be
+// handed out for anybody to edit.
+func (p PolicySet) AllDeclared() map[string][]string {
+	out := make(map[string][]string, len(p.declared))
+	for tool, fields := range p.declared {
+		out[tool] = append([]string(nil), fields...)
+	}
+	return out
+}
+
 // Constraints returns the standing constraints for one credential and
 // tool. ok=false means none is declared, which is today's behaviour:
 // the allowlist and grants decide alone.

@@ -1291,15 +1291,20 @@ jobs:
       - name: "Workflow: a blueprint whose seam or policy fields the plane does not have is refused"
         if: steps.changes.outputs.docs_only != 'true'
         run: |
-          sed 's/^  mcp-echo:/  nonesuch-server:/' scripts/ci/workflow-fixture.yaml > wf-bad-seam.yaml
+          # The seam has to be renamed in BOTH places, or the blueprint is
+          # refused for an unresolved step reference before any cluster is
+          # asked anything — which would pass the test for the wrong reason.
+          sed -e 's/^  mcp-echo:/  nonesuch-server:/' \
+              -e 's/^      upstream: mcp-echo$/      upstream: nonesuch-server/' \
+            scripts/ci/workflow-fixture.yaml > wf-bad-seam.yaml
           sed 's/^      list_pull_requests: \[owner, repo, state, base\]/      list_pull_requests: [owner, repo, state]/' \
             scripts/ci/workflow-fixture.yaml > wf-bad-fields.yaml
           set +e
           KIND_CLUSTER=kaimahi-p1 bin/kmx workflow govern --file wf-bad-seam.yaml \
-            --set repo=kaimahi-ci/the-one-repo > wf-bad-seam.out 2>&1
+            --set repo=kaimahi-ci/the-one-repo --set version=v9.9.9 > wf-bad-seam.out 2>&1
           seam_rc=$?
           KIND_CLUSTER=kaimahi-p1 bin/kmx workflow govern --file wf-bad-fields.yaml \
-            --set repo=kaimahi-ci/the-one-repo > wf-bad-fields.out 2>&1
+            --set repo=kaimahi-ci/the-one-repo --set version=v9.9.9 > wf-bad-fields.out 2>&1
           fields_rc=$?
           set -e
           cat wf-bad-seam.out wf-bad-fields.out
