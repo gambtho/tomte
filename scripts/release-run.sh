@@ -319,6 +319,15 @@ do_publish() {
   describe. Let it lapse, or deny it, and start again."
   fi
 
+  # The asset list BEFORE the approval, so the person deciding sees what
+  # lands on a public release rather than a count they have to trust.
+  step "What would be attached to $version"
+  GITHUB_REPO="$repo" VERSION="$version" NOTES_FILE="$work/notes.txt" \
+    ADO_ORG="$ado_org" ADO_PROJECT="$ado_project" ADO_BUILDS="$ado_builds" \
+    ADO_ARTIFACTS="${ADO_ARTIFACTS:-}" ASSET_GLOBS="${ASSET_GLOBS:-}" \
+    bash "$here/release-publish.sh" --list \
+    || fail "could not read the builds' artifacts — nothing was created"
+
   admin request "$CRED_RELEASE" tool release_publish \
     "{\"owner\": \"$owner\", \"repo\": \"$name\", \"tag\": \"$version\"}" >&2
   local id
@@ -333,6 +342,7 @@ do_publish() {
   step "Approved — publishing"
   GITHUB_REPO="$repo" VERSION="$version" NOTES_FILE="$work/notes.txt" \
     ADO_ORG="$ado_org" ADO_PROJECT="$ado_project" ADO_BUILDS="$ado_builds" \
+    ADO_ARTIFACTS="${ADO_ARTIFACTS:-}" ASSET_GLOBS="${ASSET_GLOBS:-}" \
     RELEASE_TARGET="$branch" PRERELEASE="${PRERELEASE:-1}" \
     bash "$here/release-publish.sh"
 }

@@ -33,9 +33,25 @@
 # this step cannot be stranded by the hour-long token that stranded the
 # build approvals.
 #
+# WHICH ARTIFACTS. Not "all of them": a 1ES build publishes symbols,
+# logs, SBOMs and compliance output beside the binaries, and everything
+# attached here lands on a public release. Two filters, both explicit:
+#
+#   ADO_ARTIFACTS  comma-separated Azure DevOps artifact NAMES to consider
+#                  (empty = every artifact the builds published)
+#   ASSET_GLOBS    comma-separated globs matched against each FILE's
+#                  basename inside those artifacts. Default is the
+#                  installer extensions this project ships.
+#
+# Everything considered is printed with its size and marked kept or
+# skipped, and `--list` does that and stops. The driver runs `--list`
+# BEFORE asking for an approval, so the person approving has seen the
+# exact asset list rather than a count they have to trust.
+#
 # Usage (via scripts/release-run.sh STEP=publish):
 #   GITHUB_REPO=owner/name VERSION=v1.2.3 NOTES_FILE=notes.md \
-#   ADO_ORG=org ADO_PROJECT=proj ADO_BUILDS=1,2,3 release-publish.sh
+#   ADO_ORG=org ADO_PROJECT=proj ADO_BUILDS=1,2,3 [ADO_ARTIFACTS=...] \
+#   [ASSET_GLOBS='*.dmg,*.exe'] release-publish.sh [--list]
 set -euo pipefail
 umask 077
 
@@ -47,6 +63,13 @@ ado_project="${ADO_PROJECT:?set ADO_PROJECT}"
 ado_builds="${ADO_BUILDS:?set ADO_BUILDS (comma-separated build ids)}"
 target="${RELEASE_TARGET:-}"
 prerelease="${PRERELEASE:-1}"
+ado_artifacts="${ADO_ARTIFACTS:-}"
+# The installer extensions this project ships. Deliberately a list of
+# what IS wanted rather than of what is not: a new compliance artifact
+# appearing in a build must not silently become a release asset.
+asset_globs="${ASSET_GLOBS:-*.dmg,*.exe,*.deb,*.tar.gz,*.AppImage,*.msi,*.rpm}"
+list_only=0
+[ "${1:-}" = "--list" ] && list_only=1
 api="https://dev.azure.com/$ado_org/$ado_project/_apis"
 
 command -v az >/dev/null || { echo 'az is required to read Azure DevOps artifacts' >&2; exit 1; }
@@ -57,6 +80,19 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 step() { printf '\n\033[1m== %s\033[0m\n' "$*" >&2; }
 note() { printf '   %s\n' "$*" >&2; }
+
+# matches_glob <basename> — true when the file is one this release ships.
+matches_glob() {
+  local base=$1 g
+  local IFS=,
+  for g in $asset_globs; do
+    g="${g// /}"
+    [ -n "$g" ] || continue
+    # shellcheck disable=SC2053 # a glob on the right is the point
+    case "$base" in ($g) return 0 ;; esac
+  done
+  return 1
+}
 
 # A token minted NOW, not one captured at the start of the session. The
 # transfer takes minutes and the plane's stored token lives about an
@@ -82,17 +118,79 @@ for b in "${builds[@]}"; do
   status=$(cat "$work/status")
   [ "$status" = 200 ] || { echo "listing artifacts for build $b answered HTTP $status" >&2
                            head -c 300 "$work/arts-$b.json" >&2; exit 1; }
-  python3 - "$work/arts-$b.json" "$b" >> "$work/plan" <<'EOF'
-import json, sys
+  ADO_ARTIFACTS="$ado_artifacts" python3 - "$work/arts-$b.json" "$b" >> "$work/plan" <<'EOF'
+import json, os, sys
 d = json.load(open(sys.argv[1]))
+want = {n.strip() for n in os.environ.get("ADO_ARTIFACTS", "").split(",") if n.strip()}
 for a in d.get("value", []):
+    name = a.get("name", "")
+    if want and name not in want:
+        print("skip-artifact\t%s\t%s" % (sys.argv[2], name), file=sys.stderr)
+        continue
     url = (a.get("resource") or {}).get("downloadUrl")
     if url:
-        print("%s\t%s\t%s" % (sys.argv[2], a.get("name", ""), url))
+        print("%s\t%s\t%s" % (sys.argv[2], name, url))
 EOF
 done
 test -s "$work/plan" || { echo 'those builds published no artifacts' >&2; exit 1; }
-cut -f1,2 "$work/plan" | while IFS=$'\t' read -r b n; do note "build $b: $n"; done
+
+# The FILES inside those artifacts, listed WITHOUT downloading them: an
+# artifact's resource.data is "#/<containerId>/<name>", and the container
+# API returns every item with its size. 1.28 GB is too much to move just
+# to find out what is in it, and the person approving needs the list
+# before they decide, not after.
+step "What is in them"
+: > "$work/files"
+while IFS=$'\t' read -r b name url; do
+  cid=$(python3 - "$work/arts-$b.json" "$name" <<'EOF'
+import json, sys
+d = json.load(open(sys.argv[1]))
+for a in d.get("value", []):
+    if a.get("name") == sys.argv[2]:
+        data = (a.get("resource") or {}).get("data") or ""
+        if data.startswith("#/"):
+            print(data.split("/")[1])
+        break
+EOF
+)
+  if [ -z "$cid" ]; then
+    note "build $b: $name — not a container artifact; its files will be listed after download"
+    printf '%s\t%s\t?\t%s\n' "$b" "$name" "(unlisted)" >> "$work/files"
+    continue
+  fi
+  curl -sS -H @"$work/ado.hdr" -H 'Accept: application/json' -o "$work/items.json" \
+    "https://dev.azure.com/$ado_org/_apis/resources/Containers/$cid?itemPath=$name&isShallow=false&api-version=7.1-preview.4" \
+    >/dev/null || true
+  python3 - "$work/items.json" "$b" "$name" >> "$work/files" <<'EOF'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+for it in d.get("value", []):
+    if it.get("itemType") != "file":
+        continue
+    path = it.get("path", "")
+    print("%s\t%s\t%s\t%s" % (sys.argv[2], sys.argv[3], it.get("fileLength", 0), path.rsplit("/", 1)[-1]))
+EOF
+done < "$work/plan"
+
+# Print the decision, file by file, before anything is created or moved.
+kept=0
+while IFS=$'\t' read -r b name size base; do
+  if [ "$base" = "(unlisted)" ]; then note "?      build $b  $name (contents unknown until downloaded)"; continue; fi
+  hsize=$(numfmt --to=iec --suffix=B "$size" 2>/dev/null || echo "${size}B")
+  if matches_glob "$base"; then note "KEEP   $base  ($hsize, build $b / $name)"; kept=$((kept + 1))
+  else note "skip   $base  ($hsize, build $b / $name)"; fi
+done < "$work/files"
+note ""
+note "$kept file(s) match ASSET_GLOBS=$asset_globs"
+
+if [ "$list_only" = 1 ]; then
+  note "--list: nothing was created and nothing was moved."
+  exit 0
+fi
+[ "$kept" -gt 0 ] || { echo 'no file matched ASSET_GLOBS — refusing to publish an empty release' >&2; exit 1; }
 
 # --- 2. the release, with the agent's notes ----------------------------
 step "Creating release $version on $repo"
@@ -121,8 +219,12 @@ while IFS=$'\t' read -r b name url; do
   # than uploaded as broken assets.
   while IFS= read -r f; do
     base=$(basename "$f")
-    [ -s "$f" ] || { note "skipping empty $base"; continue; }
-    note "uploading $base ($(du -h "$f" | cut -f1))"
+    if [ ! -s "$f" ]; then note "skip (empty)      $base"; continue; fi
+    if ! matches_glob "$base"; then
+      note "skip (not an asset) $base ($(du -h "$f" | cut -f1))"
+      continue
+    fi
+    note "UPLOAD            $base ($(du -h "$f" | cut -f1))"
     gh release upload "$version" "$f" -R "$repo" --clobber >&2
     uploaded=$((uploaded + 1))
   done < <(find "$work/x" -type f | sort)
