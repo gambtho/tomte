@@ -127,6 +127,7 @@ prefix.
 | W29: govern your own agent — the generic onboarding path (D35) | unassigned | SHAPED 2026-09-03 — prompt below; runs ALONE | the product-defining gap: nothing documents adding your own MCP server or governing an agent you already run |
 | W30: identity on the call, and credentials that expire (D35) | W30 worker | PR #86 MERGED (5f49235) — same: built from the handed-over prompt while its board record was stranded | coordinator verification owed |
 | W33: the lift — local agent to AKS in one path, with managed observability (D41) | unassigned | SHAPED 2026-09-03 — prompt below | mostly wiring, not building; must not put /metrics on a Service; teardown + spend mandatory |
+| W34: kmx tells the truth — the ungoverned count, and a version handshake | unassigned | SHAPED 2026-09-04 — prompt below | two findings from the W28/P15/W30 verification pass; deliberately a lane, not a coordinator PR |
 | Brand assets + architecture diagram + org/front-door plans | user-run lane (outside the board's prompt set) | PR #33 MERGED (+ kaimahi-agents/.github#1); main CI green | brand validator in the hygiene job |
 | README front door + CONTRIBUTING.md | user-run lane (outside the board's prompt set) | PR #34 MERGED; main CI green | anchored front-door checker in hygiene: section order enforced, no `npx kaimahi create` mention before the quickstart ends — PR #16's README hunk must land under "A scaffolder CLI: considered, not built" (was "Proposed CLI direction" until D23) |
 | CLI decisions + PR #16 review | user + coordinator | D19 ruled; coordinator review rounds done (2026-09-01/02) | not a build lane; parallelises with everything |
@@ -313,6 +314,45 @@ Deliberately NOT on this list: multi-cluster policy distribution and
 reconciliation from a central controller. Real for a fleet, premature
 for a project whose story is one cluster.
 
+## The coordinator has started writing code it then verifies alone
+
+Recorded 2026-09-04 because it is a drift in how this project works, and
+drift that nobody writes down becomes the way things are done.
+
+The loop that has worked all along is: the coordinator shapes a lane, a
+worker builds it, the coordinator verifies it INDEPENDENTLY and records
+a delta sheet. Independence is the whole point — a lane's own PR always
+says it works.
+
+In one day the coordinator authored five PRs where it was also the only
+reviewer: the AP payee constraint (#78), two CI fixes (#100), the
+classifier de-duplication (#101), and the agent-pod hardening (#102).
+The last is the uncomfortable one: a SECURITY change, tested on a
+cluster the author chose, against assertions the author wrote. It found
+a real bug (`runAsNonRoot` cannot work against an image with a
+non-numeric user) precisely because it was tested — but nothing about
+that process would have caught a mistake the author did not think to
+look for. This project's argument is that provable controls beat
+asserted ones; "the coordinator checked their own work" is the shape of
+proof we tell every lane is not good enough.
+
+**The rule from here:**
+
+- **Board, docs and prompts stay the coordinator's**, as they always
+  have been. Nothing changes there.
+- **A code change the coordinator writes must say so on its own PR**,
+  in those words: authored and self-verified, no independent review.
+  Cheap, and it puts the caveat where a reader will meet it.
+- **Anything security-relevant, cross-cutting, or that changes a shipped
+  default goes to a lane** even when it looks small. #102 qualified on
+  two of those three and should have been shaped rather than written.
+- **A coordinator-authored change still gets a delta sheet**, written by
+  whoever verifies it next — not by its author.
+
+Not a rule, but worth saying: the pull toward writing it yourself is
+strongest exactly when the fix is obvious and the queue is long, which
+is also when the review would have been cheapest.
+
 ## Upstream candidates (kagent) — things we work around and should not
 
 D40 ruled that Kaimahi stays thin over kagent and that contributing
@@ -379,6 +419,8 @@ the trap. That is `wait_switched` (Makefile, and carried into
 `Ready` mean the switch is done — or that the documentation say plainly
 that it does not, so consumers know to look further.
 
+| U2b | **kagent's agent image declares its user by NAME (`python`), not by number** — so `runAsNonRoot: true` cannot be used against it without every downstream hardcoding a UID. Kubernetes refuses the container outright: `image has non-numeric user (python), cannot verify user is non-root`, at CreateContainer time, with no mention of the image or its version. A numeric `USER` in the Dockerfile would let the image compose with ordinary Pod Security Standards. | Found while hardening our own agents (PR #102): every agent died at `CreateContainerConfigError` until `runAsUser: 1001` was added beside `runAsNonRoot`, and 1001 was discovered by RUNNING the image (`id -u`) rather than reading anything. Our five manifests and `kmx agent create` now carry that hardcoded id, with a comment explaining why — which is the cost this asks kagent to remove. | **High.** Reproduced, understood, small, and entirely inside kagent's control. Unlike the withdrawn U2, this is not asking for a field they already ship. |
+
 ### U2 is WITHDRAWN — it was ours, not kagent's
 
 The row that stood here said agent pods carry no security context and
@@ -401,6 +443,12 @@ being the least constrained thing in the cluster.
 Kept as a row rather than deleted, because the near-miss is the useful
 part: "verify first" was the right label, and it was applied to the one
 row that turned out to be wrong.
+
+**And doing the work ourselves produced a better upstream ask than the
+one that was withdrawn** — U2b above. Hardening our agents was blocked
+until we hardcoded the image's UID, which is a cost every downstream
+pays and only kagent can remove. That is the difference between a
+finding produced by comparison and one produced by hitting it.
 
 Sequencing: **U1 first and alone.** It is reproducible, it costs other
 people too, and one good issue with a real reproduction is a better
@@ -3400,6 +3448,81 @@ post-delete check. An unproven resource is an unproven bill.
 
 Then the spend figure. Then the same path against a cluster you did NOT
 create, because bring-your-own is the case most adopters are in. Branch
+from current main; PR targets main; no stacked bases; lane ends at
+PR-open-with-checks-green — do not merge. Report deviations in the PR.
+```
+
+### W34 — kmx tells the truth about the system it is pointed at (UNASSIGNED — paste into a fresh CLI session)
+
+```
+You are a worker session for the Kaimahi project (repo root: this
+checkout, remote kaimahi-agents/kaimahi). Read docs/COORDINATION.md
+first — D27, D28, D29, D36, the W28/P15/W30 delta sheets and the
+security standing guidance bind you. Your lane is two findings the
+coordinator's verification pass produced and could not close, which are
+the same finding wearing two hats: **kmx will tell you things about a
+system it has not actually checked.**
+
+Both were reproduced; do not spend the lane rediscovering them.
+
+**(a) `kmx status` cannot say what is governed.** W29 was told to make
+the ungoverned state COUNTABLE rather than merely warned about once —
+"3 tool servers, 0 governed" is harder to ignore than a message that
+scrolls past — and it was not built: `internal/kmx/app/status.go`
+contains no such count, and the only ungoverned signal in the tree is a
+one-shot warning in `create.go`. D36 says governance is not front-loaded
+and the fast path must work without it; that makes an accurate count
+MORE important, not less, because the ungoverned path is now the default
+one and nothing tells you how much of your system is on it.
+
+**(b) A newer kmx against an older plane fails with `404 page not
+found`.** kmx from main validates an upstream table against an admin
+endpoint P15 added; a v0.1.0 plane does not serve it, so the CLI reports
+"the plane refused this upstream table — nothing has been applied: 404
+page not found". It fails CLOSED, which is right, and it never says the
+plane is too old. W28's upgrade probe covers plane-old to plane-new;
+nothing covers CLI-new against plane-old, which is the ordinary case for
+anyone who upgrades one and not the other.
+
+Design decisions this lane owns — make them, justify them in the PR, and
+expect them to outlive the fix:
+- **What does `status` print when there is no plane?** It works today
+  with none, and that must keep working. "0 governed" and "cannot tell"
+  are different answers and the output must not conflate them — the same
+  distinction W30 drew for `acted_for` (`none` versus `unknown`), and
+  reusing that vocabulary is better than inventing a second one.
+- **How does kmx learn the plane's version?** An endpoint the plane
+  serves, a version in an existing response, or inferring from a 404 —
+  each has a different failure mode when the plane is much older or much
+  newer. Say which you chose and what happens at both ends.
+- **What is the compatibility policy?** Does kmx N work against plane
+  N-1? Refuse, or warn and proceed? A refusal that is wrong strands a
+  working cluster; a warning that is ignored is the 404 again with extra
+  words. There is no obviously right answer, which is why it is a
+  decision and not a detail.
+
+Guardrails: kmx accepts no credential material (D27); every mutation
+through the context guard; no client-go; the plane's admin port is on no
+Service and stays that way; no Azure or Slack identifiers; no repo
+secrets in CI. **`kmx status` must stay useful with no plane, no
+credential and no network** — it is the command people run when
+something is wrong, and a status command that needs the thing being
+diagnosed is worthless.
+
+CI stays keyless (D14): unit tests for the version comparison at both
+ends of the range and for the no-plane and cannot-tell branches of
+status; an e2e assertion that a governed and an ungoverned server are
+counted correctly. If you can drive a genuinely old plane the way the
+`plane-upgrade` probe already does (`go install
+.../plane/cmd/kaimahi-proxy@<older rev>`, no cluster, no image), the
+skew case is testable per-PR rather than only by hand — that probe is
+the precedent and reusing it is worth more than a new mechanism.
+
+Verification is real: a transcript in the PR showing `kmx status` on a
+cluster with both governed and ungoverned tool servers, counting them
+correctly; the same command with no plane deployed, saying so rather
+than reporting zero; and a new kmx against a deliberately older plane
+producing a message that names the version problem and the fix. Branch
 from current main; PR targets main; no stacked bases; lane ends at
 PR-open-with-checks-green — do not merge. Report deviations in the PR.
 ```
