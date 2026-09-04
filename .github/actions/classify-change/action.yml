@@ -1,0 +1,86 @@
+name: Classify the change
+description: >-
+  Decide whether a push or pull request touches only documentation, so the
+  cluster jobs can short-circuit. Fails CLOSED: every error path reports
+  docs_only=false, because running the proof unnecessarily costs minutes
+  and skipping it wrongly costs the proof.
+
+  This lived inline in five jobs and drifted as one block copied five
+  times always will: a bug in the base resolution had to be fixed five
+  times, and any of the five could have been missed. One definition now.
+  `kmx-clone-free` deliberately does NOT use this: that job has no
+  checkout by design, so it reads its diff through the API instead.
+
+outputs:
+  docs_only:
+    description: "true when every changed path is documentation"
+    value: ${{ steps.classify.outputs.docs_only }}
+
+runs:
+  using: composite
+  steps:
+    - id: classify
+      shell: bash
+      env:
+        EVENT: ${{ github.event_name }}
+        # push: the previous tip (all zeros on a new branch). HEAD is the
+        # PR merge commit or the pushed commit — what checkout checked out.
+        #
+        # A pull_request's base is resolved BELOW as HEAD^1, not from
+        # `pull_request.base.sha`: that field is the base tip when the event
+        # fired, so once anything else merges it names an older commit and
+        # the diff picks up OTHER PEOPLE'S changes — a docs-only PR then
+        # reads as "non-doc change: Makefile" and pays the full e2e. The
+        # merge commit's first parent is the base it was actually merged
+        # onto, by construction, however stale the event data is.
+        BASE: ${{ github.event.before }}
+        HEAD: ${{ github.sha }}
+      run: |
+        # The job's `shell: bash` runs with -e; turn it off here — every
+        # failure path must land on docs_only=false, never on a red step.
+        set +e
+        docs_only=false
+        reason=""
+        files=""
+        # A pull_request's base is the merge commit's FIRST parent: the
+        # commit this PR was merged onto. Resolving it from the commit
+        # rather than from the event keeps a stale base.sha from dragging
+        # other people's merges into this PR's diff. Fail closed: if it
+        # cannot be resolved, docs_only stays false.
+        if [ "$EVENT" = pull_request ]; then
+          if ! BASE=$(git rev-parse --verify "$HEAD^1" 2>/dev/null); then
+            reason="cannot resolve the merge commit's first parent"
+          fi
+        fi
+        case "$BASE" in
+          ""|0000000000000000000000000000000000000000) reason="no base commit for $EVENT" ;;
+        esac
+        # Already local for a pull_request (fetch-depth: 2); a push may not
+        # have it, so fetch only when it is genuinely absent.
+        if [ -z "$reason" ] && ! git cat-file -e "$BASE^{commit}" 2>/dev/null \
+           && ! git fetch --no-tags --depth=1 origin "$BASE"; then
+          reason="cannot fetch base $BASE"
+        fi
+        if [ -z "$reason" ]; then
+          # --no-renames: a pure rename lists only its destination, so a
+          # file moved INTO docs/ would otherwise read as documentation.
+          if files=$(git diff --name-only --no-renames "$BASE" "$HEAD") && [ -n "$files" ]; then
+            docs_only=true
+            while IFS= read -r f; do
+              case "$f" in
+                docs/*|*.md) ;;
+                *) docs_only=false; reason="non-doc change: $f"; break ;;
+              esac
+            done <<<"$files"
+            if [ "$docs_only" = true ]; then
+              reason="every changed file is documentation"
+            fi
+          else
+            reason="cannot diff $BASE..$HEAD, or the diff is empty"
+          fi
+        fi
+        echo "event=$EVENT base=$BASE head=$HEAD"
+        echo "changed files:"
+        echo "${files:-(undetermined)}" | sed 's/^/  /'
+        echo "docs_only=$docs_only ($reason)"
+        echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
