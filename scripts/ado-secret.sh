@@ -93,21 +93,25 @@ except Exception:
     sys.exit("REFUSING: the token's payload is not readable JSON")
 
 aud = str(c.get("aud", ""))
-# The audience must be the MCP resource ITSELF, which is what the server's
-# own protected-resource metadata advertises
-# (scopes_supported: ["https://mcp.dev.azure.com/.default"]).
+# REPORTED, not enforced — and the reason matters, because a check here
+# refused a correct token.
 #
-# A broader Azure DevOps token — one minted for the ADO API as a whole,
-# which is what a bare `az account get-access-token --resource ...` gives
-# — is REFUSED here even though the server might well accept it. Sending
-# a bearer minted for one resource to a different host is the shape this
-# project refuses everywhere else, and asking for the narrow scope costs
-# one flag. The message says which flag.
-if not aud.rstrip("/").lower() == "https://mcp.dev.azure.com":
-    sys.exit("REFUSING: this token's audience is %r, not https://mcp.dev.azure.com.\n"
-             "Mint one for the MCP resource itself:\n"
-             "  az account get-access-token --scope https://mcp.dev.azure.com/.default \\\n"
-             "     --query accessToken -o tsv" % aud)
+# Microsoft Entra expresses `aud` two ways depending on the target
+# application's configured token version: the resource URI
+# (https://mcp.dev.azure.com) for v2.0, or the application's client-id
+# GUID for v1.0. Asking for `--scope https://mcp.dev.azure.com/.default`
+# can legitimately yield either. A check that accepted only the first
+# refused a token minted by exactly the command this script recommends.
+#
+# Nor can the GUID simply be hardcoded here: an application id is an
+# Azure identifier and this repository refuses to carry those
+# (scripts/check-no-azure-ids.sh, and it is right to).
+#
+# There is no need to guess anyway. Step 2 asks the SERVER, which is the
+# only authority on whether it accepts this token, and refuses on
+# anything but a well-formed JSON-RPC result. The audience is printed so
+# an operator can see what they got.
+print("audience: %s" % aud, file=sys.stderr)
 
 exp = c.get("exp")
 if not isinstance(exp, int):
