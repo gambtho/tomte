@@ -3220,6 +3220,12 @@ Build:
   scrapes the plane's `/metrics`, Container Insights collects the logs,
   and the operator gets something to LOOK at without composing a query —
   ship the dashboard or the workbook, do not merely enable the data.
+  **Both data paths need evidence in the PR, because "enabled" and
+  "arriving" are different claims**: a Managed Prometheus query that
+  returns a real sample scraped from the plane's `/metrics`, and a
+  Container Insights record showing an actual log line from a plane pod.
+  The dashboard stays the operator-facing artifact; those two are what
+  prove it is not empty.
   **The constraint you must not break (D24(3)): the ops port is
   deliberately on NO Service.** The design already anticipates a scraper
   reaching the pod through an explicit NetworkPolicy allowance — that is
@@ -3232,10 +3238,19 @@ Build:
   is the opposite and it is absolute: **the cluster and its resource
   group are never deleted and never adopted.** What the lane adds there
   — a Managed Prometheus rule, a Container Insights or Log Analytics
-  association, a data-collection rule — it must be able to REMOVE by
-  name, and the doc must say which of those bill the owner after the
-  demo ends. Leaving a stranger's subscription quietly accruing charges
-  is the worst outcome available to this lane.
+  association, a data-collection rule — it must be able to remove
+  **only what it created, proven, not merely name-matched**. Give every
+  such resource a run-scoped unique name AND record its resource ID at
+  creation; delete by that recorded ID, and if the ID cannot be
+  re-resolved, or the name resolves to something whose ID differs, FAIL
+  CLOSED and say what was left behind rather than deleting a resource
+  someone else made. Name matching on a subscription we do not own is
+  how a demo deletes a stranger's production monitoring. The doc must
+  also say which of those resources keep billing the owner after the
+  demo ends. (On a cluster this lane CREATED, the existing
+  resource-group rules apply and are enough.) Leaving a stranger's
+  subscription quietly accruing charges is the second-worst outcome
+  available to this lane; deleting something of theirs is the worst.
 - **Say what the opinion IS.** "Opinionated" means we made choices so the
   adopter does not have to — node size, policy engine, observability
   wiring, where the image lives. Every one of those belongs in
@@ -3251,9 +3266,15 @@ spend figure (the precedent is ~US$0.35 for a demo-length run); the
 Azure identifier scanner must pass, and **P5b's redaction rule applies
 to the PR's transcript and to anything attached to it, not only to the
 tree** — subscription and tenant IDs, resource-group names, ACR login
-servers, cluster FQDNs, Log Analytics workspace IDs and public IPs are
-all identifiers, and a transcript is exactly where they leak
-(scripts/check-no-azure-ids.sh, and its self-test); **kind must keep
+servers, cluster FQDNs and public IPs are all identifiers, and a
+transcript is exactly where they leak (scripts/check-no-azure-ids.sh,
+and its self-test). **Observability adds a second workspace kind: Azure
+Monitor workspaces as well as Log Analytics ones.** Extend the scanner
+to both — their workspace IDs are GUIDs and their resource IDs have a
+fixed shape, so both are detectable, and both need a self-test case.
+Workspace NAMES are not shape-detectable and the scanner cannot catch
+them: say so in the doc and redact them by hand, in the transcript and
+in anything attached to it; **kind must keep
 working exactly as it does now** and you must prove it, because a lane
 that improves AKS by changing shared manifests is the regression this
 one is most likely to cause; nothing published; no repo secrets in CI;
@@ -3271,10 +3292,19 @@ CI/CD. If the lift makes any of those obviously next, say which and why.
 
 Verification is real: a transcript in the PR of a local agent lifted to
 a REAL AKS cluster in one path — the agent answering there, the
-dashboard showing its traffic, teardown proved the way scripts/aks-down.sh
-proves it — `az group exists --name "$RG"` returning **false**, with an
-unreadable or any other result treated as FAILURE rather than as absence
-— and the spend figure. Then the same path against a cluster you did NOT
+dashboard showing its traffic, and teardown proved the way
+scripts/aks-down.sh proves it — `az group exists --name "$RG"` returning
+**false**, with an unreadable or any other result treated as FAILURE
+rather than as absence.
+
+That check proves cleanup ONLY for resources created inside `$RG`. Azure
+Monitor workspaces, data-collection rules and endpoints can be created
+elsewhere, and an empty resource group says nothing about them. So:
+create every observability resource inside `$RG` if you can, and for any
+you cannot, name it in the PR with its own removal command and its own
+post-delete check. An unproven resource is an unproven bill.
+
+Then the spend figure. Then the same path against a cluster you did NOT
 create, because bring-your-own is the case most adopters are in. Branch
 from current main; PR targets main; no stacked bases; lane ends at
 PR-open-with-checks-green — do not merge. Report deviations in the PR.
