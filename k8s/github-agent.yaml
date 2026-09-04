@@ -24,7 +24,36 @@ spec:
   type: Declarative
   declarative:
     modelConfig: governed-copilot
+    # The agent pod runs model output; it is the LEAST trusted workload here
+    # and was, until now, the least constrained. kagent exposes the fields
+    # (spec.declarative.deployment, v1alpha2) — we simply were not setting
+    # them. Same posture as k8s/plane/proxy.yaml and k8s/erp-mcp.yaml.
+    # A read-only root filesystem needs somewhere to write: the runtime uses
+    # /tmp, mounted here as an emptyDir rather than left writable everywhere.
     deployment:
+      podSecurityContext:
+        runAsNonRoot: true
+        # kagent's agent image declares its user by NAME (`python`), and
+        # Kubernetes refuses to start a runAsNonRoot container it cannot
+        # prove is non-root: "image has non-numeric user (python)". So the
+        # numeric id has to be stated here. 1001 is what that image runs
+        # as at 0.9.12 — pinned by a CI assertion, because a kagent bump
+        # that moves it would otherwise fail every agent at CreateContainer
+        # time with a message that does not mention the version.
+        runAsUser: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+        readOnlyRootFilesystem: true
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      volumeMounts:
+        - name: tmp
+          mountPath: /tmp
       resources:
         requests:
           cpu: 50m
