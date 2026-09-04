@@ -500,6 +500,122 @@ before it is written down anywhere public.
   needs explicit user approval (trademark counsel still owed on the name);
   (3) sequencing between P1 and P2 so P2 can extend the same scaffold.
 
+- **D42 (OPEN — needs a ruling): how a user expresses a governed
+  workflow.** Raised 2026-09-04 out of the W32 review: "if a user wanted
+  to create this exact agent, what would that process look like" and then
+  the sharper half — "how does a user clearly communicate that, or a
+  slightly different scenario, when creating a new agent?" Everything
+  below reads the W32 lane as merged (**PR #95**, main `56c6efa`).
+
+  **The finding.** For the scenario W32 was built for — a GitHub release
+  cut from the results of Azure DevOps pipeline runs — the interface is
+  flags on `make release`. One step off that path there is no interface
+  at all, because the intent is split across FOUR layers — three files
+  and a pair of Make targets, two of the layers sharing one file:
+
+  1. **Procedure** — the ~60-line `systemMessage` in
+     `k8s/release-agent.yaml`. It is a numbered drill ("ONE STEP PER
+     TURN", six steps, which tool for each), not a statement of intent.
+  2. **Selection** — `toolNames` on the Agent CRD, under kagent's
+     `discovered ∩ toolNames` rule.
+  3. **Policy** — the `tool_upstreams` entry in
+     `k8s/plane/upstreams.yaml`: base URL, `extra_headers` carrying the
+     `X-MCP-Tools` allowlist, `policy_fields` per tool,
+     `standing_constraints` — plus the credential allowlist and
+     `release-bind`.
+  4. **Orchestration** — `scripts/release-run.sh`, 544 lines, which is
+     where the user's sentence ACTUALLY lives: queue the pipelines, poll
+     them, then stream the artifacts onto the release.
+
+  `kmx agent create` collects three fields — description, name, and
+  `Tools string // server:tool1,tool2` (`internal/kmx/app/create.go`) —
+  and the interactive wizard prompts for description, name, and
+  apply-yes/no. It reaches none of (3) and none of (4).
+
+  **The constraint that kills the obvious answer.** "Let the agent
+  orchestrate and generate the rest" is not available here.
+  `release-run.sh` files the approval request ITSELF, for the exact call
+  the operator named on the command line, and stops if the agent proposed
+  something else — because a model that proposed a different branch would
+  file a request too, and it would look identical in `make approvals`.
+  P13 paid for that lesson: on its first live run the agent filed a
+  payment for a different invoice at the same amount, and the approval
+  landed on the wrong one. So the split — **model does judgement, a
+  deterministic driver does sequencing and approval-filing** — is a
+  SAFETY property, not scaffolding waiting to be replaced by a smarter
+  model. Any authoring story that hands orchestration to the agent gives
+  back exactly what P13 bought.
+
+  **The gradient, which is the size of the problem.** Version, base
+  branch, release branch, which workflows are dispatched, which artifacts
+  become assets, which approver: flags, free today. A hotfix cut from a
+  tag rather than main is one of them, and the approval shape survives
+  because `from_branch` is a bound policy field. A different REPOSITORY
+  is not a flag — the fine-grained token reaches exactly one repository
+  (`release-secret` refuses one that reaches more), and `release-bind`
+  writes a standing constraint naming `owner` and `repo` into the overlay
+  ConfigMap, so it is re-onboarding: new credential, then bind again. A
+  different Azure DevOps project or set of pipeline ids is `release-bind`
+  again on its own, because the same constraint names them; a different
+  ORG additionally re-proves the Entra token against it (`ado-secret`
+  probes the org, though the token itself is resource-scoped). Also post to
+  Slack on success: the seam exists, but it needs `toolNames` + allowlist
+  + a new driver step — three of the four layers. GitLab instead of Azure
+  DevOps: all four. Require two approvers: exists at no layer. So the
+  flags vary the PARAMETERS of one workflow; changing what it reaches
+  costs a re-onboarding, and changing its shape costs bash.
+
+  **Option A — a blueprint, plus one generic driver.** One declarative
+  file naming the seams, the policy, the ordered STEPS (each marked read
+  / propose / consequential) and the prose the agent gets; a generic
+  driver executes it, and `release-run.sh` becomes ~40 lines of
+  declaration. Two pieces of evidence that this is the grain of the
+  system rather than a new idea: `upstreams.yaml` ALREADY declares a step
+  that is not an MCP tool — `release_publish` is the driver's own publish
+  action, declared purely so its approval is bound and legible the way
+  every tool call's is — and P15's `kmx tools add` already onboards a
+  server this repo did not write, so onboarding a seam WITH its policy is
+  the same move one level up. Cost and risk: the generic driver has to
+  absorb polling, timeouts, step resumption and credential refresh, some
+  of which is seam-specific (the Entra token lives about an hour and
+  stranded W32's first real run twice). A blueprint that cannot express
+  those degrades to "write the bash anyway", and a half-general driver is
+  worse than an honest bespoke one.
+
+  **Option B — declarative governance only; orchestration stays bash.**
+  Extend `kmx tools add` so `policy_fields` and standing constraints are
+  expressed at onboarding and the allowlist / bind commands are derived,
+  leaving each workflow its own driver script. Smaller, closer to what
+  exists, and it fixes the layer most likely to be got WRONG: a missing
+  `policy_fields` declaration binds the whole canonical argument object
+  (exact but brittle), and an unconsidered one leaves a DISPATCHER
+  argument unbound — the `actions_run_trigger` `method` and
+  `pipelines_write` `action` case W32 documents, where allowlisting the
+  tool name would have allowed cancelling and deleting too. It does NOT
+  answer the question that was asked: the sentence still lives in bash.
+
+  **What does not change under either.** Credential capture stays a
+  human's job (D27). The driver keeps filing the approval. Nothing here
+  weakens the four layers that make destructive operations impossible.
+
+  **The caveat that belongs in whichever is chosen.** The most valuable
+  step in the motivating scenario is the least governed one:
+  `scripts/release-publish.sh` moves the artifacts using the operator's
+  own `az` and `gh` — 1.28 GB across five assets on the last release —
+  because the gateway is deliberately not in that path. The DECISION is
+  governed; the TRANSFER is not, and W32 writes that down rather than
+  glossing it. A blueprint that renders every step in one vocabulary
+  would launder the distinction unless it marks it explicitly.
+
+  **Sequencing.** Not a lane yet, and deliberately after W31: the
+  blueprint's value depends on the runtime being cheap enough that anyone
+  builds more than one workflow. #104 (Cobra routing) lands first, since
+  a blueprint subcommand surface sits better on it. If ruled A, the lane
+  ships ONE blueprint — W32's, reproduced exactly, same approvals, same
+  audit — before any second one, so generality is proven against a
+  workflow that already works rather than designed against an imagined
+  one.
+
 ## Process rules (proven over ~60 PRs; keep)
 
 - Board is the single coordination doc; coordinator is the only writer.
