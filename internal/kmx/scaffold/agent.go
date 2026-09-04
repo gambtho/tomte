@@ -262,13 +262,43 @@ func Generate(spec Spec) (string, error) {
 	// runner already sits near its allocatable ceiling with kagent, Ollama
 	// and two agents on it, and the default 100m request is what tips a
 	// third agent into Pending.
+	// The agent pod runs model output: it is the least trusted workload on
+	// the cluster, and a scaffolder that emits no security context makes
+	// every agent anyone creates the least constrained thing there. Same
+	// posture as k8s/plane/proxy.yaml and the committed agents.
+	//
+	// runAsUser is not decoration. kagent's image declares its user by NAME
+	// (`python`), and Kubernetes refuses to start a runAsNonRoot container
+	// it cannot prove is non-root — "image has non-numeric user (python)",
+	// at CreateContainer time, with no mention of the version. 1001 is what
+	// that image runs as; CI pins it so a kagent bump is caught here rather
+	// than in someone's cluster.
+	//
+	// A read-only root filesystem needs somewhere to write, so /tmp is an
+	// emptyDir. Verified on a live agent: it starts, and it answers.
 	b.WriteString("    deployment:\n" +
 		"      resources:\n" +
 		"        requests:\n" +
 		"          cpu: 50m\n" +
 		"          memory: 320Mi\n" +
 		"        limits:\n" +
-		"          memory: 1Gi\n")
+		"          memory: 1Gi\n" +
+		"      podSecurityContext:\n" +
+		"        runAsNonRoot: true\n" +
+		"        runAsUser: 1001\n" +
+		"        seccompProfile:\n" +
+		"          type: RuntimeDefault\n" +
+		"      securityContext:\n" +
+		"        allowPrivilegeEscalation: false\n" +
+		"        capabilities:\n" +
+		"          drop: [ALL]\n" +
+		"        readOnlyRootFilesystem: true\n" +
+		"      volumes:\n" +
+		"        - name: tmp\n" +
+		"          emptyDir: {}\n" +
+		"      volumeMounts:\n" +
+		"        - name: tmp\n" +
+		"          mountPath: /tmp\n")
 	b.WriteString(systemMessage)
 
 	if spec.Tools != nil {

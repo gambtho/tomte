@@ -384,3 +384,32 @@ func TestModelConfigMustBeNamedAndValid(t *testing.T) {
 		t.Error("an invalid modelConfig name must be refused")
 	}
 }
+
+// The agent pod runs model output. A scaffolder that emits no security
+// context makes every agent anyone creates the least constrained workload on
+// the cluster — which is what this repo shipped until it was noticed by
+// comparing our own agent manifests against the plane's.
+//
+// runAsUser is the field that looks redundant and is not: kagent's image
+// names its user (`python`) rather than numbering it, and Kubernetes will not
+// start a runAsNonRoot container whose user it cannot prove is non-root.
+// Without it the pod dies at CreateContainer with a message that never
+// mentions the agent.
+func TestScaffoldedAgentIsHardened(t *testing.T) {
+	doc := mustGenerate(t, base("hardened"))
+	for _, want := range []string{
+		"      podSecurityContext:",
+		"        runAsNonRoot: true",
+		"        runAsUser: 1001",
+		"          type: RuntimeDefault",
+		"        allowPrivilegeEscalation: false",
+		"          drop: [ALL]",
+		"        readOnlyRootFilesystem: true",
+		// A read-only root needs somewhere to write, or the runtime cannot start.
+		"          mountPath: /tmp",
+	} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("scaffolded agent is missing %q:\n%s", want, doc)
+		}
+	}
+}
