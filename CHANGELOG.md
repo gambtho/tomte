@@ -24,6 +24,18 @@ to do. Sections: **Added**, **Changed**, **Fixed**, **Breaking**, **Upgrading**.
 
 ### Added
 
+- **`kmx workflow` and blueprints (D42)** — one declarative file says what a
+  governed workflow reaches, which of its calls need no human, which need one,
+  and in what order; `kmx workflow govern` applies the governance and
+  `kmx workflow run` executes the steps. A blueprint NAMES seams that already
+  exist in the plane's table and asserts the `policy_fields` it depends on —
+  it cannot create a hosted or keyed upstream, because the overlay refuses
+  the custody fields that would make one — and it carries no credential in
+  any form (D27). kmx carries `blueprints/release.yaml`, which reproduces
+  W32's release governance exactly: the same tool allowlist `make
+  release-allow` sets and the same standing constraints
+  `scripts/release-bind.sh` writes, proven by a test that runs those and
+  diffs the result. See [docs/workflows.md](docs/workflows.md).
 - **`kmx quickstart`** — one command from a machine that has a container
   engine to an agent that has answered a question. It runs `kmx up`'s steps in
   `kmx up`'s order, with the same waits and fail-closed checks, but defers

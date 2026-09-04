@@ -1,0 +1,889 @@
+package app
+
+// D42, milestone 2: ONE driver, for every blueprint.
+//
+// scripts/release-run.sh is 556 lines, and almost none of it is about
+// releases. What it actually encodes is a set of properties that any
+// governed workflow needs, and this is those properties, once:
+//
+//   - THE DRIVER FILES THE APPROVAL REQUEST, for the call the operator's
+//     parameters name, and refuses to go on if the plane did not file
+//     exactly that call. A model that proposed a different branch would
+//     file a request too, and it would look identical in `kmx approvals`.
+//     P13 paid for that lesson: on its first live run the agent filed a
+//     payment for a different invoice at the same amount, and the
+//     approval landed on the wrong one.
+//   - A LIVE GRANT IS NOT RIDDEN. If the tool already carries a grant
+//     somebody gave earlier, this run would spend an approval for a call
+//     it never described. Refused.
+//   - THE PLANE'S RECORD IS THE PROOF. After the call, the tool audit
+//     must show it admitted under the grant. Nothing is reported as done
+//     that the plane did not record — which is the rule this repository
+//     gives its agent, applied to the code that enforces it.
+//   - ITS OWN ADMIN PORT. The driver polls the admin API while it waits
+//     for a human, and the human's own `kmx approve` needs the same port.
+//     On the default the two collide and the operator meets "address
+//     already in use" on the one command they were just told to run. W32
+//     found that the hard way, on its first real approval.
+//   - BOUNDED WAITS, RESUMPTION AND CREDENTIAL REFRESH. A build is
+//     minutes and a turn is request/response; an access token can be
+//     shorter than the process it authorises.
+//
+// What is NOT here, deliberately: any way for a blueprint to say "the
+// agent decides". The step vocabulary has no such kind, `call.args` may
+// not read anything an agent produced (the parser refuses it), and the
+// request is built from the rendered call. If a model wants a different
+// call it can ask for one — and it will be denied, because the grant is
+// welded to the digest of the call a human actually saw.
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/kaimahi-agents/kaimahi/internal/kmx/admin"
+	"github.com/kaimahi-agents/kaimahi/internal/kmx/blueprint"
+)
+
+// DefaultWorkflowAdminPort is the driver's own local admin port. It is
+// NOT config.DefaultAdminPort, and that is the whole point: the operator
+// needs the default free for `kmx approve` while this is waiting for
+// them.
+const DefaultWorkflowAdminPort = "19291"
+
+// RunOptions are `kmx workflow run`'s knobs.
+type RunOptions struct {
+	WorkflowOptions
+	// Step runs one step only, by name. It is how a run is resumed after
+	// an expired credential, a failed build, or a person going home.
+	Step string
+	// DryRun reads and drafts and stops before the first consequential
+	// or bounded call. Nothing is created.
+	DryRun bool
+	// Approver requires this person's approval (a Slack user id, as P8b
+	// records it). Empty means anyone the plane admits.
+	Approver string
+	// AdminPort is the driver's own port-forward.
+	AdminPort string
+	// HumanSeconds is how long a step waits for a person.
+	HumanSeconds int
+}
+
+// RunWorkflow executes a blueprint.
+func (a *App) RunWorkflow(name string, opt RunOptions) error {
+	b, err := loadBlueprint(name, opt.WorkflowOptions)
+	if err != nil {
+		return err
+	}
+	steps := b.StepNames()
+	if opt.Step != "" {
+		if !containsString(steps, opt.Step) {
+			return fmt.Errorf("blueprint %q has no step %q (it has: %s)", b.Name, opt.Step, strings.Join(steps, ", "))
+		}
+		steps = []string{opt.Step}
+	}
+	values, err := b.Bind(opt.Set, steps)
+	if err != nil {
+		return err
+	}
+	if opt.AdminPort == "" {
+		opt.AdminPort = DefaultWorkflowAdminPort
+	}
+	if opt.HumanSeconds == 0 {
+		opt.HumanSeconds = 900
+	}
+	if err := a.preflight(depKubectl); err != nil {
+		return err
+	}
+
+	client, err := admin.Open(a, opt.AdminPort, a.Err)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+
+	// The declared policy fields come from the RUNNING table, because
+	// they are the order the audit summary reads and therefore the order
+	// a pending request has to be matched on. The cluster's own overlay
+	// fragments go with the question: a seam somebody onboarded with
+	// `kmx tools add` lives there, and validating without them would
+	// answer about a table the plane is not running.
+	fragments, _, err := a.readOverlay()
+	if err != nil {
+		return err
+	}
+	_, declared, err := a.validateWorkflowOverlay(client, fragments)
+	if err != nil {
+		return err
+	}
+	rendered, err := b.Render(values, steps, declared)
+	if err != nil {
+		return err
+	}
+
+	run := &workflowRun{
+		app: a, bundle: b, rendered: rendered, client: client, opt: opt,
+		captures: map[string]string{}, files: map[string]string{},
+	}
+	dir, err := os.MkdirTemp("", "kmx-run")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	run.dir = dir
+
+	a.notef("workflow %s — %s", b.Name, b.Summary)
+	a.notef("source: %s", b.Source)
+	if opt.DryRun {
+		a.notef("--dry-run: the agent will read and draft, and stop before the first call with consequences.")
+	}
+	if err := run.preflightRequirements(); err != nil {
+		return err
+	}
+
+	for _, step := range rendered.Steps {
+		if err := run.do(step); err != nil {
+			if _, stopped := err.(dryRunStop); stopped {
+				a.notef("")
+				a.notef("--dry-run stopped at %q. Nothing was created.", step.Label)
+				return nil
+			}
+			return err
+		}
+	}
+
+	a.notef("")
+	a.notef("The record: every decision this credential got")
+	if err := client.ToolAudit(a.Out, b.Credential); err != nil {
+		return err
+	}
+	a.notef("Who approved what, and which call")
+	return client.ApprovalAudit(a.Out, b.Credential)
+}
+
+type workflowRun struct {
+	app      *App
+	bundle   *blueprint.Bundle
+	rendered *blueprint.Rendered
+	client   *admin.Client
+	opt      RunOptions
+	dir      string
+	captures map[string]string
+	files    map[string]string
+	// refreshed remembers which seams have been refreshed in this run,
+	// so a five-step workflow does not mint five tokens for one seam
+	// inside a minute.
+	refreshed map[string]time.Time
+}
+
+// preflightRequirements names every binary a step will need, before any
+// of them runs. kmx does NOT fetch these: internal/kmx/toolchain fetches
+// pinned, checksum-verified release artifacts whose identity IS the
+// checksum, and `az` and `gh` are the operator's own logged-in CLIs. A
+// freshly downloaded copy would have nobody logged into it, which buys
+// nothing and adds a supply chain. They are required and named.
+func (r *workflowRun) preflightRequirements() error {
+	want := map[string][]string{}
+	for _, s := range r.rendered.Steps {
+		if s.Exec != nil {
+			for _, bin := range s.Exec.Requires {
+				want[bin] = append(want[bin], s.Label)
+			}
+		}
+	}
+	for _, seam := range sortedAny(r.bundle.Seams) {
+		if ref := r.bundle.Seams[seam].Refresh; ref != nil {
+			want[ref.Requires] = append(want[ref.Requires], "refreshing the "+seam+" credential")
+		}
+	}
+	var missing []string
+	for _, bin := range sortedAny(want) {
+		if _, err := exec.LookPath(bin); err != nil {
+			missing = append(missing, fmt.Sprintf("%s — needed for %s", bin, strings.Join(want[bin], ", ")))
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	// A missing refresh binary is a warning, not a failure: W32's driver
+	// leaves the stored credential in place and carries on, and a run
+	// that started five minutes ago should not die because `az` is
+	// absent when the token in custody is still good.
+	r.app.notef("NOTE: not on PATH:")
+	for _, m := range missing {
+		r.app.notef("  %s", m)
+	}
+	r.app.notef("kmx does not fetch these — they are your own logged-in tools, and a fresh download would have")
+	r.app.notef("nobody logged into it. A step that needs one will say so when it gets there.")
+	return nil
+}
+
+func (r *workflowRun) do(s blueprint.RenderedStep) error {
+	if err := r.refreshFor(s); err != nil {
+		return err
+	}
+	switch s.Kind {
+	case blueprint.KindRead, blueprint.KindPropose:
+		return r.turnStep(s)
+	case blueprint.KindPoll:
+		return r.pollStep(s)
+	case blueprint.KindBounded:
+		return r.boundedStep(s)
+	case blueprint.KindConsequential:
+		return r.consequentialStep(s)
+	}
+	return fmt.Errorf("internal: no driver for step kind %q", s.Kind)
+}
+
+// --- agent turns ------------------------------------------------------
+
+func (r *workflowRun) turnStep(s blueprint.RenderedStep) error {
+	r.app.notef("")
+	r.app.notef("== %s (%s)", s.Label, s.Kind)
+	reply, err := r.turn(s)
+	if err != nil {
+		return err
+	}
+	if s.Capture == "" {
+		return nil
+	}
+	if strings.TrimSpace(reply) == "" {
+		return fmt.Errorf("step %q captures %q and the agent's reply was empty", s.Label, s.Capture)
+	}
+	r.captures[s.Capture] = reply
+	path := filepath.Join(r.dir, s.Capture+".txt")
+	if err := os.WriteFile(path, []byte(reply), 0o600); err != nil {
+		return err
+	}
+	r.files[s.Capture] = path
+	r.app.notef("Captured %q (%d lines) — it is prose, and nothing binds it.",
+		s.Capture, strings.Count(reply, "\n")+1)
+	return nil
+}
+
+// turn runs one agent turn and returns its reply. A turn only counts if
+// the task completed WITH a reply: an earlier version of W32's driver
+// printed a note and returned success on a failed turn, which is the
+// exact thing this repository's agent brief forbids, in the code that
+// enforces it.
+func (r *workflowRun) turn(s blueprint.RenderedStep) (string, error) {
+	prompt, err := r.resolveCaptures(s.Prompt)
+	if err != nil {
+		return "", err
+	}
+	out, status, err := r.app.askAgent(r.bundle.Agent, prompt, "", false)
+	if err != nil {
+		return "", err
+	}
+	if !renderChat(r.app.Out, out) {
+		fmt.Fprintln(r.app.Out, out)
+	}
+	line := lastJSONLine(out)
+	if line == "" {
+		return "", fmt.Errorf("step %q: the agent's turn did not complete with a task (exit %d)", s.Label, status)
+	}
+	var task a2aTask
+	if err := json.Unmarshal([]byte(line), &task); err != nil {
+		return "", fmt.Errorf("step %q: the agent's turn did not complete with a task: %w", s.Label, err)
+	}
+	reply := firstText(task)
+	if task.Status.State != "completed" || strings.TrimSpace(reply) == "" {
+		return "", fmt.Errorf("step %q: the agent's turn ended %q with no reply. Nothing is being reported as "+
+			"done that the plane did not record", s.Label, task.Status.State)
+	}
+	return reply, nil
+}
+
+func (r *workflowRun) pollStep(s blueprint.RenderedStep) error {
+	r.app.notef("")
+	r.app.notef("== %s — watching, up to %ds, every %ds", s.Label, s.Poll.TimeoutSeconds, s.Poll.IntervalSeconds)
+	deadline := time.Now().Add(time.Duration(s.Poll.TimeoutSeconds) * time.Second)
+	for time.Now().Before(deadline) {
+		if err := r.refreshFor(s); err != nil {
+			return err
+		}
+		reply, err := r.turn(s)
+		if err != nil {
+			// A turn that failed mid-poll is not a build result. Say so
+			// and keep waiting rather than reporting either outcome.
+			r.app.notef("the turn did not complete: %v", err)
+		} else {
+			switch {
+			case hasMarker(reply, s.Poll.Done):
+				r.app.notef("The agent reports every build finished successfully.")
+				return nil
+			case hasMarker(reply, s.Poll.Failed):
+				if s.OnFailure != "" {
+					r.app.notef("A build failed — the agent reads the log")
+					failing := s
+					failing.Prompt = s.OnFailure
+					if _, err := r.turn(failing); err != nil {
+						r.app.notef("could not read the failure: %v", err)
+					}
+				}
+				return fmt.Errorf("step %q: a build failed — see above. Nothing further was done", s.Label)
+			}
+		}
+		time.Sleep(time.Duration(s.Poll.IntervalSeconds) * time.Second)
+	}
+	return fmt.Errorf("step %q: still running after %ds. Not claiming a result the tools did not report; "+
+		"resume with --step %s to keep waiting", s.Label, s.Poll.TimeoutSeconds, s.Name)
+}
+
+// hasMarker looks for the terminal marker on a line of its own, which is
+// what the prompt asks for. A substring match anywhere would fire on the
+// agent quoting the instruction back.
+func hasMarker(reply, marker string) bool {
+	for _, line := range strings.Split(reply, "\n") {
+		if strings.TrimSpace(line) == marker {
+			return true
+		}
+	}
+	return false
+}
+
+// --- governed calls ---------------------------------------------------
+
+// boundedStep is a call with consequences that a STANDING CONSTRAINT
+// admits: no human, inside declared bounds, audited. The driver's job is
+// to prove that is actually what happened — a bounded call that was
+// admitted for some other reason (an allowlist entry, a stray grant) is
+// not the posture the blueprint declared.
+func (r *workflowRun) boundedStep(s blueprint.RenderedStep) error {
+	r.app.notef("")
+	r.app.notef("== %s — bounded: %s", s.Label, s.Summary())
+	if r.opt.DryRun {
+		r.app.notef("--dry-run: stopping before the first call with consequences.")
+		return errDryRunStop
+	}
+	before, err := r.auditCount(s.Tool)
+	if err != nil {
+		return err
+	}
+	if _, err := r.turn(s); err != nil {
+		r.app.notef("the agent's turn did not complete cleanly: %v", err)
+	}
+	row, err := r.newestAudit(s.Tool, before)
+	if err != nil {
+		return err
+	}
+	if !strings.Contains(row.Decision, "allowed") {
+		return fmt.Errorf("step %q: %s was not admitted: %s %s", s.Label, s.Tool, row.Decision, row.Detail)
+	}
+	if !strings.Contains(strings.ToLower(row.Detail), "standing constraint") {
+		return fmt.Errorf("step %q: %s was admitted, but not by the standing bound this blueprint declares — "+
+			"the plane says %q. A bounded step that is admitted for some other reason is not the posture that "+
+			"was reviewed", s.Label, s.Tool, row.Detail)
+	}
+	r.app.notef("Admitted inside the standing bound, with no human, and audited.")
+	return nil
+}
+
+// consequentialStep is the governed shape.
+func (r *workflowRun) consequentialStep(s blueprint.RenderedStep) error {
+	r.app.notef("")
+	r.app.notef("== Proposing: %s", s.Summary())
+	if r.opt.DryRun {
+		r.app.notef("--dry-run: stopping before the first call with consequences. Nothing was created.")
+		return errDryRunStop
+	}
+
+	// A live grant would let this run's call succeed without anyone
+	// approving anything in it.
+	live, err := r.liveGrant(s.Tool)
+	if err != nil {
+		return err
+	}
+	if live {
+		return fmt.Errorf("%s already carries a LIVE grant on %q. This run would spend an approval somebody "+
+			"gave earlier, for a call this run did not describe. Let it lapse, or deny it, and start again",
+			s.Tool, r.bundle.Credential)
+	}
+
+	// The ungoverned action's PREVIEW runs before the approval, so
+	// whoever decides sees what lands rather than a count they take on
+	// trust.
+	if s.Exec != nil && len(s.Exec.Preview) > 0 {
+		r.app.notef("What this would do:")
+		if err := r.exec(s, s.Exec.Preview); err != nil {
+			return fmt.Errorf("step %q: could not preview the action — nothing was created: %w", s.Label, err)
+		}
+	}
+
+	args, err := s.ArgsJSON()
+	if err != nil {
+		return err
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(args), &parsed); err != nil {
+		return err
+	}
+	if _, err := r.client.Request(r.bundle.Credential, "tool", s.Tool, parsed); err != nil {
+		return err
+	}
+
+	// Never selected by position: the request this run must wait for is
+	// the one whose summary names every policy-relevant field of the
+	// call the operator asked for. A selector less specific than that
+	// could match a request a human then approves by mistake.
+	id, err := r.pendingRequest(s)
+	if err != nil {
+		return err
+	}
+	r.app.notef("Filed as request %s. What a human is asked is the CALL:", id)
+	r.app.notef("  %s", s.Summary())
+	if s.Ungoverned != "" {
+		r.app.notef("")
+		r.app.notef("NOTE: this step's ACTION is not governed by the plane.")
+		for _, line := range strings.Split(strings.TrimRight(wrap(s.Ungoverned, 76), "\n"), "\n") {
+			r.app.notef("  %s", line)
+		}
+	}
+	r.app.notef("")
+	r.app.notef("Approve it with:  kmx approve %s --uses 1 --ttl 10m", id)
+	r.app.notef("or from Slack:    @kaimahi approve %s uses=1 ttl=10m", shortID(id))
+
+	if err := r.awaitApproval(id, s.Tool); err != nil {
+		return err
+	}
+
+	before, err := r.auditCount(s.Tool)
+	if err != nil {
+		return err
+	}
+	r.app.notef("Approved — performing the call")
+	if s.Exec != nil {
+		// The DECISION was governed; the TRANSFER is this.
+		return r.exec(s, s.Exec.Args)
+	}
+	if _, err := r.turn(s); err != nil {
+		r.app.notef("the agent's turn did not complete cleanly: %v", err)
+	}
+	row, err := r.newestAudit(s.Tool, before)
+	if err != nil {
+		return err
+	}
+	if !strings.Contains(row.Decision, "allowed") || !strings.Contains(row.Detail, "granted") {
+		return fmt.Errorf("%s was approved but the call was not admitted under the grant (%s %s). Nothing is "+
+			"being reported as done that the plane did not record", s.Tool, row.Decision, row.Detail)
+	}
+	r.app.notef("Admitted under the grant. The filed request and this row carry the same digest: the call a")
+	r.app.notef("human approved is provably the call that ran.")
+	return nil
+}
+
+// errDryRunStop ends a run at the first step with consequences, without
+// reporting a failure.
+var errDryRunStop = dryRunStop{}
+
+type dryRunStop struct{}
+
+func (dryRunStop) Error() string { return "dry run: stopped before the first call with consequences" }
+
+// --- the plane's own record -------------------------------------------
+
+type auditRow struct {
+	Tool     string
+	Decision string
+	Detail   string
+	Summary  string
+}
+
+func (r *workflowRun) auditRows() ([]auditRow, error) {
+	doc, err := r.client.Get("tool-audit", "/admin/tool-audit?credential="+r.bundle.Credential+"&limit=50")
+	if err != nil {
+		return nil, err
+	}
+	raw, _ := json.Marshal(doc["entries"])
+	var entries []map[string]any
+	_ = json.Unmarshal(raw, &entries)
+	out := make([]auditRow, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, auditRow{
+			Tool:     text(e["tool"]),
+			Decision: text(e["decision"]),
+			// `detail` is the plane's own word for WHY: "granted",
+			// "within standing constraint", "tool call not permitted…".
+			// It is the column `kmx audit tool` prints and CI greps.
+			Detail:  text(e["detail"]),
+			Summary: text(e["arg_summary"]),
+		})
+	}
+	return out, nil
+}
+
+func (r *workflowRun) auditCount(tool string) (int, error) {
+	rows, err := r.auditRows()
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, row := range rows {
+		if row.Tool == tool {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// newestAudit returns the most recent audit row for a tool, and refuses
+// to invent one: if the count did not grow, the call did not reach the
+// plane at all, which is a different fact from a denial.
+func (r *workflowRun) newestAudit(tool string, before int) (auditRow, error) {
+	rows, err := r.auditRows()
+	if err != nil {
+		return auditRow{}, err
+	}
+	var mine []auditRow
+	for _, row := range rows {
+		if row.Tool == tool {
+			mine = append(mine, row)
+		}
+	}
+	if len(mine) <= before {
+		return auditRow{}, fmt.Errorf("%s produced no tool-audit row at all. The agent did not make the call — "+
+			"a tool it cannot see is a tool it cannot attempt, so there is no denial either", tool)
+	}
+	return mine[0], nil
+}
+
+func (r *workflowRun) liveGrant(tool string) (bool, error) {
+	doc, err := r.client.Get("grants", "/admin/grants?credential="+r.bundle.Credential+"&limit=50")
+	if err != nil {
+		return false, err
+	}
+	raw, _ := json.Marshal(doc["grants"])
+	var grants []map[string]any
+	_ = json.Unmarshal(raw, &grants)
+	for _, g := range grants {
+		if text(g["kind"]) == "tool" && text(g["subject"]) == tool && truthy(g["live"]) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// pendingRequest finds the request for THIS call, by its summary.
+func (r *workflowRun) pendingRequest(s blueprint.RenderedStep) (string, error) {
+	doc, err := r.client.Get("approvals", "/admin/approvals")
+	if err != nil {
+		return "", err
+	}
+	raw, _ := json.Marshal(doc["pending"])
+	var requests []map[string]any
+	_ = json.Unmarshal(raw, &requests)
+	id := selectRequest(requests, r.bundle.Credential, s.Tool, s.Summary())
+	if id == "" {
+		return "", fmt.Errorf("the request for this call was not filed:\n    %s\n"+
+			"  Nothing has been approved and nothing was done.", s.Summary())
+	}
+	return id, nil
+}
+
+// selectRequest picks the pending request for one exact call.
+//
+// NEVER by position, and never by tool name alone. The summary names
+// every policy-relevant field of the call in the order the plane
+// declares them, so a selector less specific than this could match a
+// request for a DIFFERENT call — which a human would then approve
+// believing they had approved this one. That is the shape of P13's
+// failure: on its first live run the agent filed a payment for a
+// different invoice at the same amount, and the approval landed on the
+// wrong one.
+func selectRequest(requests []map[string]any, credential, tool, want string) string {
+	for _, req := range requests {
+		if text(req["credential"]) != credential || text(req["kind"]) != "tool" {
+			continue
+		}
+		if text(req["subject"]) != tool {
+			continue
+		}
+		if summary := text(req["arg_summary"]); summary == want || strings.Contains(summary, want) {
+			return text(req["id"])
+		}
+	}
+	return ""
+}
+
+// awaitApproval blocks until a human decides, or the wait runs out.
+func (r *workflowRun) awaitApproval(id, tool string) error {
+	deadline := time.Now().Add(time.Duration(r.opt.HumanSeconds) * time.Second)
+	for time.Now().Before(deadline) {
+		still, err := r.stillPending(id)
+		if err != nil {
+			return err
+		}
+		if !still {
+			// The request left the pending list: approved, or denied.
+			// Which one is the GRANTS view's answer, not a guess — the
+			// approvals audit carries no request id to match on, and a
+			// driver that assumed "gone means approved" would carry on
+			// after a denial.
+			return r.confirmDecision(id, tool)
+		}
+		time.Sleep(5 * time.Second)
+	}
+	return fmt.Errorf("nobody decided request %s within %ds. Nothing was done; resume with --step",
+		id, r.opt.HumanSeconds)
+}
+
+func (r *workflowRun) stillPending(id string) (bool, error) {
+	doc, err := r.client.Get("approvals", "/admin/approvals")
+	if err != nil {
+		return false, err
+	}
+	raw, _ := json.Marshal(doc["pending"])
+	var requests []map[string]any
+	_ = json.Unmarshal(raw, &requests)
+	for _, req := range requests {
+		if text(req["id"]) == id {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// confirmDecision distinguishes an approval from a denial by the grant
+// it did or did not create, and honours --approver: P8b records WHO
+// decided, and a workflow that wanted one person's approval must not
+// accept somebody else's.
+func (r *workflowRun) confirmDecision(id, tool string) error {
+	doc, err := r.client.Get("grants", "/admin/grants?credential="+r.bundle.Credential+"&limit=50")
+	if err != nil {
+		return err
+	}
+	raw, _ := json.Marshal(doc["grants"])
+	var grants []map[string]any
+	_ = json.Unmarshal(raw, &grants)
+	for _, g := range grants {
+		if text(g["kind"]) != "tool" || text(g["subject"]) != tool || !truthy(g["live"]) {
+			continue
+		}
+		by := text(g["decided_by"])
+		if r.opt.Approver != "" && by != r.opt.Approver {
+			return fmt.Errorf("request %s was approved by %q, and this run requires %q. Nothing was done",
+				id, by, r.opt.Approver)
+		}
+		r.app.notef("Approved%s.", decidedBy(by))
+		return nil
+	}
+	return fmt.Errorf("request %s left the pending list and no live grant for %s exists — it was denied, or "+
+		"the grant it created has already lapsed. Nothing was done", id, tool)
+}
+
+func decidedBy(who string) string {
+	if who == "" || who == "none" {
+		return ""
+	}
+	return " by " + who
+}
+
+// --- actions on this machine ------------------------------------------
+
+// exec runs a step's ungoverned action.
+func (r *workflowRun) exec(s blueprint.RenderedStep, args []string) error {
+	var bin string
+	var argv []string
+	switch {
+	case s.Exec.Script != "":
+		// Materialised from the bundle rather than read off disk, which
+		// is what lets a blueprint carried by the binary run on a
+		// machine with no checkout.
+		body, err := r.bundle.Script(s.Exec.Script)
+		if err != nil {
+			return err
+		}
+		path := filepath.Join(r.dir, s.Exec.Script)
+		if err := os.WriteFile(path, body, 0o700); err != nil {
+			return err
+		}
+		bin, argv = "bash", append([]string{path}, args...)
+	default:
+		bin, argv = s.Exec.Command[0], append(append([]string{}, s.Exec.Command[1:]...), args...)
+	}
+	for _, need := range s.Exec.Requires {
+		if _, err := exec.LookPath(need); err != nil {
+			return fmt.Errorf("step %q needs %s on PATH and it is not there. kmx does not fetch it: it is your "+
+				"own logged-in tool, and a fresh download would have nobody logged into it", s.Label, need)
+		}
+	}
+	cmd := r.app.Run.Command(bin, argv...)
+	cmd.Env = os.Environ()
+	for _, k := range sortedKeysOf(s.Exec.Env) {
+		v, err := r.resolveCaptures(s.Exec.Env[k])
+		if err != nil {
+			return err
+		}
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	cmd.Stdout, cmd.Stderr = r.app.Out, r.app.Err
+	fmt.Fprintf(r.app.Err, "%s %s\n", bin, strings.Join(argv, " "))
+	return cmd.Run()
+}
+
+// resolveCaptures substitutes ${capture.x} and ${capture.x.file}, which
+// the renderer deliberately left alone: they do not exist until a step
+// has run.
+func (r *workflowRun) resolveCaptures(s string) (string, error) {
+	out := s
+	for name, text := range r.captures {
+		out = strings.ReplaceAll(out, "${capture."+name+"}", text)
+		out = strings.ReplaceAll(out, "${capture."+name+".file}", r.files[name])
+	}
+	if i := strings.Index(out, "${capture."); i >= 0 {
+		rest := out[i:]
+		if end := strings.Index(rest, "}"); end > 0 {
+			return "", fmt.Errorf("this step reads %s, and no step in THIS run captured it. Resuming with "+
+				"--step skips the step that would have; run the whole workflow, or the step that captures it",
+				rest[:end+1])
+		}
+	}
+	return out, nil
+}
+
+// --- expiring credentials ---------------------------------------------
+
+// refreshFor re-mints an expiring upstream credential before a step that
+// touches its seam.
+//
+// The Entra token W32 rides lives about an hour and a release session is
+// longer; it expired twice on the first real run, and both times the
+// visible symptom was the agent saying "there is no pipelines_build tool
+// in my toolset" — the seam had gone Accepted=False and kagent had
+// dropped its tools. Cause and symptom nowhere near each other, and
+// nothing in the message pointing at a credential.
+func (r *workflowRun) refreshFor(s blueprint.RenderedStep) error {
+	seam := s.Upstream
+	if seam == "" {
+		// A turn can touch any seam this workflow has, so refresh them
+		// all — a token minted a minute ago is not minted again.
+		for _, name := range sortedAny(r.bundle.Seams) {
+			if err := r.refreshSeam(name); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return r.refreshSeam(seam)
+}
+
+// refreshInterval is how often one seam's credential is re-minted inside
+// a run. Short enough that no step rides a token near its end; long
+// enough that a ten-step workflow does not shell out ten times.
+const refreshInterval = 10 * time.Minute
+
+func (r *workflowRun) refreshSeam(name string) error {
+	ref := r.bundle.Seams[name].Refresh
+	if ref == nil {
+		return nil
+	}
+	if r.refreshed == nil {
+		r.refreshed = map[string]time.Time{}
+	}
+	if last, ok := r.refreshed[name]; ok && time.Since(last) < refreshInterval {
+		return nil
+	}
+	if _, err := exec.LookPath(ref.Requires); err != nil {
+		r.app.notef("%s is not on PATH — leaving the %s credential as it is (%s)", ref.Requires, name, ref.Why)
+		return nil
+	}
+	out, err := r.app.Run.Capture(ref.Command[0], ref.Command[1:]...)
+	if err != nil || strings.TrimSpace(out) == "" {
+		r.app.notef("could not mint a %s credential; the stored one stays in place", name)
+		return nil
+	}
+	// Through a 0600 file and `--from-file`, never argv: a token in a
+	// command line is a token in the process table (D27's custody rule,
+	// which is why every secret-capture script in this repo does this).
+	path := filepath.Join(r.dir, name+".cred")
+	if err := os.WriteFile(path, []byte(strings.TrimSpace(out)), 0o600); err != nil {
+		return err
+	}
+	defer os.Remove(path)
+	manifest, err := r.app.kubectlCapture("-n", "kaimahi", "create", "secret", "generic", ref.Secret,
+		"--from-file="+ref.Key+"="+path, "--dry-run=client", "-o", "yaml")
+	if err != nil {
+		return err
+	}
+	if err := r.app.Run.RunStdin([]byte(manifest), "kubectl", r.app.kubectl("apply", "-f", "-")...); err != nil {
+		return err
+	}
+	r.refreshed[name] = time.Now()
+	r.app.notef("Refreshed the %s credential in plane custody: %s", name, ref.Why)
+	return r.reconnectSeam(ref)
+}
+
+// reconnectSeam makes kagent look again.
+//
+// `Accepted` is a CACHED reconcile result: kagent records it when it last
+// tried and does not retry, so after a refresh it still reads Unauthorized
+// from minutes ago. W32's first health check reported a healthy credential
+// as broken for exactly this reason.
+func (r *workflowRun) reconnectSeam(ref *blueprint.Refresh) error {
+	if ref.Seam == "" {
+		return nil
+	}
+	status, err := r.app.kubectlCapture("-n", "kagent", "get", "remotemcpserver", ref.Seam,
+		"-o", `jsonpath={range .status.conditions[?(@.type=="Accepted")]}{.status}|{.message}{end}`)
+	if err != nil || strings.HasPrefix(status, "True") {
+		return nil
+	}
+	r.app.notef("The %s seam last failed to connect (%s); re-checking it against the credential that exists now.",
+		ref.Seam, status)
+	// A mounted Secret is not updated the instant it is written, so the
+	// re-check waits for the projection before deciding.
+	time.Sleep(secretProjectionWait)
+	_ = r.app.kubectlRun("-n", "kagent", "annotate", "remotemcpserver", ref.Seam,
+		"kaimahi.dev/refreshed-at="+time.Now().UTC().Format(time.RFC3339), "--overwrite")
+	return nil
+}
+
+// secretProjectionWait is the kubelet's Secret refresh lag. A projected
+// Secret is not updated the instant it is written.
+var secretProjectionWait = 45 * time.Second
+
+// --- small helpers ----------------------------------------------------
+
+func text(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case nil:
+		return ""
+	default:
+		return fmt.Sprint(t)
+	}
+}
+
+func truthy(v any) bool {
+	switch t := v.(type) {
+	case bool:
+		return t
+	case string:
+		return t == "yes" || t == "true"
+	default:
+		return false
+	}
+}
+
+func shortID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
+}
+
+func containsString(list []string, want string) bool {
+	for _, v := range list {
+		if v == want {
+			return true
+		}
+	}
+	return false
+}
+
+func sortedKeysOf(m map[string]string) []string { return sortedKeys(m) }
