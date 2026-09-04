@@ -313,6 +313,100 @@ Deliberately NOT on this list: multi-cluster policy distribution and
 reconciliation from a central controller. Real for a fleet, premature
 for a project whose story is one cluster.
 
+## Upstream candidates (kagent) — things we work around and should not
+
+D40 ruled that Kaimahi stays thin over kagent and that contributing
+upstream remains a live option rather than a rejected one. This is where
+that stops being a sentiment. **We have contributed nothing to kagent so
+far** — no issue, no PR — which is a weak position from which to argue
+that kagent is the bet.
+
+**The rule that keeps this list honest: a lane that works around kagent
+behaviour records it here, with its reproduction, in the same PR.** A
+workaround nobody writes down becomes folklore, and then becomes
+something we maintain forever because nobody remembers it was someone
+else's bug.
+
+**What belongs here:** behaviour we work around, and seams that would
+make kagent more *governable* by anyone. **What does not:** our
+opinionated policy — call-bound approvals, argument digests,
+deny-and-pend, a standing constraint that overrides an allowlist. Those
+are the product: a general-purpose runtime should not be forced to hold
+our opinions, and the opinion is what we sell.
+
+| # | Finding | Evidence we already hold | Confidence |
+|---|---------|--------------------------|------------|
+| U1 | **The Agent's `Ready` condition never flips during a preset switch, and reconcile is async** — so `kubectl rollout status` can report on the OLD template. A consumer that waits ONLY on `Ready` (and does not also check `observedGeneration`, the pod-template hash, or termination state) therefore gets a false positive. Confirmed on a lane's cluster: the old pod was Ready AND Terminating after "successfully rolled out". | CI flake class 3 and the W16 delta sheet, including the failing run that started it — a governed chat completed and the ledger had zero rows, because the old ungoverned pod answered. Our workaround is `wait_switched`: three waits, carried into `kmx` at milestone 3, which every consumer driving kagent programmatically would otherwise reinvent. | **High.** Reproduced, understood, and the cost is borne by other people too. |
+| U3 | **`kagent invoke` emits raw JSON with no human-readable mode.** We built a readable terminal view and kept raw JSON for pipes (#71). | The chat view and its tests. | **Low.** A preference, not a defect, and possibly deliberate. Offer it; do not press it. |
+
+### U1, as a reproduction someone else can run
+
+An issue without this is a claim; with it, it is a bug report. Written
+out here so filing it is transcription rather than recall.
+
+**Environment.** kagent 0.9.12 (this repo's pinned `KAGENT_VERSION`), a
+kind cluster, an Agent with a working `ModelConfig` and at least one
+Ready pod.
+
+**Steps.** Patch the Agent's `spec.declarative.modelConfig` to a
+different preset — and it must differ in EFFECTIVE configuration, not
+merely in name, or kagent has nothing to roll and the race never opens.
+Two ModelConfigs pointing at the same provider, endpoint and model
+produce an identical Deployment and will not reproduce this. The pair
+used here was `ollama` (`provider: Ollama`) and `governed-ollama`
+(`provider: OpenAI`, pointed at a different endpoint) — different
+providers, so the pod spec genuinely changes. Then wait the way a naive
+consumer would: `kubectl -n kagent wait --for=condition=Ready
+agent/<name>` followed by `kubectl -n kagent rollout status
+deploy/<name>`.
+
+**Expected.** When both return, the agent is serving the NEW preset.
+
+**Observed.** Both return while the OLD pod is still Ready and
+Terminating, and it can answer the next request — so a turn issued
+immediately afterwards runs on the previous configuration. In this
+project that surfaced as a governed chat completing while the spend
+ledger stayed empty: the ungoverned pod answered.
+
+**What makes it correct.** Wait on the Agent's `observedGeneration`
+catching up, THEN `rollout status`, THEN poll until the pod list for the
+agent contains exactly the pod-template-hash of the ReplicaSet at the
+Deployment's current revision — Terminating pods still list, which is
+the trap. That is `wait_switched` (Makefile, and carried into
+`internal/kmx/app/use.go` at milestone 3), bounded and loud on timeout.
+
+**The ask** is not that kagent adopt those three waits, but that
+`Ready` mean the switch is done — or that the documentation say plainly
+that it does not, so consumers know to look further.
+
+### U2 is WITHDRAWN — it was ours, not kagent's
+
+The row that stood here said agent pods carry no security context and
+that the pod spec is kagent's to fix. It was marked verify-first, and
+verifying it killed it. **The Agent CRD at v0.9.12 — the version this
+repo pins — exposes `spec.declarative.deployment.securityContext`
+(`runAsNonRoot`, `readOnlyRootFilesystem`, `allowPrivilegeEscalation`,
+`capabilities`, `privileged`, …) and `spec.declarative.deployment.
+podSecurityContext` beside it.** kagent hands us the field. We do not
+set it.
+
+So this is a **Kaimahi todo, not an upstream ask**, and filing it would
+have been both wrong and embarrassing: a project asking another to add
+a field it already ships. It moves to the candidates list as our own
+work — set a hardened context on `k8s/hello-world.yaml`,
+`k8s/tools-agent.yaml`, `k8s/ap-agent.yaml` and whatever `kmx agent
+create` scaffolds, so the workload that executes model output stops
+being the least constrained thing in the cluster.
+
+Kept as a row rather than deleted, because the near-miss is the useful
+part: "verify first" was the right label, and it was applied to the one
+row that turned out to be wrong.
+
+Sequencing: **U1 first and alone.** It is reproducible, it costs other
+people too, and one good issue with a real reproduction is a better
+opening than three of mixed quality. U2 gets verified against the CRD
+before it is written down anywhere public.
+
 ## Under consideration (not GO — do not build yet)
 
 - **`make up` guard for governed agents** (W6 finding, 2026-09-01):
