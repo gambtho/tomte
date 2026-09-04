@@ -354,8 +354,44 @@ titles alone, and list separately any pull request whose title says nothing a us
 number and title -- do not invent a meaning for it. \
 Do not create anything. Report only what the tools told you." \
     || fail "the agent could not complete the proposal turn"
-  python3 "$here/show-turn.py" "$work/propose.out" --reply-only > "$work/notes.txt" || true
-  note "Draft notes saved. Nothing has been created."
+  note "Proposal printed above. Nothing has been created."
+}
+
+# --- 1b. compose the notes --------------------------------------------
+#
+# A SEPARATE turn, and the reason is a bug this lane shipped: do_propose's
+# whole reply was used as the release body, so the first real release got
+# 80 lines of the agent's working notes — its methodology, a 26-row pull
+# request inventory with merged_at timestamps, and a "needs a human"
+# section — where a release body belongs. The proposal is for a person to
+# read; the body is a different artifact and has to be asked for
+# separately.
+#
+# The house style is not described to the agent, it is SHOWN to it: the
+# previous release's own body, fetched through the governed gateway with
+# get_release_by_tag. Every project writes these differently and the last
+# one is the specification.
+do_compose() {
+  step "Composing the release notes for $version"
+  turn "$work/compose.out" \
+"Write the release notes body for $version of the GitHub repository owner $owner repo $name. \
+First call get_latest_release and get_release_by_tag to read the PREVIOUS release's notes, and match \
+its house style exactly -- its structure, heading style, tone and length. \
+Base the content on the pull requests you already listed in this conversation; if you do not have them, \
+call list_pull_requests with state closed, base $base, sort updated, direction desc, perPage 50, fields \
+number, title and merged_at, and use only those merged after the previous release. \
+Output ONLY the release notes markdown, ready to paste. No preamble, no explanation of what you did, \
+no methodology, no counts of pull requests examined, no section about what you could not classify, and \
+no sentence proposing or justifying the version number -- that decision was already made and a release \
+body is not where it is argued. \
+End with a line of the form: **Full Changelog**: https://github.com/$owner/$name/compare/PREVIOUS_TAG...$version \
+using the previous release tag you read." \
+    || fail "the agent could not compose the release notes"
+  python3 "$here/show-turn.py" "$work/compose.out" --reply-only > "$work/notes.txt" || true
+  [ -s "$work/notes.txt" ] || fail "the composed notes are empty"
+  grep -q 'Full Changelog' "$work/notes.txt" \
+    || note "warning: the composed notes carry no Full Changelog link"
+  note "Composed $(wc -l < "$work/notes.txt") lines."
 }
 
 # --- 2. cut the release branch ---------------------------------------
@@ -503,10 +539,11 @@ ado_seam_ok
 
 case "$STEP" in
   propose) do_propose ;;
+  compose) do_propose; do_compose; note "notes at $work/notes.txt"; cat "$work/notes.txt" ;;
   cut)     do_cut ;;
   build)   do_build ;;
   watch)   do_watch ;;
-  publish) do_propose; do_publish ;;
+  publish) do_propose; do_compose; do_publish ;;
   # Nothing but the credential refresh and the seam check above, which
   # every step already ran by the time we get here.
   refresh) note "Azure DevOps credential refreshed and the seam is connected." ;;
@@ -516,12 +553,13 @@ case "$STEP" in
       step "DRY_RUN — stopping before the first consequential call"
       exit 0
     fi
+    do_compose
     do_cut
     do_build
     do_watch
     [ -z "$ado_builds" ] || do_publish
     ;;
-  *) fail "unknown STEP '$STEP' (want propose, cut, build, watch, publish, refresh or all)" ;;
+  *) fail "unknown STEP '$STEP' (want propose, compose, cut, build, watch, publish, refresh or all)" ;;
 esac
 
 step "The record: every decision this credential got"
