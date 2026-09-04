@@ -3189,11 +3189,18 @@ jobs:
           SECONDS_TAKEN: ${{ steps.quickstart.outputs.seconds }}
         run: |
           set -euo pipefail
-          # Measured on this runner class when the job was written: ~4 min,
-          # of which the great majority is image and model bytes coming down
-          # the wire. The ceiling is deliberately far above it — this fails
-          # on a regression, not on a slow morning at a registry.
-          ceiling=720
+          # BASELINE: 157s, measured on this runner class (2 CPU, ubuntu-latest)
+          # the first time the job went green, of which the great majority is
+          # image and model bytes coming down the wire.
+          #
+          # The ceiling is that doubled. W31 exists to move this number, and a
+          # number nothing watches goes back up — so the check is deliberately
+          # a doubling detector rather than a generous "is it broken" bound.
+          #
+          # If this goes red: find what got slower FIRST. Raising the ceiling
+          # is the last resort and the baseline above must move with it, in
+          # the same commit, with the run that measured it named.
+          ceiling=315
           echo "time to first answer: ${SECONDS_TAKEN}s (ceiling ${ceiling}s)"
           if [ "$SECONDS_TAKEN" -gt "$ceiling" ]; then
             echo "time from one command to an answer regressed past the ceiling."
