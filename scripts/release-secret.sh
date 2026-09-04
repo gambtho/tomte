@@ -118,16 +118,19 @@ EOF
 # a real control that does not depend on trusting this script's guess.
 
 # 3. Its deadline, said now rather than when it bites — the same rule
-# P16 applied to Kaimahi's own credentials. GitHub returns this header
-# for a fine-grained token; a token with no expiry is refused, because an
-# unattended write credential that never dies is not one this lane hands
-# to an agent.
+# P16 applied to Kaimahi's own credentials.
+#
+# REPORTED, not enforced. GitHub sends this header for a fine-grained
+# token, but an absent header means "this response did not carry one",
+# which is not the same claim as "this token never expires" — and the
+# check that used to live above this one refused valid tokens by treating
+# a silence as a fact. Once is enough. So a missing header is said out
+# loud and the operator decides.
 expiry=$(tr -d '\r' < "$workdir/resp-headers" \
   | sed -n 's/^[Gg]ithub-[Aa]uthentication-[Tt]oken-[Ee]xpiration: *//p' | head -1)
 if [ -z "$expiry" ]; then
-  echo 'REFUSING: this token reports no expiration. Create it with an expiry —' >&2
-  echo 'a write credential that never dies is one nobody ever revokes.' >&2
-  exit 1
+  expiry="NOT REPORTED — check it yourself; an unattended write credential that
+  never dies is one nobody ever revokes"
 fi
 
 # 4. Store. --from-file keeps the value out of argv; the manifest exists
@@ -137,7 +140,8 @@ $KUBECTL get namespace "$NAMESPACE" >/dev/null 2>&1 || $KUBECTL create namespace
 $KUBECTL -n "$NAMESPACE" create secret generic "$SECRET_NAME" \
   --from-file=token="$workdir/token" \
   --dry-run=client -o yaml | $KUBECTL apply -f - >/dev/null
-echo "Secret $NAMESPACE/$SECRET_NAME stored. It expires $expiry." >&2
+echo "Secret $NAMESPACE/$SECRET_NAME stored." >&2
+echo "Token expiry: $expiry" >&2
 
 cat >&2 <<'NOTE'
 
