@@ -33,7 +33,31 @@
 # key, never a create-or-replace of the whole ConfigMap: another
 # operator's fragments live in there too.
 #
+# THE BUILDS ARE ROUTINE, AND ARE BOUND RATHER THAN APPROVED. Optionally
+# (ADO_ORG + ADO_PROJECT + ADO_PIPELINES) this also constrains
+# pipelines_write to `action run_pipeline` on exactly the pipeline ids
+# named, in one project of one organization. Those builds then run with no
+# human at all, audited, and anything else on that tool — another
+# pipeline, another project, `create_pipeline`, `update_build_stage` — is
+# denied and files a request.
+#
+# Why that is the right shape, and not a weakening: a build is repeatable,
+# reversible and cheap. What is consequential in a release is cutting the
+# branch and publishing. Approving each build spends a human's attention
+# on the safest step of the process — and, measured on the first real run,
+# it also creates a race the process cannot win: the Azure DevOps
+# credential is an Entra access token that lives about an hour, and the
+# time between filing a request, a human approving it and the agent
+# calling is exactly that long. Approvals were stranded by an expired
+# token, not by anyone's decision.
+#
+# The caveat, stated because a constraint ADMITS: the ref a pipeline
+# builds is nested (resources.repositories.*.refName) and cannot be a
+# policy field, so this constraint admits those pipelines on ANY ref. It
+# bounds WHICH pipeline runs, not WHAT it builds. See docs/release-agent.md.
+#
 # Usage: GITHUB_REPO=owner/name bash scripts/release-bind.sh
+#          [ADO_ORG=... ADO_PROJECT=... ADO_PIPELINES=1000,1001,1003]
 #        GITHUB_REPO=- bash scripts/release-bind.sh     (remove the binding)
 set -euo pipefail
 umask 077
@@ -41,6 +65,9 @@ umask 077
 KUBECTL="${KUBECTL:-kubectl}"
 CRED_RELEASE="${CRED_RELEASE:-release-agent}"
 repo="${GITHUB_REPO:-}"
+ado_org="${ADO_ORG:-}"
+ado_project="${ADO_PROJECT:-}"
+ado_pipelines="${ADO_PIPELINES:-}"
 
 [ -n "$repo" ] || { echo 'usage: make release-bind GITHUB_REPO=owner/name  (or GITHUB_REPO=- to remove)' >&2; exit 2; }
 if [ "$repo" != "-" ] && ! [[ "$repo" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$ ]]; then
@@ -71,10 +98,11 @@ if [ "$repo" = "-" ]; then
   $KUBECTL -n kaimahi patch configmap "$OVERLAY_CM" --type merge \
     -p "{\"data\": {\"$FRAGMENT\": null}}" >/dev/null 2>&1 || true
 else
-  python3 - "$work/base.json" "$CRED_RELEASE" "$repo" <<'EOF' > "$work/fragment.json"
+  python3 - "$work/base.json" "$CRED_RELEASE" "$repo" "$ado_org" "$ado_project" "$ado_pipelines" <<'EOF' > "$work/fragment.json"
 import json, sys
 
 base, cred, repo = sys.argv[1], sys.argv[2], sys.argv[3]
+ado_org, ado_project, ado_pipelines = sys.argv[4], sys.argv[5], sys.argv[6]
 c = json.load(open(base))
 owner, name = repo.split("/", 1)
 
@@ -95,12 +123,35 @@ if cred in (c.get("standing_constraints") or {}):
     sys.exit("the committed table already constrains %r; refusing to shadow it from an "
              "overlay (the merge would be refused at boot anyway)" % cred)
 
+constraints = {t: [{"field": "owner", "op": "eq", "value": owner},
+                   {"field": "repo", "op": "eq", "value": name}] for t in read_tools}
+
+# The builds, if asked for. Every field named here must be one the tool
+# DECLARES policy-relevant, or the plane refuses the whole config at boot.
+if ado_pipelines:
+    if not (ado_org and ado_project):
+        sys.exit("ADO_PIPELINES needs ADO_ORG and ADO_PROJECT")
+    try:
+        ids = [int(x) for x in ado_pipelines.split(",") if x.strip()]
+    except ValueError:
+        sys.exit("ADO_PIPELINES must be a comma-separated list of numeric pipeline ids")
+    if not ids:
+        sys.exit("ADO_PIPELINES named no pipelines")
+    declared_write = declared.get("pipelines_write", {}).get("policy_fields") or []
+    for f in ("action", "orgName", "project", "pipelineId"):
+        if f not in declared_write:
+            sys.exit("pipelines_write does not declare %r as policy-relevant, so a "
+                     "constraint on it could not be enforced" % f)
+    constraints["pipelines_write"] = [
+        {"field": "action", "op": "eq", "value": "run_pipeline"},
+        {"field": "orgName", "op": "eq", "value": ado_org},
+        {"field": "project", "op": "eq", "value": ado_project},
+        {"field": "pipelineId", "op": "in", "values": ids},
+    ]
+
 # The fragment carries ONLY standing_constraints. An overlay may not set
 # an upstream's custody fields, and this needs none of them.
-json.dump({"standing_constraints": {cred: {
-    t: [{"field": "owner", "op": "eq", "value": owner},
-        {"field": "repo", "op": "eq", "value": name}] for t in read_tools}}},
-    sys.stdout, indent=2)
+json.dump({"standing_constraints": {cred: constraints}}, sys.stdout, indent=2)
 EOF
 
   # Create the overlay ConfigMap if this is the first fragment, then set

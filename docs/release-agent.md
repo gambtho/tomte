@@ -300,6 +300,29 @@ when it dies — the server answers 401, the gateway audits it, nothing is
 half-done — but it is real friction, and P16's credential deadlines exist
 for the same reason.
 
+## Builds are bounded, not approved
+
+`make release-bind` optionally takes `ADO_ORG`, `ADO_PROJECT` and
+`ADO_PIPELINES`, and constrains `pipelines_write` to `action
+run_pipeline` on exactly those pipeline ids in that one project of that
+one organization. Those builds then run with **no human at all**,
+audited; anything else on that tool — another pipeline, another project,
+`create_pipeline`, `update_build_stage` — is denied and files a request.
+
+That is not a weakening, and the first real run produced two arguments
+for it. The first is judgement: a build is repeatable, reversible and
+cheap, so approving each one spends a person's attention on the safest
+step in the release. The second is measured. The Azure DevOps credential
+is an Entra access token that lives about an hour, and the elapsed time
+between filing a request, a human approving it, and the agent making the
+call is *exactly that long*. On the first run the token expired in that
+window and stranded three approvals that had already been given. A
+release process with a human in it will lose that race routinely, not
+occasionally.
+
+The caveat, stated because a constraint ADMITS: see the next section —
+this bounds WHICH pipeline runs, not WHAT it builds.
+
 ## Known gap: the ref an Azure DevOps build runs on cannot be bound
 
 An approval for `pipelines_write` binds *which pipeline in which

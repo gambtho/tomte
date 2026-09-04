@@ -1446,6 +1446,7 @@ release-bind: guard
 	@test -n "$(GITHUB_REPO)" || \
 		{ echo 'usage: make release-bind GITHUB_REPO=owner/name' >&2; exit 1; }
 	@KUBECTL="$(KUBECTL)" CRED_RELEASE=$(CRED_RELEASE) GITHUB_REPO="$(GITHUB_REPO)" \
+		ADO_ORG='$(ADO_ORG)' ADO_PROJECT='$(ADO_PROJECT)' ADO_PIPELINES='$(ADO_PIPELINES)' \
 		bash scripts/release-bind.sh
 
 ## release: cut a release. ONE command — the agent drafts and proposes,
