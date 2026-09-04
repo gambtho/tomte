@@ -251,23 +251,33 @@ EOF
 done < "$work/plan"
 
 # Print the decision, file by file, before anything is created or moved.
+#
+# "unknown" is NOT "no match". An Azure DevOps PIPELINE artifact (as
+# opposed to a container/build artifact) cannot have its contents listed
+# without downloading it, and that is where the installers live —
+# aks-desktop-signed on this project. Counting those as zero made the
+# guard refuse a build that had the assets all along.
 kept=0
+unknown=0
 while IFS=$'\t' read -r b name size base; do
-  if [ "$base" = "(unlisted)" ]; then note "?      build $b  $name (contents unknown until downloaded)"; continue; fi
+  if [ "$base" = "(unlisted)" ]; then
+    note "?      build $b  $name — a pipeline artifact; its files are filtered on download"
+    unknown=$((unknown + 1))
+    continue
+  fi
   hsize=$(numfmt --to=iec --suffix=B "$size" 2>/dev/null || echo "${size}B")
   if matches_glob "$base"; then note "KEEP   $base  ($hsize, build $b / $name)"; kept=$((kept + 1))
   else note "skip   $base  ($hsize, build $b / $name)"; fi
 done < "$work/files"
 note ""
-note "$kept file(s) match ASSET_GLOBS=$asset_globs"
+note "$kept listable file(s) match ASSET_GLOBS=$asset_globs"
+[ "$unknown" -eq 0 ] || note "$unknown pipeline artifact(s) will be filtered by the same globs after download"
 
-# The empty case is a FAILURE in both modes, and that matters more in
-# --list than in the real run: --list is what the driver calls BEFORE it
-# asks a human, so exiting 0 here meant the driver went on to request
-# approval for a release with no assets. The real run would still have
-# refused — the same check, one line down — but a person had already been
-# asked to approve something that could never happen.
-if [ "$kept" -eq 0 ]; then
+# Nothing to publish means nothing MATCHED and nothing is still unknown.
+# --list is what the driver calls BEFORE it asks a human, so exiting 0
+# with an empty selection meant the driver went on to request approval
+# for a release with no assets.
+if [ "$kept" -eq 0 ] && [ "$unknown" -eq 0 ]; then
   echo 'no file matched ASSET_GLOBS — there is nothing to publish.' >&2
   echo 'Either the builds have not produced installers yet, or ASSET_GLOBS' >&2
   echo "does not describe them. Current globs: $asset_globs" >&2
@@ -317,7 +327,10 @@ while IFS=$'\t' read -r b name url; do
   rm -rf "$work/x"
 done < "$work/plan"
 
-[ "$uploaded" -gt 0 ] || { echo 'nothing was uploaded' >&2; exit 1; }
+[ "$uploaded" -gt 0 ] || {
+  echo 'nothing was uploaded: no file inside any artifact matched ASSET_GLOBS.' >&2
+  echo "Globs: $asset_globs" >&2
+  exit 1; }
 
 # --- 4. what actually landed, read back from GitHub --------------------
 step "What is on the release, read back from GitHub"
