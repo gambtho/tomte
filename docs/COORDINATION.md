@@ -3178,6 +3178,163 @@ merge. Report deviations in the PR.
 
 ## Delta sheets from finished lanes
 
+### W28 — a version you can install, verify and upgrade (PR #85, merged 2026-09-03)
+
+Verified against the RELEASE, not the branch.
+
+- **The checksum verifies.** Downloaded `kmx-linux-amd64` and
+  `checksums.txt` from the v0.1.0 release and ran `sha256sum -c`: OK.
+  Four platforms are published (darwin/linux × amd64/arm64).
+- **The binary knows what it is**: `kmx v0.1.0 (release build)`, not
+  "unknown" and not a bare sha, and it says pre-1.0 and incubating on
+  the same screen.
+- **The whole stack came up from the DOWNLOADED binary** — `up`,
+  `plane`, `govern` on the coordinator's own cluster. The install path
+  the README advertises is the path that was exercised.
+- **The upgrade test is real, and it is the best thing in this lane.**
+  `plane-upgrade` is green on main and does what eight migrations had
+  never had done to them: installs an OLDER plane from the module proxy,
+  puts genuine governance state in it through its own admin API (a
+  credential, a budget, an allowlist, a live approved grant, and a
+  ledger row from a metered call it actually forwarded), then starts the
+  NEW plane against the SAME database and asserts every one survived,
+  the schema moved, and a fresh governed call lands after the old rows.
+  On a second database it proves the documented failure mode: a
+  migration that cannot apply means the plane does NOT start, and the
+  data it could not migrate is untouched. No cluster and no container —
+  both versions run as plain processes — which is what makes it
+  affordable to run on every PR.
+
+### P15 / W29 — govern an agent this repo did not write (PR #87, merged 2026-09-03)
+
+Verified by doing it: a server outside our four demo upstreams,
+onboarded on the coordinator's cluster, then called.
+
+- **The generic path works end to end.** `kmx tools add warehouse --url
+  … --tool stock_get:sku --tool stock_adjust:sku,delta` scaffolded the
+  upstream; `kmx tools govern` issued the credential and pointed the
+  agent; an allowlisted `stock_get` was **allowed 200** and a
+  non-allowlisted `stock_adjust` was **denied 403 and pended** — both
+  audited with their call summaries (`stock_get: sku SKU-1
+  [bbcc09e7f5db]`, `stock_adjust: sku SKU-1, delta 5 [d55d6ddf6f8b]`).
+- **CI proves the part that matters**: onboarding runs against a plain
+  `acme-warehouse` in its own namespace, and asserts the seam points at
+  the GATEWAY not the server, that the scaffolded policy carries the
+  CONTAINER port rather than the Service's, that it opens no address
+  range, and that it is exactly the proxy-to-server pair and nothing
+  wider. That is the least-privilege guardrail W29 was given, tested.
+- **`--out -` mutates nothing**, asserted by diffing NetworkPolicies and
+  ConfigMaps around it — which is exactly what CI diffs, and therefore
+  exactly what this claim covers. **Gap worth closing:** the
+  `RemoteMCPServer` the command also scaffolds is NOT diffed, so a
+  regression that created one under `--out -` would pass. One more
+  `kubectl get remotemcpserver -o name` either side would close it.
+- The guide's worked example carries the same digest this run produced,
+  so `docs/govern-your-agent.md` was written from a real run rather than
+  composed.
+- **Two of W29's rulings were NOT implemented, and the first draft of
+  this sheet claimed coverage it did not have.** Checked statically
+  after review pressure, and both are absences rather than untested
+  claims: (a) **D36's amendment — onboarding must succeed with NO policy
+  declaration** — is not met: `kmx tools add` REFUSES a bare `--tool
+  name` and CI asserts the refusal. The refusal is a good one (it names
+  all three answers, including `tool:*` to bind everything), so the gate
+  is mild and arguably better than the amendment asked for, but it IS a
+  gate, and D36 said the fast path must not have one. (b) **The
+  "countable, not merely warned about" rule** — `kmx status` reporting
+  something like "3 tool servers, 0 governed" — is absent: `status.go`
+  contains no ungoverned count, and the only ungoverned signal in the
+  tree is the one-shot warning in `create.go`. **Ruling: accept (a)**,
+  because a refusal that names `tool:*` costs one flag and prevents a
+  silent weak default; **(b) stands open** as the insurance D41-era
+  reasoning asked for and did not get. Neither is a defect in what was
+  built; both are gaps between the amended prompt and the delivery, and
+  the sheet should have said so before review did.
+
+### W30 — identity on the call, and credentials that expire (PR #86, merged 2026-09-03)
+
+- **The identity vocabulary is better than the lane was asked for.** W30
+  was told that an empty column meaning either "nobody" or "we lost it"
+  is worse than no column. It answers with four values that are four
+  different facts: `slack:<user id>` (a person the signature vouched
+  for), **`none`** (the plane can say there was no person — a complete
+  answer), **`unknown`** (attribution was LOST: two runs open at once,
+  or the read failed), and `legacy` (predates attribution). It reuses
+  P8b's `decided_by` shape rather than inventing a second vocabulary.
+- **The pg_dump constraint is honoured explicitly**: the Slack user id
+  and nothing else — no name, no email, no profile — with the reason
+  written into the migration.
+- **Verified live**: an operator-driven turn ledgered `acted for: none`,
+  not a blank.
+- **Expiry fails closed and says what to do.** `kmx credential renew`
+  refuses a TTL under 60s AND refuses to issue a credential with no
+  expiry at all. After a 60s credential lapsed, a governed call was
+  refused with: *expired credential "hello-world": it expired at …;
+  renew it with 'make credential-renew NAME=hello-world TTL=720h', or
+  re-issue the credential and re-point its Secret* — the problem, the
+  time, and two ways out.
+- **Scope of that check, stated precisely:** the REFUSAL was verified
+  live; that the refusal is AUDITED was not. What is verified statically
+  is that all three seams (proxy, gateway, inbound bridge) recognise
+  `store.ExpiredPrefix` and classify it as
+  `metrics.ReasonCredentialExpired`. Whether an expired call lands in
+  `tool_audit` is untested by this pass.
+- **The legacy class, because it is the same shape as migration 00008's
+  and matters to anyone upgrading:** `expires_at` is NULLABLE and NULL
+  means a credential issued before expiry existed, which still works —
+  the conservative reading, since silently expiring every token in a
+  running cluster at migration time is an outage rather than a control.
+  No new credential can be minted without one (the admin surface applies
+  a default TTL and refuses an explicit "never"), so the class only
+  shrinks.
+
+### Findings from this pass: two version-skew traps
+
+Neither is a defect in any one lane. Both are gaps BETWEEN them, and
+both are adopter-facing.
+
+1. **The released binary does not have the feature the docs describe.**
+   v0.1.0 was published at 23:13:39Z; P15 merged at 23:22:00Z, nine
+   minutes later. So an adopter who installs the released version — the
+   path the README advertises — and then reads
+   `docs/govern-your-agent.md` on main hits `kmx tools: unknown verb
+   "add"`. **Reproduced.** The docs on main describe unreleased features
+   with no version marker. Cheap fix: a "since vX.Y" marker on anything
+   newer than the latest release. Thorough fix: versioned docs.
+2. **A newer kmx against an older plane fails with a bare `404 page not
+   found`.** kmx from main validates an upstream table against an admin
+   endpoint P15 added; the v0.1.0 plane does not serve it, so the CLI
+   reports *"the plane refused this upstream table — nothing has been
+   applied: 404 page not found"*. It fails CLOSED, which is right, and
+   the message does not tell an operator that the plane is too old.
+   W28's upgrade test covers plane-old → plane-new; nothing covers
+   CLI-new → plane-old. A version handshake, or reading a 404 on the
+   admin API as "this plane predates X", turns a puzzle into a sentence.
+
+**Candidate arising from that error (NOT GO, recorded for a later
+ruling):** `kmx govern` and its siblings could REFUSE a context derived
+solely from the default `KIND_CLUSTER`, requiring one of `KIND_CLUSTER`,
+`KUBE_CTX`, `kmx ctx` or `--context` to have been chosen explicitly
+before a mutation proceeds. That would have turned the error below into
+a refusal instead of a no-op that happened to be harmless. It is a
+change to default behaviour on a shipped binary, so it is a decision
+rather than a patch — but it is the fix the incident actually argues
+for, and "the banner was printed and not read" is not a defence that
+scales.
+
+**Coordinator error, recorded because the lesson is the point:** during
+this pass the coordinator ran `kmx govern` with `KIND_CLUSTER` unset,
+against `kind-kaimahi-p1` — the user's demo cluster — instead of its own.
+Every operation was a no-op (both ModelConfigs unchanged, the agent
+patched with no change, the credential kept) and the cluster was
+verified intact afterwards, so nothing was harmed. **The context guard
+printed the banner naming the wrong cluster, and the coordinator piped
+it to `head` without reading it.** The safety mechanism worked and was
+defeated by the person it was protecting — which is both the argument
+for that banner existing and a reminder that "which cluster" has to be
+read, not merely printed.
+
+
 ### P14 — the accounts-payable demo on AKS (PR #83, merged 2026-09-03)
 
 The live run is by nature unrepeatable without spend and the user's
