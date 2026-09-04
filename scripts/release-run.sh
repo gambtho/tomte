@@ -146,21 +146,60 @@ refresh_ado() {
   note "Azure DevOps token refreshed in plane custody."
 }
 
-# ado_seam_ok — say what is actually wrong, rather than letting it reach
-# the operator as "the agent has no such tool".
+# ado_seam_ok — make the seam actually usable, and say what is wrong when
+# it cannot be.
+#
+# Accepted is a CACHED reconcile result, not a live check. kagent records
+# it when it last tried and does not retry on its own, so after a token
+# refresh the condition still reads Unauthorized from minutes ago — which
+# is how the first version of this check managed to report a healthy
+# credential as a broken one. Two things are therefore needed and neither
+# is optional: wait for the kubelet to project the new Secret into the
+# proxy (a mounted Secret is not updated the instant it is written), and
+# then force a reconcile so the recorded verdict is about the credential
+# that exists now.
 ado_seam_ok() {
   [ -n "$ado_org" ] || return 0
+  $KUBECTL -n kagent get remotemcpserver kaimahi-release-ado >/dev/null 2>&1 || {
+    note "the Azure DevOps seam is not deployed; skipping its health check"; return 0; }
+
   local msg
-  msg=$($KUBECTL -n kagent get remotemcpserver kaimahi-release-ado \
-    -o jsonpath='{range .status.conditions[?(@.type=="Accepted")]}{.status}|{.message}{end}' 2>/dev/null || true)
+  seam_status() {
+    $KUBECTL -n kagent get remotemcpserver kaimahi-release-ado \
+      -o jsonpath='{range .status.conditions[?(@.type=="Accepted")]}{.status}|{.message}{end}' 2>/dev/null || true
+  }
+  msg=$(seam_status)
+  case "$msg" in True*) return 0 ;; esac
+
+  note "the Azure DevOps seam last failed to connect; re-checking it against the current credential"
+  sleep "${ADO_PROJECTION_WAIT:-45}"
+  local tries=${ADO_SEAM_TRIES:-3} i
+  for i in $(seq 1 "$tries"); do
+    $KUBECTL -n kagent delete remotemcpserver kaimahi-release-ado >/dev/null 2>&1 || true
+    $KUBECTL apply -f "$here/../k8s/kaimahi-release-ado.yaml" >/dev/null
+    $KUBECTL -n kagent wait --for=condition=Accepted remotemcpserver/kaimahi-release-ado \
+      --timeout=90s >/dev/null 2>&1 || true
+    msg=$(seam_status)
+    case "$msg" in
+      True*)
+        # kagent wires an agent from the tools discovered at its start, so
+        # a seam that only just came back needs the pod to look again.
+        $KUBECTL -n kagent rollout restart deploy/release-agent >/dev/null 2>&1 || true
+        $KUBECTL -n kagent rollout status deploy/release-agent --timeout=180s >/dev/null 2>&1 || true
+        note "the Azure DevOps seam is connected."
+        return 0 ;;
+    esac
+    note "attempt $i/$tries: still $msg"
+    sleep 15
+  done
+
   case "$msg" in
-    True*) return 0 ;;
     *Unauthorized*)
-      fail "the Azure DevOps seam is refusing to authenticate:
+      fail "the Azure DevOps seam cannot authenticate, with a credential this run
+  just refreshed:
     $msg
-  That is the credential, not the tools. Re-run — the driver refreshes it —
-  or capture one by hand: make ado-secret ADO_ORG=$ado_org" ;;
-    "") note "the Azure DevOps seam is not deployed; skipping its health check" ;;
+  Check that 'az account get-access-token --scope https://mcp.dev.azure.com/.default'
+  still succeeds for $ado_org, and that the organization is Entra-backed." ;;
     *) fail "the Azure DevOps seam is not accepted: $msg" ;;
   esac
 }
@@ -460,7 +499,6 @@ fi
 # process, so refreshing once at the start is not enough either — every
 # ADO-touching step re-checks below.
 refresh_ado
-sleep "${ADO_PROJECTION_WAIT:-8}"
 ado_seam_ok
 
 case "$STEP" in
