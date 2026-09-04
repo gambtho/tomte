@@ -8,6 +8,8 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"os"
+	"time"
 
 	"github.com/kaimahi-agents/kaimahi/plane/internal/config"
 	"github.com/kaimahi-agents/kaimahi/plane/internal/egress"
@@ -26,9 +28,29 @@ import (
 // still boot the keyless in-cluster path. The same client goes to the
 // LLM proxy and the MCP gateway (wireInternet), so nothing about the
 // Copilot path's hardening is implicit.
+//
+// One bound is operator-adjustable: how long an upstream may take to
+// START answering (EGRESS_HEADER_TIMEOUT). The default stays 60 s, which
+// is generous for a tool call and for a short completion — but W32 found
+// a real workload that exceeds it, and found it as a 502 with a stack
+// trace pointing at http2 rather than at the cause: asking a reasoning
+// model to draft release notes over ~9k tokens of pull-request listing
+// can take longer than a minute to first token. That is a legitimate
+// call, not a hung one, and a plane that cannot be told so would make
+// the operator choose between the timeout and the workload. Everything
+// else about the dialer stays fixed: this raises patience, never reach.
 func hardenedClient(ctx context.Context, cfg config.Config) (*http.Client, error) {
 	hosts := cfg.InternetHosts()
-	client, err := egress.NewClient(egress.Policy{}, hosts)
+	policy := egress.Policy{}
+	if raw := os.Getenv("EGRESS_HEADER_TIMEOUT"); raw != "" {
+		d, err := time.ParseDuration(raw)
+		if err != nil || d <= 0 || d > 10*time.Minute {
+			return nil, fmt.Errorf("EGRESS_HEADER_TIMEOUT %q: want a positive duration no greater than 10m", raw)
+		}
+		policy.ResponseHeaderTimeout = d
+		slog.Info("egress: first-header timeout raised from the default", "timeout", d)
+	}
+	client, err := egress.NewClient(policy, hosts)
 	if err != nil {
 		return nil, err
 	}

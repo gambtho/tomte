@@ -87,6 +87,27 @@ type ToolUpstream struct {
 	// entry must be in-cluster-shaped.
 	Internet bool   `json:"internet,omitempty"`
 	CAFile   string `json:"ca_file,omitempty"`
+	// ExtraHeaders are set on every forwarded request to this tool
+	// server. Non-secret values only — this is committed config.
+	//
+	// Why the tool seam needs them (W32): a HOSTED server we did not
+	// write decides for itself which tools it offers, and the good ones
+	// let a caller narrow that. GitHub's takes X-MCP-Toolsets,
+	// X-MCP-Tools and X-MCP-Exclude-Tools; Azure DevOps' takes
+	// X-MCP-Toolsets, X-MCP-Tools and X-MCP-Readonly. Setting them
+	// narrows the surface BEFORE discovery, so a tool the plane does not
+	// want is never offered, never projected onto tools/list, and never
+	// reachable even by an approval — which is a stronger guarantee than
+	// an allowlist, because it does not depend on the plane's own
+	// bookkeeping. The allowlist still applies underneath; this is the
+	// outer of the two, not a replacement.
+	//
+	// Deliberately UNLIKE Upstream.ExtraHeaders on the LLM seam, which
+	// is applied after the credential and could therefore overwrite it:
+	// here a header naming a credential slot is refused at LOAD (see
+	// Load), and the credential is injected last regardless. A committed
+	// header must never be able to displace a custody-held credential.
+	ExtraHeaders map[string]string `json:"extra_headers,omitempty"`
 	// Tools (P12) declares, per tool this server offers, which argument
 	// fields are policy-relevant: the fields an approval digest binds and
 	// the audit summary is built from (D29). Optional — an undeclared
@@ -312,6 +333,22 @@ func Parse(raw []byte) (Config, error) {
 		}
 		if !validHeaderName(t.CredentialHeader) {
 			return Config{}, fmt.Errorf("config: tool upstream %q: invalid credential_header %q", name, t.CredentialHeader)
+		}
+		// A committed extra header must not be able to displace the
+		// credential the gateway injects from custody, nor to smuggle a
+		// second authorization in. Both are refused at load rather than
+		// resolved by ordering, so the refusal is visible at rollout.
+		credSlot := t.CredentialHeader
+		if credSlot == "" {
+			credSlot = "authorization"
+		}
+		for k := range t.ExtraHeaders {
+			if !validHeaderName(k) || k == "" {
+				return Config{}, fmt.Errorf("config: tool upstream %q: invalid extra header name %q", name, k)
+			}
+			if strings.EqualFold(k, credSlot) || strings.EqualFold(k, "authorization") {
+				return Config{}, fmt.Errorf("config: tool upstream %q: extra header %q would displace the injected credential", name, k)
+			}
 		}
 	}
 	for name, h := range c.InboundHooks {

@@ -85,6 +85,17 @@ spec:
               value: kaimahi
             - name: PGUSER
               value: kaimahi
+            # How long a hosted upstream may take to START answering.
+            # The dialer's default is 60s, which is generous for a tool
+            # call and for a short completion. Drafting release notes
+            # over a large pull-request listing is neither: a reasoning
+            # model can take longer than a minute to its first token, and
+            # the 60s bound turned a legitimate call into a 502
+            # (W32, docs/release-agent.md). This raises PATIENCE only —
+            # every other bound the hardened dialer enforces, and every
+            # address it refuses, is unchanged.
+            - name: EGRESS_HEADER_TIMEOUT
+              value: "180s"
             # Secrets arrive as mounted files only (PGPASSWORD_FILE,
             # ADMIN_TOKEN_FILE defaults) — no secret-valued env vars.
           ports:
@@ -135,6 +146,12 @@ spec:
               readOnly: true
             - name: github-cred
               mountPath: /etc/kaimahi/upstream-creds/github
+              readOnly: true
+            - name: github-release-cred
+              mountPath: /etc/kaimahi/upstream-creds/github-release
+              readOnly: true
+            - name: ado-cred
+              mountPath: /etc/kaimahi/upstream-creds/ado
               readOnly: true
             - name: upstream-ca
               mountPath: /etc/kaimahi/upstream-ca
@@ -276,6 +293,28 @@ spec:
         - name: github-cred
           secret:
             secretName: kaimahi-github-pat
+            optional: true
+        # W32: the release agent's GitHub credential — a fine-grained,
+        # one-repository token that, unlike the P10 one above, can WRITE
+        # (Contents: write, the smallest scope that can create a branch;
+        # see docs/release-agent.md on why it necessarily also permits
+        # deleting one). Separate Secret, separate upstream entry and
+        # separate allowlist, so the read-only P10 seam keeps exactly the
+        # blast radius it was reviewed with. Optional, same contract.
+        - name: github-release-cred
+          secret:
+            secretName: kaimahi-release-pat
+            optional: true
+        # W32: the Azure DevOps credential — a Microsoft Entra ACCESS
+        # TOKEN, not a PAT: the hosted ADO MCP server authenticates with
+        # Entra only (its own metadata says so). An access token lives
+        # about an hour, which is why scripts/ado-secret.sh both stores
+        # it and reports when it dies. Optional, same contract: without
+        # it the ado upstream fails closed (503) and nothing else is
+        # affected.
+        - name: ado-cred
+          secret:
+            secretName: kaimahi-ado-token
             optional: true
         # P10: trust anchors for hosted upstreams that name a ca_file in
         # the table (one PEM per file). Nothing committed uses one — the

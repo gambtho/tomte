@@ -46,6 +46,16 @@
 # ap-agent allowlist and must not be, because where a constraint exists
 # it BINDS — it is a bound, not another way in.
 #
+# One declaration in the github-release entry is NOT a tool that server
+# offers: `release_publish`. It is the W32 driver's own publish step —
+# creating the release and moving the build artifacts onto it, which no
+# MCP tool can do and which the gateway is deliberately not in the path
+# of (300 MB assets; docs/release-agent.md). The declaration exists so
+# that the APPROVAL for it is bound and legible the same way every tool
+# call's is: owner, repo and tag, in the request, the grant and the audit.
+# The gateway will never see a call by this name; if it somehow did, no
+# allowlist admits it.
+#
 # tool_upstreams is the P4b MCP gateway's table: the ONLY tool servers
 # the gateway will relay to — it forwards nowhere else, which is the
 # egress rule at this layer; k8s/plane/network-policy.yaml is the rule
@@ -206,6 +216,43 @@ data:
           "url": "https://api.githubcopilot.com/mcp/",
           "internet": true,
           "credential_file": "/etc/kaimahi/upstream-creds/github/token"
+        },
+        "github-release": {
+          "url": "https://api.githubcopilot.com/mcp/",
+          "internet": true,
+          "credential_file": "/etc/kaimahi/upstream-creds/github-release/token",
+          "extra_headers": {
+            "X-MCP-Tools": "list_pull_requests,list_commits,list_tags,list_releases,get_latest_release,get_release_by_tag,actions_list,actions_get,create_branch,actions_run_trigger",
+            "X-MCP-Exclude-Tools": "delete_repository,delete_file,push_files,create_or_update_file,merge_pull_request,update_pull_request_branch,fork_repository,create_repository,create_repository_ruleset,custom_properties_write"
+          },
+          "tools": {
+            "list_pull_requests":  {"policy_fields": ["owner", "repo", "state", "base"]},
+            "list_commits":        {"policy_fields": ["owner", "repo", "sha"]},
+            "list_tags":           {"policy_fields": ["owner", "repo"]},
+            "list_releases":       {"policy_fields": ["owner", "repo"]},
+            "get_latest_release":  {"policy_fields": ["owner", "repo"]},
+            "get_release_by_tag":  {"policy_fields": ["owner", "repo", "tag"]},
+            "actions_list":        {"policy_fields": ["method", "owner", "repo", "resource_id"]},
+            "actions_get":         {"policy_fields": ["method", "owner", "repo", "resource_id"]},
+            "create_branch":       {"policy_fields": ["owner", "repo", "branch", "from_branch"]},
+            "actions_run_trigger": {"policy_fields": ["method", "owner", "repo", "workflow_id", "ref"]},
+            "release_publish":     {"policy_fields": ["owner", "repo", "tag"]}
+          }
+        },
+        "ado": {
+          "url": "https://mcp.dev.azure.com/",
+          "internet": true,
+          "credential_file": "/etc/kaimahi/upstream-creds/ado/token",
+          "extra_headers": {
+            "X-MCP-Toolsets": "pipelines"
+          },
+          "tools": {
+            "core_list_projects":   {"policy_fields": ["orgName"]},
+            "pipelines_definition": {"policy_fields": ["action", "orgName", "project"]},
+            "pipelines_build":      {"policy_fields": ["action", "orgName", "project", "buildId"]},
+            "pipelines_build_log":  {"policy_fields": ["action", "orgName", "project", "buildId"]},
+            "pipelines_write":      {"policy_fields": ["action", "orgName", "project", "pipelineId", "previewRun"]}
+          }
         }
       },
       "inbound_hooks": {

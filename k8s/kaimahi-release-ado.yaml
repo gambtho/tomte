@@ -1,0 +1,43 @@
+# W32: the release agent's Azure DevOps seam — Microsoft's HOSTED Azure
+# DevOps MCP server (https://mcp.dev.azure.com/) behind the enforcing MCP
+# gateway, on the `ado` upstream.
+#
+# This is the first upstream in this repo authenticated by Microsoft Entra
+# rather than by a long-lived key. The server accepts nothing else: its
+# own protected-resource metadata names login.microsoftonline.com and the
+# scope https://mcp.dev.azure.com/.default. What makes it reachable from
+# here anyway is that Entra's answer is an ordinary bearer token in the
+# Authorization header, which is exactly what the gateway already injects
+# from custody (scripts/ado-secret.sh, Secret kaimahi-ado-token).
+#
+# The consequence, written down where it will be met: that token lives
+# about an hour. The seam does not break when it dies — the server
+# answers 401, the gateway audits it, and nothing is half-done — but a
+# release session starts by refreshing it.
+#
+# The upstream entry sets X-MCP-Toolsets: pipelines, so the server never
+# offers the work-item, wiki, repo or test-plan tools. Narrowing at the
+# server is the outer of the two rings; the per-credential allowlist is
+# the inner one.
+apiVersion: kagent.dev/v1alpha2
+kind: RemoteMCPServer
+metadata:
+  name: kaimahi-release-ado
+  namespace: kagent
+spec:
+  description: Kaimahi-governed Azure DevOps — Microsoft's hosted ADO MCP server behind the enforcing MCP gateway
+  protocol: STREAMABLE_HTTP
+  url: http://kaimahi-mcp-gateway.kaimahi:8081/upstream/ado/mcp
+  # 180s to match EGRESS_HEADER_TIMEOUT on the proxy: the dialer will wait
+  # that long for a hosted server's first header, and a shorter timeout
+  # here would cut off a call the dialer is still legitimately waiting on.
+  # A hosted server also re-resolves and re-handshakes on every call.
+  timeout: 180s
+  sseReadTimeout: 5m0s
+  terminateOnClose: true
+  headersFrom:
+    - name: Authorization
+      valueFrom:
+        type: Secret
+        name: kaimahi-release-token
+        key: api-key

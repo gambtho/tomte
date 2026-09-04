@@ -397,7 +397,16 @@ jobs:
                       assert urlparse(up.get("url") or up.get("base_url")).scheme == "https", (name, host)
                       continue
                   assert host.endswith((".kaimahi", ".kagent", ".svc.cluster.local")), (name, host)
-          # The agent-side seam: one Secret-resolved header, no inline value.
+          # The agent-side seam: one Secret-resolved header, no inline
+          # value — asserted on EVERY Kaimahi seam manifest, so a new one
+          # cannot be added with a key pasted into it. (W32 added two.)
+          for seam in sorted(pathlib.Path("k8s").glob("kaimahi-*.yaml")):
+              doc = yaml.safe_load(seam.read_text())
+              if not isinstance(doc, dict) or doc.get("kind") != "RemoteMCPServer":
+                  continue
+              for header in doc["spec"]["headersFrom"]:
+                  assert "value" not in header, (seam.name, header)
+                  assert header["valueFrom"]["type"] == "Secret", (seam.name, header)
           rms = yaml.safe_load(pathlib.Path("k8s/kaimahi-github.yaml").read_text())
           h = rms["spec"]["headersFrom"]
           assert len(h) == 1 and "value" not in h[0] and h[0]["valueFrom"] == {
@@ -1031,6 +1040,135 @@ jobs:
           # The refusal happens BEFORE the method is known, so the row
           # carries no method or tool — only that the body was refused.
           grep -E 'hello-github +mcp-echo +denied +400 +request body carries a duplicate JSON key' dup-audit.out
+      # W32, keyless: the release agent's governance, proven against the
+      # same stand-in. Nothing here needs a GitHub or Azure DevOps token —
+      # every decision happens in the gateway before the forward, which is
+      # exactly why the lane could be proven at all in a CI that holds no
+      # credential (D14). The real run is manual and its transcript is in
+      # the PR.
+      #
+      # The stand-in's tools are shaped like the real ones and DECLARED by
+      # copying the committed table (scripts/ci/synthetic-upstream.sh), so
+      # these steps prove the policy that ships rather than a restatement
+      # of it.
+      - name: "Release agent: a read is bound to ONE repository — the right one proceeds with no human"
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          make approvals > release-approvals-before.out
+          before=$(grep -c list_pull_requests release-approvals-before.out || true)
+          KUBECTL="kubectl --context kind-kaimahi-p1" GOVERNED_SECRET=kaimahi-github-token UPSTREAM=mcp-echo \
+            bash scripts/tool-call-probe.sh list_pull_requests \
+            '{"owner": "kaimahi-ci", "repo": "the-one-repo", "state": "closed", "base": "main"}'
+          make github-audit | tee release-read.out
+          grep -E 'hello-github +mcp-echo +tools/call +list_pull_requests +allowed +200 +within standing constraint' release-read.out
+          make approvals > release-approvals-after.out
+          after=$(grep -c list_pull_requests release-approvals-after.out || true)
+          test "$before" = "$after"
+      - name: "Release agent: the SAME read on another repository is denied and files a request"
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          # The one-repository claim made at the PLANE, not only at the
+          # token. `make release-bind` applies this constraint against a
+          # real repository; here the bound repo is a synthetic one.
+          KUBECTL="kubectl --context kind-kaimahi-p1" GOVERNED_SECRET=kaimahi-github-token UPSTREAM=mcp-echo \
+            bash scripts/tool-denial-probe.sh list_pull_requests \
+            '{"owner": "someone-else", "repo": "the-one-repo", "state": "closed", "base": "main"}'
+          make github-audit | tee release-read-denied.out
+          grep -E 'hello-github +mcp-echo +tools/call +list_pull_requests +denied +403 +tool call not permitted: outside the standing constraint' release-read-denied.out
+          make approvals | tee release-read-approvals.out
+          grep -E 'hello-github +tool +list_pull_requests .*owner someone-else' release-read-approvals.out
+      - name: "Release agent: cutting a branch is denied, and what a human is asked is the ARTIFACT"
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          KUBECTL="kubectl --context kind-kaimahi-p1" GOVERNED_SECRET=kaimahi-github-token UPSTREAM=mcp-echo \
+            bash scripts/tool-denial-probe.sh create_branch \
+            '{"owner": "kaimahi-ci", "repo": "the-one-repo", "branch": "release/v9.9.9", "from_branch": "main"}'
+          make approvals | tee branch-approvals.out
+          # Every declared field, in the declared order — the version and
+          # the repository are part of what is bound, which is the whole
+          # point of the declaration.
+          grep -E 'hello-github +tool +create_branch .*owner kaimahi-ci, repo the-one-repo, branch release/v9.9.9, from_branch main' branch-approvals.out
+      - name: "Release agent: the approval is welded to THAT release — the next one is denied again"
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          id=$(awk '$3=="hello-github" && $5=="create_branch" && /release\/v9.9.9/ {print $1}' branch-approvals.out)
+          test -n "$id"
+          make approve ID="$id" USES=1 TTL=10m
+          # The approved cut proceeds.
+          KUBECTL="kubectl --context kind-kaimahi-p1" GOVERNED_SECRET=kaimahi-github-token UPSTREAM=mcp-echo \
+            bash scripts/tool-call-probe.sh create_branch \
+            '{"owner": "kaimahi-ci", "repo": "the-one-repo", "branch": "release/v9.9.9", "from_branch": "main"}'
+          make github-audit | tee branch-audit.out
+          grep -E 'hello-github +mcp-echo +tools/call +create_branch +allowed +200 +granted .*branch release/v9.9.9' branch-audit.out
+          # THE CLAIM D38(2) MAKES: approving "publish v9.9.9" must not
+          # authorize the next release. A different version is denied and
+          # files its own request.
+          KUBECTL="kubectl --context kind-kaimahi-p1" GOVERNED_SECRET=kaimahi-github-token UPSTREAM=mcp-echo \
+            bash scripts/tool-denial-probe.sh create_branch \
+            '{"owner": "kaimahi-ci", "repo": "the-one-repo", "branch": "release/v9.9.10", "from_branch": "main"}'
+          make approvals | tee branch-approvals-2.out
+          grep -E 'hello-github +tool +create_branch .*branch release/v9.9.10' branch-approvals-2.out
+          # And a cut of the SAME version from a different base is a
+          # different call too: from_branch is bound.
+          KUBECTL="kubectl --context kind-kaimahi-p1" GOVERNED_SECRET=kaimahi-github-token UPSTREAM=mcp-echo \
+            bash scripts/tool-denial-probe.sh create_branch \
+            '{"owner": "kaimahi-ci", "repo": "the-one-repo", "branch": "release/v9.9.9", "from_branch": "some-fork"}'
+      - name: "Release agent: a CONSOLIDATED DISPATCHER is governed by its action, not its name"
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          # Both real servers consolidate: one tool whose method/action
+          # argument selects what it does. actions_run_trigger can run a
+          # workflow, re-run one, CANCEL one, or delete its logs. Verb-level
+          # policy cannot tell those apart; this is what P12 buys.
+          KUBECTL="kubectl --context kind-kaimahi-p1" GOVERNED_SECRET=kaimahi-github-token UPSTREAM=mcp-echo \
+            bash scripts/tool-denial-probe.sh actions_run_trigger \
+            '{"method": "run_workflow", "owner": "kaimahi-ci", "repo": "the-one-repo", "workflow_id": "release.yml", "ref": "release/v9.9.9"}'
+          make approvals | tee trigger-approvals.out
+          grep -E 'hello-github +tool +actions_run_trigger .*method run_workflow, owner kaimahi-ci, repo the-one-repo, workflow_id release.yml, ref release/v9.9.9' trigger-approvals.out
+          id=$(awk '$3=="hello-github" && $5=="actions_run_trigger" && /method run_workflow/ {print $1}' trigger-approvals.out)
+          test -n "$id"
+          make approve ID="$id" USES=1 TTL=10m
+          # CANCELLING a run is a different call on the same tool name, and
+          # the approval to START a build cannot be spent on it.
+          KUBECTL="kubectl --context kind-kaimahi-p1" GOVERNED_SECRET=kaimahi-github-token UPSTREAM=mcp-echo \
+            bash scripts/tool-denial-probe.sh actions_run_trigger \
+            '{"method": "cancel_workflow_run", "owner": "kaimahi-ci", "repo": "the-one-repo", "workflow_id": "release.yml", "ref": "release/v9.9.9"}'
+          make approvals | tee trigger-approvals-2.out
+          grep -E 'hello-github +tool +actions_run_trigger .*method cancel_workflow_run' trigger-approvals-2.out
+          # The grant is untouched: the call it was welded to still runs.
+          KUBECTL="kubectl --context kind-kaimahi-p1" GOVERNED_SECRET=kaimahi-github-token UPSTREAM=mcp-echo \
+            bash scripts/tool-call-probe.sh actions_run_trigger \
+            '{"method": "run_workflow", "owner": "kaimahi-ci", "repo": "the-one-repo", "workflow_id": "release.yml", "ref": "release/v9.9.9"}'
+          make github-audit | tee trigger-audit.out
+          grep -E 'hello-github +mcp-echo +tools/call +actions_run_trigger +allowed +200 +granted .*method run_workflow' trigger-audit.out
+      - name: "Release agent: the OUTER ring — a tool the server was told not to offer is not there at all"
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          # mcp-echo-narrowed is the same stand-in reached with a committed
+          # X-MCP-Tools header, the way the real GitHub and Azure DevOps
+          # seams exclude their destructive tools. The gateway ADMITS this
+          # call (the standing constraint is satisfied) and the SERVER
+          # still refuses it, because the tool is not enabled there. That
+          # is a guarantee no allowlist can make.
+          KUBECTL="kubectl --context kind-kaimahi-p1" GOVERNED_SECRET=kaimahi-github-token \
+            UPSTREAM=mcp-echo-narrowed EXPECT=200 EXPECT_BODY='not enabled on this server' \
+            bash scripts/tool-raw-probe.sh \
+            '{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "list_pull_requests", "arguments": {"owner": "kaimahi-ci", "repo": "the-one-repo", "state": "closed", "base": "main"}}}'
+          # And it is not offered on tools/list either, so a discovering
+          # controller never sees it.
+          KUBECTL="kubectl --context kind-kaimahi-p1" GOVERNED_SECRET=kaimahi-github-token \
+            UPSTREAM=mcp-echo-narrowed EXPECT=200 EXPECT_BODY='"echo"' \
+            bash scripts/tool-raw-probe.sh \
+            '{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}' | tee narrowed-list.out
+          if grep -q list_pull_requests narrowed-list.out; then
+            echo 'the narrowed server offered a tool its header excluded' >&2; exit 1
+          fi
+      - name: "Release agent: the audit names who approved which release"
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          make approval-audit | tee release-approval-audit.out
+          grep -E 'hello-github +tool +create_branch +approved +admin .*branch release/v9.9.9' release-approval-audit.out
+          grep -E 'hello-github +tool +actions_run_trigger +approved +admin .*method run_workflow' release-approval-audit.out
       - name: "Hosted upstreams: the record rebinds to the server's private address → the dialer refuses before any byte leaves, audited"
         if: steps.changes.outputs.docs_only != 'true'
         run: |
@@ -1737,7 +1875,7 @@ jobs:
           rc=$?
           set -e
           test "$rc" -eq 1 || { echo "possible Slack token committed (or scanner failed: exit $rc)"; exit 1; }
-      - name: Gateway upstream table — three in-cluster entries, GitHub the one hosted one (marked)
+      - name: Gateway upstream table — three in-cluster entries, three hosted ones (all marked, all naming a credential)
         if: steps.changes.outputs.docs_only != 'true'
         run: |
           kubectl --context kind-kaimahi-p1 -n kaimahi get configmap kaimahi-upstreams \
@@ -1746,17 +1884,53 @@ jobs:
           import json, sys
           from urllib.parse import urlparse
           t = json.load(open("upstreams.json"))["tool_upstreams"]
-          assert set(t) == {"kagent-tools", "slack", "erp", "github"}, t
-          # P10: an internet-facing entry exists now, and ONLY under the
-          # marker that routes it through the hardened dialer; every
-          # unmarked entry is still in-cluster (the plane refuses the
-          # config otherwise — this asserts the same on the deployed table).
+          # A CLOSED SET, deliberately: a new tool upstream is a new place
+          # the gateway may send a credential, so adding one has to be a
+          # decision made here as well as in the table.
+          hosted = {"github", "github-release", "ado"}
+          in_cluster = {"kagent-tools", "slack", "erp"}
+          assert set(t) == hosted | in_cluster, t
+          # P10: an internet-facing entry is reached ONLY under the marker
+          # that routes it through the hardened dialer; every unmarked
+          # entry is still in-cluster (the plane refuses the config
+          # otherwise — this asserts the same on the deployed table).
           for name, up in t.items():
               host = urlparse(up["url"]).hostname
               if up.get("internet"):
-                  assert name == "github" and urlparse(up["url"]).scheme == "https", (name, up)
+                  assert name in hosted and urlparse(up["url"]).scheme == "https", (name, up)
+                  # W32: every hosted entry NAMES its credential from the
+                  # custody mount and never carries one. A hosted server
+                  # reached with no credential at all would be a new
+                  # unauthenticated egress, which is not a thing this
+                  # table is allowed to grow quietly.
+                  assert up["credential_file"].startswith("/etc/kaimahi/upstream-creds/"), up
+                  assert not any(k in up for k in ("credential", "token", "api_key")), up
                   continue
+              assert name in in_cluster, (name, up)
               assert host.endswith((".kaimahi", ".kagent", ".svc.cluster.local")), (name, host)
+          # W32: committed headers are the OUTER ring on the two release
+          # seams — they narrow what the server offers before discovery.
+          # Asserted on the deployed table so a seam that quietly lost its
+          # narrowing fails here rather than at a tool nobody expected.
+          assert t["ado"]["extra_headers"]["X-MCP-Toolsets"] == "pipelines", t["ado"]
+          ghr = t["github-release"]["extra_headers"]
+          for destructive in ("delete_repository", "delete_file", "push_files"):
+              assert destructive in ghr["X-MCP-Exclude-Tools"], ghr
+              assert destructive not in ghr["X-MCP-Tools"], ghr
+          # MEASURED, not assumed: GitHub's server honours X-MCP-Tools only
+          # when X-MCP-Toolsets is absent — combining them offered 26 tools
+          # instead of the 10 named, and dropping the toolsets header
+          # brought it to exactly 10 (W32). Their docs do say the two
+          # should not be combined. Asserted so nobody re-adds it and
+          # silently widens the surface back to a whole toolset.
+          assert "X-MCP-Toolsets" not in ghr, (
+              "github-release must narrow with X-MCP-Tools ALONE: adding X-MCP-Toolsets "
+              "makes the server ignore the tool list and offer the whole toolset")
+          # And no committed header may occupy a credential slot.
+          for name, up in t.items():
+              for k in (up.get("extra_headers") or {}):
+                  assert k.lower() != "authorization", (name, k)
+                  assert k.lower() != (up.get("credential_header") or "authorization").lower(), (name, k)
           # The Slack upstream is keyed from plane custody, and the table
           # names the file without ever carrying a value.
           slack = t["slack"]

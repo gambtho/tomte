@@ -301,3 +301,30 @@ the 8 tools the upstream offers.
   on kagent's next reconcile.
 - The consolidated status of every governed and ungoverned surface is in
   [README.md](README.md#what-is-governed-today-and-what-is-not).
+
+## Narrowing the server itself
+
+The allowlist decides what a credential may call. It cannot decide what a
+server OFFERS — and for a hosted server this repository did not write,
+that matters: GitHub's exposes 61 write tools including
+`delete_repository`, and Azure DevOps' consolidates four operations into
+one `pipelines_write`.
+
+A `tool_upstreams` entry may therefore carry `extra_headers`: committed,
+non-secret headers set on every forwarded call. Both of those servers
+read them (`X-MCP-Toolsets`, `X-MCP-Tools`, `X-MCP-Exclude-Tools`;
+Azure DevOps also `X-MCP-Readonly`), and the W32 release seams use them
+to exclude every destructive tool at the source.
+
+This is the outer of two rings, and it is the stronger one: a tool the
+server never offers is not discovered by kagent's controller, not
+projected onto `tools/list`, and **not reachable even by an approval** —
+which is a guarantee the allowlist cannot make, because the allowlist can
+be widened by a grant and this cannot. The allowlist still applies
+underneath; use both.
+
+Two rules, both enforced at config load rather than at the first call:
+an extra header naming the credential slot (or `Authorization` on a
+keyless upstream) is refused, and the credential is injected last
+regardless. A committed header must never be able to displace a
+credential held in custody.

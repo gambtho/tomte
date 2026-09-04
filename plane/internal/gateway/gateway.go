@@ -799,6 +799,14 @@ func (h *handler) do(r *http.Request, up config.ToolUpstream, body []byte) (*htt
 		return nil, err
 	}
 	copyRequestHeaders(outReq.Header, r.Header)
+	// Committed, non-secret headers first — they narrow what a hosted
+	// server offers (X-MCP-Toolsets and friends) and must not be able to
+	// displace the credential, which goes on last. Load already refuses
+	// an extra header naming the credential slot; the ordering here means
+	// a future one could not win even if it slipped through.
+	for k, v := range up.ExtraHeaders {
+		outReq.Header.Set(k, v)
+	}
 	if err := injectCredential(outReq, up); err != nil {
 		return nil, err
 	}

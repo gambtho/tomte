@@ -202,7 +202,8 @@ done: `make github-down` removes the agent and the seam;
 
 1. Add a `tool_upstreams` entry: an `https` URL on 443, `internet: true`,
    and a `credential_file` naming a mounted Secret path if the server is
-   keyed. Add the Secret mount to
+   keyed. Add `extra_headers` if the server lets a caller narrow what it
+   offers — do that before relying on the allowlist alone. Add the Secret mount to
    [`k8s/plane/proxy.yaml`](../k8s/plane/proxy.yaml) as an optional
    volume, and a stdin-only sibling of `scripts/github-secret.sh` that
    vets the token the way the server can be vetted.
@@ -216,8 +217,32 @@ done: `make github-down` removes the agent and the seam;
    and the boot log will say `hosted upstream vetted` with the addresses
    and the trust anchor, or refuse the entry and say why.
 
-Not in scope, and said so: hosted servers that authenticate by OAuth
-(Slack's), hostname-level egress (a CNI with FQDN policies or an egress
-gateway), and write tools on GitHub. The consolidated status of every
+W32 removed two of the three things this section used to say were out
+of scope. There are now three hosted seams, all on the same dialer and
+the same opt-in allowance:
+
+| Entry | Server | Credential |
+|---|---|---|
+| `github` | GitHub's hosted MCP server | a fine-grained, **read-only**, one-repository token (P10) |
+| `github-release` | the same server, narrowed by header | a fine-grained, one-repository token that can **write** (W32) |
+| `ado` | Microsoft's hosted Azure DevOps MCP server | a Microsoft **Entra access token** — that server accepts nothing else (W32) |
+
+So an OAuth-authenticated hosted server exists (`ado`, and its token lives
+about an hour), and write tools on GitHub exist — each write denied by
+default, filed naming the artifact, and approved call by call. See
+[release-agent.md](release-agent.md).
+
+A hosted entry may also carry `extra_headers`: committed, non-secret
+headers set on every forwarded call. That is how `github-release` and
+`ado` narrow what their servers are willing to OFFER
+(`X-MCP-Toolsets`, `X-MCP-Tools`, `X-MCP-Exclude-Tools`), before
+discovery and therefore before the allowlist ever runs — a tool excluded
+this way is not in `tools/list`, is not projected, and cannot be reached
+even by an approval. A header naming the credential slot is refused at
+load, and the credential is injected last regardless, so a committed
+header can never displace one held in custody.
+
+Still not in scope, and said so: hostname-level egress (a CNI with FQDN
+policies or an egress gateway). The consolidated status of every
 governed and ungoverned surface is in
 [README.md](README.md#what-is-governed-today-and-what-is-not).
