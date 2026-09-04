@@ -22,7 +22,20 @@ to do. Sections: **Added**, **Changed**, **Fixed**, **Breaking**, **Upgrading**.
 
 ## Unreleased
 
-_Nothing yet._
+### Changed
+
+- `kmx` now uses one Cobra command tree for nested commands, flags,
+  command-specific help, validation, and Bash/Zsh/Fish completion. Operational
+  behavior, context guards, Make delegation, and machine-readable stdout remain
+  in the existing application layer.
+
+### Breaking
+
+- Subcommand `--help` now succeeds and prints command-specific help instead of
+  the former inconsistent `flag.FlagSet` error path. Unknown and extra
+  arguments use Cobra’s standard errors rather than being ignored by a few
+  commands. Bare command groups such as `kmx agent` now print their hierarchical
+  help and exit successfully instead of returning a one-line legacy usage error.
 
 ## v0.1.0 — 2026-09-03
 
