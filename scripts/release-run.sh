@@ -81,6 +81,10 @@ branch="${RELEASE_BRANCH:-release/${version}}"
 gh_workflows="${GH_WORKFLOW:-}"
 ado_project="${ADO_PROJECT:-}"
 ado_pipelines="${ADO_PIPELINES:-}"
+# The builds whose artifacts the release gets. Distinct from
+# ADO_PIPELINES (definitions): these are RUN ids, known only after the
+# builds have been queued.
+ado_builds="${ADO_BUILDS:-}"
 # The hosted Azure DevOps server is reached at its ORG-LESS URL, so every
 # call must name the organization (its tools take orgName). It is an
 # Azure identifier: passed in, never committed.
@@ -293,7 +297,47 @@ do_build() {
   done
 }
 
-# --- 4. watch --------------------------------------------------------
+# --- 4. publish ------------------------------------------------------
+#
+# The decision is governed the same way every other consequential step
+# is: a request naming the exact release, a human, a grant welded to it.
+# The TRANSFER is the driver's, not the gateway's — see
+# scripts/release-publish.sh for why, and for what that does and does not
+# buy.
+do_publish() {
+  [ -n "$ado_builds" ] || fail "publishing needs ADO_BUILDS (the build ids whose artifacts to attach)"
+  [ -s "$work/notes.txt" ] || fail "no drafted notes to publish — run STEP=propose first, or pass NOTES_FILE"
+
+  local want="release_publish: owner $owner, repo $name, tag $version"
+  step "Proposing: the release itself — $want"
+
+  admin grants "$CRED_RELEASE" > "$work/pub.grants-before.out" 2>/dev/null || true
+  if awk -v cred="$CRED_RELEASE" '$2==cred && $3=="tool" && $4=="release_publish" && $5=="yes" {f=1} END{exit !f}' \
+      "$work/pub.grants-before.out"; then
+    fail "a live grant for release_publish already exists on $CRED_RELEASE. This run
+  would spend an approval given earlier, for a release this run did not
+  describe. Let it lapse, or deny it, and start again."
+  fi
+
+  admin request "$CRED_RELEASE" tool release_publish \
+    "{\"owner\": \"$owner\", \"repo\": \"$name\", \"tag\": \"$version\"}" >&2
+  local id
+  id=$(request_id release_publish "$want")
+  [ -n "$id" ] || { admin approvals >&2 || true; fail "the publish request was not filed"; }
+  note "Filed as request $id. The notes a human is approving are in $work/notes.txt:"
+  head -20 "$work/notes.txt" >&2
+
+  CRED="$CRED_RELEASE" HUMAN_TIMEOUT="${HUMAN_TIMEOUT:-900}" \
+    ADMIN_PORT="$ADMIN_PORT" bash "$here/await-approval.sh" "$id" "${SLACK_USER:--}" 1
+
+  step "Approved — publishing"
+  GITHUB_REPO="$repo" VERSION="$version" NOTES_FILE="$work/notes.txt" \
+    ADO_ORG="$ado_org" ADO_PROJECT="$ado_project" ADO_BUILDS="$ado_builds" \
+    RELEASE_TARGET="$branch" PRERELEASE="${PRERELEASE:-1}" \
+    bash "$here/release-publish.sh"
+}
+
+# --- 5. watch --------------------------------------------------------
 #
 # The POLLING lives here, in shell, and not inside an agent turn. A turn
 # is request/response and a build is minutes; a model re-deciding "has it
@@ -356,6 +400,7 @@ case "$STEP" in
   cut)     do_cut ;;
   build)   do_build ;;
   watch)   do_watch ;;
+  publish) do_propose; do_publish ;;
   all)
     do_propose
     if [ "$DRY_RUN" = 1 ]; then
@@ -365,8 +410,9 @@ case "$STEP" in
     do_cut
     do_build
     do_watch
+    [ -z "$ado_builds" ] || do_publish
     ;;
-  *) fail "unknown STEP '$STEP' (want propose, cut, build, watch or all)" ;;
+  *) fail "unknown STEP '$STEP' (want propose, cut, build, watch, publish or all)" ;;
 esac
 
 step "The record: every decision this credential got"
