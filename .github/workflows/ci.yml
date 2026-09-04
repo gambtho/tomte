@@ -3088,15 +3088,15 @@ jobs:
           mkdir -p /tmp/release
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o /tmp/release/kmx-linux-amd64 ./cmd/kmx
           ( cd /tmp/release && sha256sum kmx-linux-amd64 > checksums.txt )
-      # The premise, checked rather than assumed. Every one of these is on a
-      # GitHub runner by default; the operator kmx is built for has none of
-      # them, so the PATH the next step runs under has none of them either.
-      - name: Strip the runner of kind, kubectl, Helm and the checkout's PATH
-        if: steps.changes.outputs.docs_only != 'true'
-        run: |
-          echo "before: $(command -v kubectl || echo no-kubectl) $(command -v helm || echo no-helm)"
-          # /usr/bin and /bin only: docker, curl and coreutils, nothing else.
-          echo 'PATH=/usr/bin:/bin:/usr/sbin:/sbin' >> "$GITHUB_ENV"
+      # The premise, checked rather than assumed. kubectl, Helm and Go are all
+      # on a GitHub runner by default; the operator kmx is built for has none
+      # of them, so the steps below run on a PATH that has none of them
+      # either.
+      #
+      # The stripping is done INSIDE each script rather than through
+      # $GITHUB_ENV: the runner composes a job's PATH from its own list plus
+      # anything actions/setup-go added via $GITHUB_PATH, and that composition
+      # puts the Go toolchain back in front of an override written there.
       - name: One command — install kmx and answer a question
         id: quickstart
         if: steps.changes.outputs.docs_only != 'true'
@@ -3105,6 +3105,8 @@ jobs:
           KIND_CLUSTER: kmx-quickstart
         run: |
           set -euo pipefail
+          echo "before stripping: $(command -v kubectl || true) $(command -v helm || true) $(command -v go || true)"
+          export PATH="/usr/bin:/bin:/usr/sbin:/sbin:$HOME/.local/bin"
           for t in go kind kubectl helm; do
             if command -v "$t" >/dev/null 2>&1; then
               echo "premise broken: $t is on PATH ($(command -v "$t"))"; exit 1
@@ -3137,7 +3139,8 @@ jobs:
           KIND_CLUSTER: kmx-quickstart
         run: |
           set -euo pipefail
-          "$HOME/.local/bin/kmx" quickstart --output json > quickstart.json 2> quickstart2.err
+          export PATH="/usr/bin:/bin:/usr/sbin:/sbin:$HOME/.local/bin"
+          kmx quickstart --output json > quickstart.json 2> quickstart2.err
           python3 - <<'EOF'
           import json, sys
           r = json.load(open("quickstart.json"))
@@ -3160,8 +3163,8 @@ jobs:
           KIND_CLUSTER: kmx-quickstart
         run: |
           set -euo pipefail
-          kmx="$HOME/.local/bin/kmx"
-          "$kmx" up
+          export PATH="/usr/bin:/bin:/usr/sbin:/sbin:$HOME/.local/bin"
+          kmx up
           k="$HOME/.config/kmx/path/kubectl"
           "$k" --context kind-kmx-quickstart -n kagent get deploy kagent-ui \
             -o jsonpath='{.spec.replicas}' | grep -qx 1
