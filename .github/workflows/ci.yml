@@ -769,14 +769,25 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          # depth 2 so a pull_request's merge commit has its first parent
+          # locally: that parent IS the base this PR was merged onto, and it
+          # is what the classifier diffs against.
+          fetch-depth: 2
       - name: Classify the change (docs-only short-circuit, fail closed)
         id: changes
         env:
           EVENT: ${{ github.event_name }}
-          # pull_request: the base branch tip; push: the previous tip
-          # (all zeros on a new branch). HEAD is the PR merge commit or
-          # the pushed commit — what checkout checked out.
-          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          # push: the previous tip (all zeros on a new branch). HEAD is the
+          # PR merge commit or the pushed commit — what checkout checked out.
+          #
+          # A pull_request's base is resolved BELOW as HEAD^1, not from
+          # `pull_request.base.sha`: that field is the base tip when the event
+          # fired, so once anything else merges it names an older commit and
+          # the diff picks up OTHER PEOPLE'S changes — a docs-only PR then
+          # reads as "non-doc change: Makefile" and pays the full e2e. The
+          # merge commit's first parent is the base it was actually merged
+          # onto, by construction, however stale the event data is.
+          BASE: ${{ github.event.before }}
           HEAD: ${{ github.sha }}
         run: |
           # The job's `shell: bash` runs with -e; turn it off here — every
@@ -785,10 +796,23 @@ jobs:
           docs_only=false
           reason=""
           files=""
+          # A pull_request's base is the merge commit's FIRST parent: the
+          # commit this PR was merged onto. Resolving it from the commit
+          # rather than from the event keeps a stale base.sha from dragging
+          # other people's merges into this PR's diff. Fail closed: if it
+          # cannot be resolved, docs_only stays false.
+          if [ "$EVENT" = pull_request ]; then
+            if ! BASE=$(git rev-parse --verify "$HEAD^1" 2>/dev/null); then
+              reason="cannot resolve the merge commit's first parent"
+            fi
+          fi
           case "$BASE" in
             ""|0000000000000000000000000000000000000000) reason="no base commit for $EVENT" ;;
           esac
-          if [ -z "$reason" ] && ! git fetch --no-tags --depth=1 origin "$BASE"; then
+          # Already local for a pull_request (fetch-depth: 2); a push may not
+          # have it, so fetch only when it is genuinely absent.
+          if [ -z "$reason" ] && ! git cat-file -e "$BASE^{commit}" 2>/dev/null \
+             && ! git fetch --no-tags --depth=1 origin "$BASE"; then
             reason="cannot fetch base $BASE"
           fi
           if [ -z "$reason" ]; then
@@ -1149,14 +1173,25 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          # depth 2 so a pull_request's merge commit has its first parent
+          # locally: that parent IS the base this PR was merged onto, and it
+          # is what the classifier diffs against.
+          fetch-depth: 2
       - name: Classify the change (docs-only short-circuit, fail closed)
         id: changes
         env:
           EVENT: ${{ github.event_name }}
-          # pull_request: the base branch tip; push: the previous tip
-          # (all zeros on a new branch). HEAD is the PR merge commit or
-          # the pushed commit — what checkout checked out.
-          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          # push: the previous tip (all zeros on a new branch). HEAD is the
+          # PR merge commit or the pushed commit — what checkout checked out.
+          #
+          # A pull_request's base is resolved BELOW as HEAD^1, not from
+          # `pull_request.base.sha`: that field is the base tip when the event
+          # fired, so once anything else merges it names an older commit and
+          # the diff picks up OTHER PEOPLE'S changes — a docs-only PR then
+          # reads as "non-doc change: Makefile" and pays the full e2e. The
+          # merge commit's first parent is the base it was actually merged
+          # onto, by construction, however stale the event data is.
+          BASE: ${{ github.event.before }}
           HEAD: ${{ github.sha }}
         run: |
           # The job's `shell: bash` runs with -e; turn it off here — every
@@ -1165,10 +1200,23 @@ jobs:
           docs_only=false
           reason=""
           files=""
+          # A pull_request's base is the merge commit's FIRST parent: the
+          # commit this PR was merged onto. Resolving it from the commit
+          # rather than from the event keeps a stale base.sha from dragging
+          # other people's merges into this PR's diff. Fail closed: if it
+          # cannot be resolved, docs_only stays false.
+          if [ "$EVENT" = pull_request ]; then
+            if ! BASE=$(git rev-parse --verify "$HEAD^1" 2>/dev/null); then
+              reason="cannot resolve the merge commit's first parent"
+            fi
+          fi
           case "$BASE" in
             ""|0000000000000000000000000000000000000000) reason="no base commit for $EVENT" ;;
           esac
-          if [ -z "$reason" ] && ! git fetch --no-tags --depth=1 origin "$BASE"; then
+          # Already local for a pull_request (fetch-depth: 2); a push may not
+          # have it, so fetch only when it is genuinely absent.
+          if [ -z "$reason" ] && ! git cat-file -e "$BASE^{commit}" 2>/dev/null \
+             && ! git fetch --no-tags --depth=1 origin "$BASE"; then
             reason="cannot fetch base $BASE"
           fi
           if [ -z "$reason" ]; then
@@ -1593,14 +1641,25 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          # depth 2 so a pull_request's merge commit has its first parent
+          # locally: that parent IS the base this PR was merged onto, and it
+          # is what the classifier diffs against.
+          fetch-depth: 2
       - name: Classify the change (docs-only short-circuit, fail closed)
         id: changes
         env:
           EVENT: ${{ github.event_name }}
-          # pull_request: the base branch tip; push: the previous tip
-          # (all zeros on a new branch). HEAD is the PR merge commit or
-          # the pushed commit — what checkout checked out.
-          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          # push: the previous tip (all zeros on a new branch). HEAD is the
+          # PR merge commit or the pushed commit — what checkout checked out.
+          #
+          # A pull_request's base is resolved BELOW as HEAD^1, not from
+          # `pull_request.base.sha`: that field is the base tip when the event
+          # fired, so once anything else merges it names an older commit and
+          # the diff picks up OTHER PEOPLE'S changes — a docs-only PR then
+          # reads as "non-doc change: Makefile" and pays the full e2e. The
+          # merge commit's first parent is the base it was actually merged
+          # onto, by construction, however stale the event data is.
+          BASE: ${{ github.event.before }}
           HEAD: ${{ github.sha }}
         run: |
           # The job's `shell: bash` runs with -e; turn it off here — every
@@ -1609,10 +1668,23 @@ jobs:
           docs_only=false
           reason=""
           files=""
+          # A pull_request's base is the merge commit's FIRST parent: the
+          # commit this PR was merged onto. Resolving it from the commit
+          # rather than from the event keeps a stale base.sha from dragging
+          # other people's merges into this PR's diff. Fail closed: if it
+          # cannot be resolved, docs_only stays false.
+          if [ "$EVENT" = pull_request ]; then
+            if ! BASE=$(git rev-parse --verify "$HEAD^1" 2>/dev/null); then
+              reason="cannot resolve the merge commit's first parent"
+            fi
+          fi
           case "$BASE" in
             ""|0000000000000000000000000000000000000000) reason="no base commit for $EVENT" ;;
           esac
-          if [ -z "$reason" ] && ! git fetch --no-tags --depth=1 origin "$BASE"; then
+          # Already local for a pull_request (fetch-depth: 2); a push may not
+          # have it, so fetch only when it is genuinely absent.
+          if [ -z "$reason" ] && ! git cat-file -e "$BASE^{commit}" 2>/dev/null \
+             && ! git fetch --no-tags --depth=1 origin "$BASE"; then
             reason="cannot fetch base $BASE"
           fi
           if [ -z "$reason" ]; then
@@ -2362,6 +2434,15 @@ jobs:
           # and under `-o pipefail` the step dies with 141. It is a race
           # — it depends on whether kubectl has finished writing — which
           # is exactly why it passed locally and failed here.
+          # Wait for the roll BEFORE reading logs. Applying the overlay
+          # restarts the proxy, and `logs -l` resolves the label to pod
+          # names and then fetches them: a replica deleted in between
+          # gives `pods "kaimahi-proxy-..." not found` and a red step.
+          # Observed on PR #99. Waiting also means the line we grep for
+          # comes from a pod that booted WITH the overlay, rather than
+          # from a survivor that never saw it.
+          kubectl --context kind-kaimahi-p1 -n kaimahi rollout status \
+            deploy/kaimahi-proxy --timeout=180s
           kubectl --context kind-kaimahi-p1 -n kaimahi logs -l app=kaimahi-proxy --tail=200 > proxy-overlay.out
           grep -q 'operator overlay merged.*warehouse.json' proxy-overlay.out
       - name: "Onboarding: a SECOND upstream carries the whole overlay and an apply precondition"
@@ -2552,14 +2633,25 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          # depth 2 so a pull_request's merge commit has its first parent
+          # locally: that parent IS the base this PR was merged onto, and it
+          # is what the classifier diffs against.
+          fetch-depth: 2
       - name: Classify the change (docs-only short-circuit, fail closed)
         id: changes
         env:
           EVENT: ${{ github.event_name }}
-          # pull_request: the base branch tip; push: the previous tip
-          # (all zeros on a new branch). HEAD is the PR merge commit or
-          # the pushed commit — what checkout checked out.
-          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          # push: the previous tip (all zeros on a new branch). HEAD is the
+          # PR merge commit or the pushed commit — what checkout checked out.
+          #
+          # A pull_request's base is resolved BELOW as HEAD^1, not from
+          # `pull_request.base.sha`: that field is the base tip when the event
+          # fired, so once anything else merges it names an older commit and
+          # the diff picks up OTHER PEOPLE'S changes — a docs-only PR then
+          # reads as "non-doc change: Makefile" and pays the full e2e. The
+          # merge commit's first parent is the base it was actually merged
+          # onto, by construction, however stale the event data is.
+          BASE: ${{ github.event.before }}
           HEAD: ${{ github.sha }}
         run: |
           # The job's `shell: bash` runs with -e; turn it off here — every
@@ -2568,10 +2660,23 @@ jobs:
           docs_only=false
           reason=""
           files=""
+          # A pull_request's base is the merge commit's FIRST parent: the
+          # commit this PR was merged onto. Resolving it from the commit
+          # rather than from the event keeps a stale base.sha from dragging
+          # other people's merges into this PR's diff. Fail closed: if it
+          # cannot be resolved, docs_only stays false.
+          if [ "$EVENT" = pull_request ]; then
+            if ! BASE=$(git rev-parse --verify "$HEAD^1" 2>/dev/null); then
+              reason="cannot resolve the merge commit's first parent"
+            fi
+          fi
           case "$BASE" in
             ""|0000000000000000000000000000000000000000) reason="no base commit for $EVENT" ;;
           esac
-          if [ -z "$reason" ] && ! git fetch --no-tags --depth=1 origin "$BASE"; then
+          # Already local for a pull_request (fetch-depth: 2); a push may not
+          # have it, so fetch only when it is genuinely absent.
+          if [ -z "$reason" ] && ! git cat-file -e "$BASE^{commit}" 2>/dev/null \
+             && ! git fetch --no-tags --depth=1 origin "$BASE"; then
             reason="cannot fetch base $BASE"
           fi
           if [ -z "$reason" ]; then
@@ -2779,21 +2884,48 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          # depth 2 so a pull_request's merge commit has its first parent
+          # locally: that parent IS the base this PR was merged onto, and it
+          # is what the classifier diffs against.
+          fetch-depth: 2
       - name: Classify the change (docs-only short-circuit, fail closed)
         id: changes
         env:
           EVENT: ${{ github.event_name }}
-          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          # push: the previous tip (all zeros on a new branch). HEAD is the
+          # PR merge commit or the pushed commit — what checkout checked out.
+          #
+          # A pull_request's base is resolved BELOW as HEAD^1, not from
+          # `pull_request.base.sha`: that field is the base tip when the event
+          # fired, so once anything else merges it names an older commit and
+          # the diff picks up OTHER PEOPLE'S changes — a docs-only PR then
+          # reads as "non-doc change: Makefile" and pays the full e2e. The
+          # merge commit's first parent is the base it was actually merged
+          # onto, by construction, however stale the event data is.
+          BASE: ${{ github.event.before }}
           HEAD: ${{ github.sha }}
         run: |
           set +e
           docs_only=false
           reason=""
           files=""
+          # A pull_request's base is the merge commit's FIRST parent: the
+          # commit this PR was merged onto. Resolving it from the commit
+          # rather than from the event keeps a stale base.sha from dragging
+          # other people's merges into this PR's diff. Fail closed: if it
+          # cannot be resolved, docs_only stays false.
+          if [ "$EVENT" = pull_request ]; then
+            if ! BASE=$(git rev-parse --verify "$HEAD^1" 2>/dev/null); then
+              reason="cannot resolve the merge commit's first parent"
+            fi
+          fi
           case "$BASE" in
             ""|0000000000000000000000000000000000000000) reason="no base commit for $EVENT" ;;
           esac
-          if [ -z "$reason" ] && ! git fetch --no-tags --depth=1 origin "$BASE"; then
+          # Already local for a pull_request (fetch-depth: 2); a push may not
+          # have it, so fetch only when it is genuinely absent.
+          if [ -z "$reason" ] && ! git cat-file -e "$BASE^{commit}" 2>/dev/null \
+             && ! git fetch --no-tags --depth=1 origin "$BASE"; then
             reason="cannot fetch base $BASE"
           fi
           if [ -z "$reason" ]; then
