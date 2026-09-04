@@ -1,56 +1,48 @@
 #!/usr/bin/env bash
-# W32: cut a release, with an agent doing the work and a human approving
-# it (docs/release-agent.md, D38).
+# Cut a release: the agent does the work, a human approves it
+# (docs/release-agent.md, D38).
 #
-# ONE COMMAND, AND THE MACHINE DOES THE WAITING. That is the whole design
-# constraint, and it came from the person this was built for: "the entire
-# point of this is for me to not run commands myself, otherwise what is
-# the point of the agent?" So this script is not a checklist to work
-# through. It runs every step, blocks on the approvals itself, polls the
-# builds itself, and interrupts a person exactly once per consequential
-# call — to approve it, from Slack or from the operator's chair.
+# ONE COMMAND, AND THE MACHINE DOES THE WAITING. That came from the person
+# this was built for: "the entire point of this is for me to not run
+# commands myself, otherwise what is the point of the agent?" So this
+# isn't a checklist to work through. It runs every step, blocks on the
+# approvals, polls the builds, and interrupts a person once per
+# consequential call — from Slack or the operator's chair.
 #
-# WHAT THE AGENT DOES, and it is narrow (D38(1)): it reads what shipped
-# last, reads what merged since, and DRAFTS the notes — the one place
-# judgement earns its keep. Then it proposes each consequential call. It
-# never decides to ship, and it never carries a byte: the release
-# artifacts are built and published by the GitHub workflow and the Azure
-# DevOps pipelines it dispatches.
+# The agent is narrow (D38(1)): it reads what shipped last, reads what
+# merged since, and drafts the notes. That's where judgement earns its
+# keep. It never decides to ship, and it never carries a byte — the
+# release artifacts are built and published by the pipelines it triggers.
 #
-# WHAT THIS SCRIPT DOES THAT THE AGENT CANNOT BE TRUSTED TO. Between the
-# agent proposing a call and a human being asked to approve it, this
-# script checks that the filed request is THE CALL THAT WAS ASKED FOR —
-# every policy-relevant field, matched against what the operator typed on
-# the command line. A model that proposed a different branch, a different
-# workflow or a different repository files a request too, and it would
-# look identical in `make approvals`. The P13 lane learned this the
-# expensive way: on its first live run the agent's own turn filed a
-# payment for a different invoice at the same amount, and the approval
-# landed on the wrong one. So: no human is shown a request this script
-# did not first match against the intent.
+# WHAT THIS SCRIPT DOES THAT THE AGENT CAN'T BE TRUSTED WITH: it files the
+# approval request itself, for the exact call the operator asked for. A
+# model that proposed a different branch would file a request too, and it
+# would look identical in `make approvals`. P13 learned that the
+# expensive way — on its first live run the agent filed a payment for a
+# different invoice at the same amount, and the approval landed on the
+# wrong one.
 #
 # Usage:
 #   make release GITHUB_REPO=owner/name VERSION=v1.2.3 [options]
 #
-#   GITHUB_REPO      owner/name — the ONE repository (required)
-#   VERSION          the release being cut, e.g. v1.2.3 (required)
-#   BASE             branch the release is cut from (default main)
+#   GITHUB_REPO      owner/name (required)
+#   VERSION          the release being cut (required)
+#   BASE             branch it's cut from (default main)
 #   RELEASE_BRANCH   branch to create (default release/<VERSION>)
-#   GH_WORKFLOW      a workflow file to dispatch, e.g. build-app-win.yml
-#                    (repeatable, comma-separated; optional)
-#   ADO_PROJECT      Azure DevOps project (optional; with ADO_PIPELINES)
-#   ADO_PIPELINES    pipeline ids to queue, comma-separated (optional)
-#   SLACK_USER       require THIS person's approval (default: any
-#                    approver the plane accepts)
-#   DRY_RUN=1        propose only: read, draft the notes, and stop before
-#                    the first consequential call. Nothing is created.
-#   STEP=<name>      run one step only: propose | cut | build | watch
+#   GH_WORKFLOW      workflow files to dispatch, comma-separated
+#   ADO_ORG          Azure DevOps organization
+#   ADO_PROJECT      Azure DevOps project
+#   ADO_PIPELINES    pipeline ids to queue, comma-separated
+#   ADO_BUILDS       build ids whose artifacts the release gets
+#   ADO_ARTIFACTS    artifact names to attach (empty = all)
+#   ASSET_GLOBS      which files inside them count as assets
+#   SLACK_USER       require this person's approval (default: anyone)
+#   DRY_RUN=1        read and draft, stop before the first write
+#   STEP=<name>      propose | compose | cut | build | watch | publish
 #   WATCH_TIMEOUT    seconds to poll the builds (default 3600)
-#   WATCH_POLL       seconds between polls (default 60)
 #
-# Azure identifiers never enter this repository: ADO_PROJECT and the
-# organization are parameters with no committed default
-# (scripts/check-no-azure-ids.sh).
+# Azure identifiers never enter this repo: ADO_ORG and ADO_PROJECT are
+# parameters with no committed default.
 set -euo pipefail
 umask 077
 
@@ -116,22 +108,19 @@ trap 'rm -rf "$work"' EXIT
 
 admin() { bash "$here/plane-admin.sh" "$@"; }
 
-# refresh_ado — put a FRESH Azure DevOps token into plane custody.
+# refresh_ado — put a fresh Azure DevOps token into plane custody.
 #
-# The credential is an Entra access token and it lives about an hour. A
-# release session is longer than that: on the first real run it expired
-# twice, and each time the visible symptom was the agent saying "there is
-# no pipelines_build tool in my toolset" — because the seam had gone
-# Accepted=False with Unauthorized and kagent had dropped its tools. The
-# cause and the symptom are nowhere near each other.
+# The Entra token lives about an hour and a release session is longer. It
+# expired twice on the first real run, and both times the symptom was the
+# agent saying "there is no pipelines_build tool in my toolset" — the
+# seam had gone Accepted=False and kagent dropped its tools. Cause and
+# symptom nowhere near each other.
 #
-# So the driver refreshes it rather than asking a person to. It runs on
-# the operator's machine, `az` is already there, and the gateway reads
-# the credential file per request, so no restart is needed — only the
-# kubelet's projection delay. Capturing a credential is otherwise a
-# human's job here (D27); this is the same capture, done on the
-# operator's behalf at the moment it is needed, with the token never
-# leaving a pipe.
+# So the driver refreshes it. It runs on the operator's machine, az is
+# already there, and the gateway reads the credential per request so
+# nothing needs restarting. Capturing a credential is otherwise a human's
+# job (D27); this is that capture, done for them when it's needed, with
+# the token never leaving a pipe.
 refresh_ado() {
   [ -n "$ado_org" ] || return 0
   command -v az >/dev/null || { note "az not found — leaving the Azure DevOps token as it is"; return 0; }
@@ -146,17 +135,14 @@ refresh_ado() {
   note "Azure DevOps token refreshed in plane custody."
 }
 
-# ado_seam_ok — make the seam actually usable, and say what is wrong when
-# it cannot be.
+# ado_seam_ok — make the seam usable, and say what's wrong when it isn't.
 #
-# Accepted is a CACHED reconcile result, not a live check. kagent records
-# it when it last tried and does not retry on its own, so after a token
-# refresh the condition still reads Unauthorized from minutes ago — which
-# is how the first version of this check managed to report a healthy
-# credential as a broken one. Two things are therefore needed and neither
-# is optional: wait for the kubelet to project the new Secret into the
-# proxy (a mounted Secret is not updated the instant it is written), and
-# then force a reconcile so the recorded verdict is about the credential
+# Accepted is a cached reconcile result. kagent records it when it last
+# tried and doesn't retry, so after a refresh it still reads Unauthorized
+# from minutes ago — which is how the first version of this check
+# reported a healthy credential as broken. So: wait for the kubelet to
+# project the new Secret (a mounted Secret isn't updated the instant it's
+# written), then force a reconcile so the verdict is about the credential
 # that exists now.
 ado_seam_ok() {
   [ -n "$ado_org" ] || return 0
@@ -212,11 +198,10 @@ fail()  { printf '\nrelease-run: %s\n' "$*" >&2; exit 1; }
 # the raw output is kept for the caller to read back.
 turn() {
   local out=$1 task=$2
-  # TASK travels as a make variable into a shell recipe ("$(TASK)"), so a
-  # double quote or a newline in it breaks the RECIPE — the failure looks
-  # like `/bin/sh: Syntax error: Unterminated quoted string`, nowhere near
-  # the prompt that caused it. Refuse both here rather than debug that
-  # twice. (Found the hard way on the first real run.)
+  # TASK travels as a make variable into a shell recipe, so a quote or a
+  # newline breaks the recipe, not the prompt — and it surfaces as
+  # `/bin/sh: Unterminated quoted string`, nowhere near the cause. Refuse
+  # both here instead of debugging that twice.
   # $'\n' and not "$(printf '\n')": command substitution strips trailing
   # newlines, so the latter is an EMPTY pattern that matches every task.
   case "$task" in
@@ -227,12 +212,10 @@ turn() {
   local chat_rc=0
   $RELEASE_CHAT TASK="$task" > "$out" 2>&1 || chat_rc=$?
   python3 "$here/show-turn.py" "$out" >&2 || tail -30 "$out" >&2
-  # The turn is only a turn if the task COMPLETED with a reply. Anything
-  # else is a failure the caller must see, because everything downstream
-  # reads the answer. This function used to print a note and return 0,
-  # which made a failed turn look like a successful one to every caller —
-  # the exact thing the agent's own instructions forbid, committed in the
-  # driver that enforces them.
+  # A turn only counts if the task completed with a reply. This used to
+  # print a note and return 0, so a failed turn looked fine to every
+  # caller — the exact thing the agent's instructions forbid, in the code
+  # that enforces them.
   if [ "$chat_rc" != 0 ]; then
     note "the agent's turn exited $chat_rc"
     return 1
@@ -265,40 +248,37 @@ request_id() {
 
 # consequential <tool> <args-json> <expected summary> <task text>
 #
-# File the request for the exact call, wait for a human to approve it,
-# then have the AGENT make it, and require the plane's own audit to show
-# it admitted under the grant.
+# File the request for the exact call, wait for a human, then have the
+# agent make it, and require the plane's audit to show it admitted under
+# the grant.
 #
-# WHY THE DRIVER FILES THE REQUEST AND NOT THE AGENT. The first real run
+# WHY THE DRIVER FILES THE REQUEST, NOT THE AGENT. The first real run
 # tried the obvious thing — ask the agent, let the gateway deny it, let
-# the denial file the request — and the agent answered "there is no
-# create_branch tool available in my toolset". It was right. The gateway
-# PROJECTS tools/list down to what a credential may call: the allowlist,
-# plus tools it holds a live grant for, plus tools it carries a standing
-# constraint for (gateway.go, projectable). A consequential tool is none
-# of those by design, so kagent wires the agent no such tool, so the
-# agent can never attempt the call, so no denial and no request can ever
-# happen. Deny-and-pend only closes the loop for a tool the agent can
-# already SEE.
+# the denial file the request — and got back "there is no create_branch
+# tool available in my toolset". Which was correct: the gateway projects
+# tools/list down to the allowlist plus live grants plus constrained
+# tools (gateway.go, projectable), and a consequential tool is none of
+# those. kagent wires the agent no such tool, so it can never attempt the
+# call, so no denial and no request. Deny-and-pend only closes the loop
+# for a tool the agent can already see.
 #
-# So the order inverts, and it is better for it. The driver files the
-# request naming the exact call — `plane-admin.sh request` exists for
-# this, and computes the digest exactly as the gateway will, so the
-# request and the agent's later call are provably the same call. A human
-# approves it. The grant then makes the tool projectable, the agent can
-# see it for the first time, and it makes the call under a grant welded
-# to those arguments. A different call is denied even now.
+# So the order inverts, and it's better for it. The driver files the
+# request naming the exact call (plane-admin.sh request computes the same
+# digest the gateway will, so the request and the later call are provably
+# the same one). A human approves. The grant makes the tool projectable,
+# the agent sees it for the first time, and calls it under a grant welded
+# to those arguments.
 #
-# What that buys, said plainly: a human can only ever be shown the call
-# the operator asked for, because the driver is what wrote it down. The
-# earlier design could show them whatever the model happened to emit.
+# What that buys: a human can only ever be shown the call the operator
+# wrote down. The earlier design would show them whatever the model
+# emitted.
 consequential() {
   local tool=$1 args=$2 want=$3 ask=$4
 
   step "Proposing: $tool — $want"
 
-  # An existing live grant would make the agent's call succeed without
-  # anyone approving anything in THIS run. Refuse rather than ride it.
+  # A live grant would let the agent's call succeed without anyone
+  # approving anything in this run. Refuse instead of riding it.
   admin grants "$CRED_RELEASE" > "$work/$tool.grants-before.out" 2>/dev/null || true
   if awk -v cred="$CRED_RELEASE" -v subj="$tool" \
       '$2==cred && $3=="tool" && $4==subj && $5=="yes" {found=1} END{exit !found}' \
@@ -359,18 +339,15 @@ Do not create anything. Report only what the tools told you." \
 
 # --- 1b. compose the notes --------------------------------------------
 #
-# A SEPARATE turn, and the reason is a bug this lane shipped: do_propose's
-# whole reply was used as the release body, so the first real release got
-# 80 lines of the agent's working notes — its methodology, a 26-row pull
-# request inventory with merged_at timestamps, and a "needs a human"
-# section — where a release body belongs. The proposal is for a person to
-# read; the body is a different artifact and has to be asked for
-# separately.
+# A separate turn, because of a bug this lane shipped: do_propose's whole
+# reply became the release body, so the first real release got 80 lines of
+# the agent's working notes — methodology, a 26-row PR inventory, a "needs
+# a human" section. The proposal is for a person to read before approving;
+# the body is a different artifact and has to be asked for separately.
 #
-# The house style is not described to the agent, it is SHOWN to it: the
-# previous release's own body, fetched through the governed gateway with
-# get_release_by_tag. Every project writes these differently and the last
-# one is the specification.
+# The house style isn't described to the agent, it's shown to it: the
+# previous release's own notes, via get_release_by_tag. Every project
+# writes these differently and the last one is the spec.
 do_compose() {
   step "Composing the release notes for $version"
   turn "$work/compose.out" \
@@ -424,11 +401,9 @@ do_build() {
 
 # --- 4. publish ------------------------------------------------------
 #
-# The decision is governed the same way every other consequential step
-# is: a request naming the exact release, a human, a grant welded to it.
-# The TRANSFER is the driver's, not the gateway's — see
-# scripts/release-publish.sh for why, and for what that does and does not
-# buy.
+# The decision is governed like every other consequential step: a request
+# naming the release, a human, a grant welded to it. The transfer is the
+# driver's, not the gateway's — see scripts/release-publish.sh for why.
 do_publish() {
   [ -n "$ado_builds" ] || fail "publishing needs ADO_BUILDS (the build ids whose artifacts to attach)"
   [ -s "$work/notes.txt" ] || fail "no drafted notes to publish — run STEP=propose first, or pass NOTES_FILE"
@@ -444,8 +419,8 @@ do_publish() {
   describe. Let it lapse, or deny it, and start again."
   fi
 
-  # The asset list BEFORE the approval, so the person deciding sees what
-  # lands on a public release rather than a count they have to trust.
+  # The asset list before the approval, so whoever decides sees what lands
+  # on a public release, not a count they have to take on trust.
   step "What would be attached to $version"
   GITHUB_REPO="$repo" VERSION="$version" NOTES_FILE="$work/notes.txt" \
     ADO_ORG="$ado_org" ADO_PROJECT="$ado_project" ADO_BUILDS="$ado_builds" \
@@ -474,14 +449,13 @@ do_publish() {
 
 # --- 5. watch --------------------------------------------------------
 #
-# The POLLING lives here, in shell, and not inside an agent turn. A turn
-# is request/response and a build is minutes; a model re-deciding "has it
-# finished yet" every minute would burn budget on a question the status
-# tool answers exactly, and would put an unbounded wait inside a bounded
-# turn. The P7b inbound bridge could deliver a completion callback
-# instead, and was rejected for this: it needs a public HTTPS edge that
-# exists on AKS only, and on its generic hooks the webhook body becomes
-# the agent's prompt verbatim.
+# Polling lives here, in shell, not inside an agent turn. A turn is
+# request/response and a build is minutes; a model re-deciding "done yet?"
+# every minute burns budget on a question the status tool answers exactly,
+# and puts an unbounded wait inside a bounded turn. The P7b inbound bridge
+# could deliver a callback instead — rejected because it needs a public
+# HTTPS edge that only exists on AKS, and its generic hooks turn the
+# webhook body into the agent's prompt verbatim.
 do_watch() {
   [ -n "$gh_workflows$ado_pipelines" ] || { note "nothing to watch"; return 0; }
   refresh_ado
@@ -531,9 +505,8 @@ if [ -n "$ado_pipelines" ] && ! $KUBECTL -n kaimahi get secret kaimahi-ado-token
   Run: make ado-secret ADO_ORG=<organization>   (that token lives about an hour)"
 fi
 
-# A fresh credential before any of it: the expiry is shorter than the
-# process, so refreshing once at the start is not enough either — every
-# ADO-touching step re-checks below.
+# A fresh credential first. The expiry is shorter than the process, so
+# even this isn't enough on its own — every ADO step re-checks.
 refresh_ado
 ado_seam_ok
 

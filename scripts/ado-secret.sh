@@ -4,9 +4,8 @@
 # token) — after PROVING, fail-closed, that it is a token for the right
 # resource and that the hosted MCP server actually accepts it.
 #
-# WHY THIS IS NOT A PAT, which is what the lane was scoped to expect.
-# Microsoft's hosted Azure DevOps MCP server answers an unauthenticated
-# request with
+# NOT A PAT, which is what this lane expected. Microsoft's hosted Azure
+# DevOps MCP server answers an unauthenticated request with
 #     WWW-Authenticate: Bearer resource_metadata="https://mcp.dev.azure.com/.well-known/oauth-protected-resource/"
 # and that document declares
 #     {"authorization_servers": ["https://login.microsoftonline.com/organizations/v2.0"],
@@ -17,16 +16,14 @@
 # gateway relays streamable HTTP, so it is not reachable from here without
 # a shim this project declined to write.
 #
-# What that buys and what it costs. `bearer_methods_supported: ["header"]`
-# is exactly the shape the gateway already injects, so the ADO seam is
-# configuration and not code. The cost is that an access token lives about
-# an hour: this is re-run at the start of a release session, and this
-# script tells you when the token dies rather than letting you find out
-# mid-release. Kaimahi's own credentials gained deadlines in P16 for the
-# same reason.
+# What that buys and costs: bearer_methods_supported ["header"] is the
+# shape the gateway already injects, so the ADO seam is configuration and
+# not code. The cost is a token that lives about an hour. The release
+# driver refreshes it automatically; this script is for capturing one by
+# hand, and it tells you when it dies rather than letting you find out
+# mid-release.
 #
-# Getting one, without this script ever running it for you (credential
-# capture is a human's job here — D27):
+# Getting one (credential capture is a human's job here — D27):
 #
 #     az account get-access-token --scope https://mcp.dev.azure.com/.default \
 #        --query accessToken -o tsv
@@ -93,23 +90,19 @@ except Exception:
     sys.exit("REFUSING: the token's payload is not readable JSON")
 
 aud = str(c.get("aud", ""))
-# REPORTED, not enforced — and the reason matters, because a check here
+# Reported, not enforced, and the reason matters because a check here
 # refused a correct token.
 #
-# Microsoft Entra expresses `aud` two ways depending on the target
-# application's configured token version: the resource URI
-# (https://mcp.dev.azure.com) for v2.0, or the application's client-id
-# GUID for v1.0. Asking for `--scope https://mcp.dev.azure.com/.default`
-# can legitimately yield either. A check that accepted only the first
-# refused a token minted by exactly the command this script recommends.
+# Entra writes `aud` two ways depending on the target app's token
+# version: the resource URI for v2.0, the app's client-id GUID for v1.0.
+# Asking for --scope https://mcp.dev.azure.com/.default can legitimately
+# give either, and accepting only the first refused a token minted by the
+# exact command this script recommends. The GUID can't just be added to
+# an accept list either — an application id is an Azure identifier and
+# this repo won't carry one.
 #
-# Nor can the GUID simply be hardcoded here: an application id is an
-# Azure identifier and this repository refuses to carry those
-# (scripts/check-no-azure-ids.sh, and it is right to).
-#
-# There is no need to guess anyway. Step 2 asks the SERVER, which is the
-# only authority on whether it accepts this token, and refuses on
-# anything but a well-formed JSON-RPC result. The audience is printed so
+# No need to guess anyway: step 2 asks the server, which is the only
+# authority on whether it accepts this token. The audience is printed so
 # an operator can see what they got.
 print("audience: %s" % aud, file=sys.stderr)
 

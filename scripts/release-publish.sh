@@ -1,52 +1,40 @@
 #!/usr/bin/env bash
-# W32: publish the release — create it on GitHub with the agent's notes,
-# then move the build artifacts out of Azure DevOps and onto it.
+# Publish the release: create it on GitHub with the agent's notes, then
+# move the build artifacts out of Azure DevOps and onto it.
 #
-# WHY THE DRIVER MOVES THE BYTES AND NOT THE AGENT, and why that is not a
-# violation of the rule it looks like one of.
+# WHY THE DRIVER MOVES THE BYTES. D38(b) says the agent never carries
+# them, and it still doesn't — its part is a paragraph of notes and a
+# small JSON call. But that rule assumed some CI system could be told to
+# do the moving, and here none can: GitHub Actions can't reach this ADO
+# org, and adding an ADO pipeline was ruled out. The only thing in both
+# networks is the machine this driver runs on. So it streams them —
+# 1.28 GB across five assets on the last release.
 #
-# D38(b) says the agent never carries bytes: the gateway caps a request
-# body at 4 MiB and an MCP relay is the wrong thing to push a binary
-# through. That rule is about TOOL CALLS, and it still holds here — the
-# agent's part of publishing is a small JSON call and a drafted paragraph.
+# WHAT'S GOVERNED, exactly: the DECISION. Publishing files a request
+# naming the release, a human approves it, and nothing moves without a
+# live grant welded to it. The TRANSFER isn't gateway-enforced — no
+# allowlist sits between this script and the bytes, because the gateway
+# isn't in the path. Weaker than the rest of the lane; written down, not
+# glossed.
 #
-# The rule assumed something that is not true for this project, though:
-# that some CI system could be told to move the artifacts. It cannot.
-# GitHub Actions has no access to this Azure DevOps organization, and
-# adding a pipeline to Azure DevOps was ruled out. The only thing that
-# reaches both is the machine the operator is already sitting at, which
-# is where this driver runs. So it streams them: 1.28 GB across five
-# assets on the last release, ADO to GitHub, never through the plane.
+# Credentials are the operator's own: az for ADO, gh for GitHub, both
+# already on the machine. Plane custody isn't used and isn't pretended —
+# a 300 MB stream isn't going through the proxy. The ADO token is minted
+# at transfer time, which is also why this step can't be stranded by the
+# hour-long token that stranded the build approvals.
 #
-# WHAT IS GOVERNED HERE, said precisely rather than implied. The DECISION
-# is governed: publishing files an approval request naming the exact
-# release, a human approves that request, and this refuses to move a byte
-# without a live grant welded to it. The TRANSFER is not gateway-enforced
-# — no allowlist stands between this script and the bytes, because the
-# gateway is not in the path. That is a weaker claim than the rest of this
-# lane makes and it is written here rather than glossed.
+# WHICH ARTIFACTS. Not all of them: a 1ES build publishes symbols, logs,
+# SBOMs and compliance output next to the binaries, and everything here
+# lands on a public release. Two filters:
 #
-# Credentials are the operator's own, deliberately: `az` for Azure DevOps
-# and `gh` for GitHub, both already on the machine. Plane custody is not
-# used and not pretended — a 300 MB stream is not going through the
-# proxy. A fresh ADO token is minted at transfer time, which is also why
-# this step cannot be stranded by the hour-long token that stranded the
-# build approvals.
+#   ADO_ARTIFACTS  ADO artifact names to consider (empty = all)
+#   ASSET_GLOBS    globs matched against filenames inside them; defaults
+#                  to the installer extensions this project ships
 #
-# WHICH ARTIFACTS. Not "all of them": a 1ES build publishes symbols,
-# logs, SBOMs and compliance output beside the binaries, and everything
-# attached here lands on a public release. Two filters, both explicit:
-#
-#   ADO_ARTIFACTS  comma-separated Azure DevOps artifact NAMES to consider
-#                  (empty = every artifact the builds published)
-#   ASSET_GLOBS    comma-separated globs matched against each FILE's
-#                  basename inside those artifacts. Default is the
-#                  installer extensions this project ships.
-#
-# Everything considered is printed with its size and marked kept or
-# skipped, and `--list` does that and stops. The driver runs `--list`
-# BEFORE asking for an approval, so the person approving has seen the
-# exact asset list rather than a count they have to trust.
+# The default lists what IS wanted, not what isn't, so a new compliance
+# artifact can't quietly become a release asset. Every candidate prints
+# KEEP or skip with its size. `--list` stops there, and the driver runs
+# it BEFORE asking for approval so the person deciding has seen the list.
 #
 # Usage (via scripts/release-run.sh STEP=publish):
 #   GITHUB_REPO=owner/name VERSION=v1.2.3 NOTES_FILE=notes.md \
@@ -98,19 +86,15 @@ matches_glob() {
 # transfer takes minutes and the plane's stored token lives about an
 # hour; this step is the one that would meet that deadline.
 #
-# AND FOR THE RIGHT RESOURCE. This talks to the Azure DevOps REST API at
-# dev.azure.com, which is NOT the resource the MCP server is
-# (https://mcp.dev.azure.com). A token minted for the MCP scope is
-# refused here — as a 302 to a sign-in page rather than a 401, which is
-# how it presented the first time and is worth recognising: an HTML
-# redirect where JSON was expected means the token was not accepted, not
-# that the URL was wrong.
+# And for the right resource. dev.azure.com is NOT the same resource as
+# mcp.dev.azure.com, and a token for the MCP scope gets refused here — as
+# a 302 to a sign-in page, not a 401. Worth recognising: an HTML redirect
+# where JSON should be means the token wasn't accepted, not that the URL
+# is wrong.
 #
-# ADO_API_SCOPE overrides. The default is the Azure DevOps resource's URI
-# form; if your tenant only accepts the application-id form, pass it —
-# that identifier is not committed here, because this repository refuses
-# to carry Azure identifiers even public ones
-# (scripts/check-no-azure-ids.sh).
+# ADO_API_SCOPE overrides, defaulting to the ADO resource URI. If your
+# tenant wants the application-id form, pass it — that id isn't committed
+# here, since this repo refuses Azure identifiers even public ones.
 ADO_API_SCOPE="${ADO_API_SCOPE:-https://app.vssps.visualstudio.com/.default}"
 step "Minting an Azure DevOps API token for the transfer"
 az account get-access-token --scope "$ADO_API_SCOPE" \
@@ -125,11 +109,10 @@ test -s "$work/ado.tok" || { echo 'az returned an empty token' >&2; exit 1; }
 
 # --- 0. did those builds actually succeed? -----------------------------
 #
-# Checked FIRST, because a failed build's artifacts are the wrong thing to
-# put on a release and "no installers were produced" is a confusing way to
-# learn that a build failed. On the first real run two of three builds hit
-# Azure DevOps' 60-minute job cap during signing, and the only symptom
-# here was an empty asset list.
+# Checked first: a failed build's artifacts don't belong on a release, and
+# "no installers were produced" is a confusing way to find out a build
+# failed. On the first real run two of three hit ADO's 60-minute job cap
+# during signing, and all this layer saw was an empty asset list.
 step "Checking those builds succeeded"
 IFS=',' read -ra builds <<< "$ado_builds"
 bad=0
@@ -151,13 +134,12 @@ print(d.get("status", "?"), d.get("result", "?"),
       (d.get("definition") or {}).get("name", "?").replace(" ", "_"))
 EOF
 )
-  # partiallySucceeded is ACCEPTED, and that is not a loosening for
-  # convenience: measured against this project's own history, it is what
-  # a shipping build looks like. Every successful run of these pipelines
-  # in recent months came back partiallySucceeded — none returned
-  # succeeded — because the 1ES template raises non-fatal compliance
-  # warnings on every run. A guard that demanded `succeeded` would refuse
-  # every real release. STRICT_BUILDS=1 demands it anyway.
+  # partiallySucceeded is accepted, and that's not a convenience: it's
+  # what a shipping build looks like here. Every successful run of these
+  # pipelines in recent months came back partiallySucceeded, because the
+  # 1ES template raises non-fatal compliance warnings every time.
+  # Demanding `succeeded` would refuse every real release.
+  # STRICT_BUILDS=1 demands it anyway.
   case "$bstatus/$bresult" in
     completed/succeeded) note "OK        $b  ${bname//_/ }" ;;
     completed/partiallySucceeded)
@@ -209,11 +191,10 @@ EOF
 done
 test -s "$work/plan" || { echo 'those builds published no artifacts' >&2; exit 1; }
 
-# The FILES inside those artifacts, listed WITHOUT downloading them: an
-# artifact's resource.data is "#/<containerId>/<name>", and the container
-# API returns every item with its size. 1.28 GB is too much to move just
-# to find out what is in it, and the person approving needs the list
-# before they decide, not after.
+# The files inside them, without downloading: an artifact's resource.data
+# is "#/<containerId>/<name>" and the container API lists every item with
+# its size. 1.28 GB is too much to move just to see what's in it, and the
+# person approving needs the list before deciding.
 step "What is in them"
 : > "$work/files"
 while IFS=$'\t' read -r b name url; do
@@ -252,11 +233,10 @@ done < "$work/plan"
 
 # Print the decision, file by file, before anything is created or moved.
 #
-# "unknown" is NOT "no match". An Azure DevOps PIPELINE artifact (as
-# opposed to a container/build artifact) cannot have its contents listed
-# without downloading it, and that is where the installers live —
-# aks-desktop-signed on this project. Counting those as zero made the
-# guard refuse a build that had the assets all along.
+# "unknown" isn't "no match". An ADO PIPELINE artifact (unlike a
+# container one) can't be listed without downloading it, and that's where
+# the installers live — aks-desktop-signed here. Counting those as zero
+# made the guard refuse a build that had the assets all along.
 kept=0
 unknown=0
 while IFS=$'\t' read -r b name size base; do
@@ -273,10 +253,9 @@ note ""
 note "$kept listable file(s) match ASSET_GLOBS=$asset_globs"
 [ "$unknown" -eq 0 ] || note "$unknown pipeline artifact(s) will be filtered by the same globs after download"
 
-# Nothing to publish means nothing MATCHED and nothing is still unknown.
-# --list is what the driver calls BEFORE it asks a human, so exiting 0
-# with an empty selection meant the driver went on to request approval
-# for a release with no assets.
+# Nothing to publish means nothing matched AND nothing is unknown. The
+# driver calls --list before asking a human, so exiting 0 on an empty
+# selection meant it went on to request approval for an empty release.
 if [ "$kept" -eq 0 ] && [ "$unknown" -eq 0 ]; then
   echo 'no file matched ASSET_GLOBS — there is nothing to publish.' >&2
   echo 'Either the builds have not produced installers yet, or ASSET_GLOBS' >&2
@@ -310,9 +289,8 @@ while IFS=$'\t' read -r b name url; do
   rm -rf "$work/x"; mkdir -p "$work/x"
   unzip -q "$work/$name.zip" -d "$work/x"
   rm -f "$work/$name.zip"
-  # An Azure DevOps artifact is a zip of a folder; the release assets are
-  # the FILES inside it. Directories and empty files are skipped rather
-  # than uploaded as broken assets.
+  # An ADO artifact is a zip of a folder; the assets are the files inside.
+  # Directories and empty files get skipped, not uploaded broken.
   while IFS= read -r f; do
     base=$(basename "$f")
     if [ ! -s "$f" ]; then note "skip (empty)      $base"; continue; fi

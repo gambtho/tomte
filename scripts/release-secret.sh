@@ -4,11 +4,11 @@
 # (kaimahi-release-pat, key: token) — after PROVING, fail-closed, what can
 # be proven about it.
 #
-# This is scripts/github-secret.sh's sibling, and the differences are the
-# point. That token is READ-ONLY and feeds the P10 demo. This one can
-# change a real repository, so it gets its own Secret, its own upstream
-# entry and its own allowlist, and the P10 seam keeps exactly the blast
-# radius it was reviewed with.
+# scripts/github-secret.sh's sibling, and the difference is the point:
+# that token is read-only and feeds the P10 demo. This one can change a
+# real repository, so it gets its own Secret, upstream entry and
+# allowlist, and the P10 seam keeps the blast radius it was reviewed
+# with.
 #
 # Which token: a FINE-GRAINED personal access token, scoped to ONE
 # repository, with:
@@ -17,16 +17,13 @@
 #   Actions:       Read and write   (dispatch the build workflow)
 #   Metadata:      Read             (comes along)
 #
-# Say the uncomfortable part out loud, because it decides where the
-# guardrail actually lives: GitHub has no permission that grants creating
-# a ref without also granting DELETING one. Contents: write is the
-# smallest scope that can create a release branch, and it necessarily also
-# permits `DELETE /repos/{o}/{r}/git/refs/{ref}`. There is no separate
-# Releases permission either. So the token is NOT what stops a destructive
-# git operation here — the gateway is (the destructive tools are excluded
-# at the server by the upstream's extra_headers, absent from the
-# allowlist, and absent from the agent's tool selection). See
-# docs/release-agent.md, "What makes a destructive operation impossible".
+# The uncomfortable part, because it decides where the guardrail lives:
+# GitHub has no permission that grants creating a ref without also
+# granting deleting one. Contents: write is the smallest scope that can
+# create a release branch, and it also permits DELETE on any ref. There's
+# no separate Releases permission either. So the token is NOT what stops
+# a destructive git operation — the gateway is. See docs/release-agent.md,
+# "What makes a destructive operation impossible".
 #
 # Custody rules (docs/COORDINATION.md security guidance):
 #   - Token bytes travel only through pipes and 0600 files — never argv,
@@ -96,36 +93,31 @@ if not isinstance(d, dict) or str(d.get("full_name", "")).lower() != want:
 print("token vetted: it reads %s" % sys.argv[2], file=sys.stderr)
 EOF
 
-# 2. ONE repository: NOT proven here, and the reason is worth writing down
+# 2. ONE repository: not proven here, and the reason is worth keeping
 # because a check used to sit here and was wrong.
 #
-# It asked GET /user/repos and refused a token that listed more than one
-# repository. That endpoint answers by the USER's affiliations, not by the
-# token's repository scope — for a member of a large organization it
-# returns thousands whatever the token is scoped to — so the check
-# refused correctly-scoped tokens and proved nothing about wrong ones.
+# It asked GET /user/repos and refused a token listing more than one repo.
+# That endpoint answers by the USER's affiliations, not the token's scope
+# — for a member of a large org it returns thousands whatever the token
+# can reach. So it refused correctly-scoped tokens and proved nothing
+# about wrong ones.
 #
-# There is no sound replacement: GitHub exposes no endpoint that reports a
-# fine-grained token's repository grant, and a negative control against
-# another repository cannot distinguish "the token cannot reach it" from
-# "the token can read it because it is public".
+# There's no sound replacement: GitHub exposes no endpoint reporting a
+# fine-grained token's repo grant, and a negative control can't tell "the
+# token can't reach it" from "it can, because it's public".
 #
-# So single-repository scope is asserted by the OPERATOR when they create
-# the token (Repository access -> Only select repositories), and enforced
-# by the PLANE afterwards: `make release-bind` adds a standing constraint
-# so the read tools are callable only with that owner and repo, and every
-# consequential call binds owner and repo in its approval digest. That is
-# a real control that does not depend on trusting this script's guess.
+# So single-repo scope is the operator's assertion when they create the
+# token, and the plane's job afterwards: `make release-bind` constrains
+# the read tools to that owner and repo, and every consequential call
+# binds owner and repo in its digest. That's a real control that doesn't
+# rest on this script guessing.
 
-# 3. Its deadline, said now rather than when it bites — the same rule
-# P16 applied to Kaimahi's own credentials.
+# 3. Its deadline, said now rather than when it bites — P16's rule for
+# Kaimahi's own credentials, applied here.
 #
-# REPORTED, not enforced. GitHub sends this header for a fine-grained
-# token, but an absent header means "this response did not carry one",
-# which is not the same claim as "this token never expires" — and the
-# check that used to live above this one refused valid tokens by treating
-# a silence as a fact. Once is enough. So a missing header is said out
-# loud and the operator decides.
+# Reported, not enforced: an absent header means "this response didn't
+# carry one", not "this token never expires". The check above this one
+# refused valid tokens by treating a silence as a fact; once was enough.
 expiry=$(tr -d '\r' < "$workdir/resp-headers" \
   | sed -n 's/^[Gg]ithub-[Aa]uthentication-[Tt]oken-[Ee]xpiration: *//p' | head -1)
 if [ -z "$expiry" ]; then
