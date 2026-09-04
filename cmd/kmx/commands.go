@@ -40,7 +40,10 @@ func newQuickstartCommand(state *commandState) *cobra.Command {
 		Args:  cobra.NoArgs,
 	}
 	cmd.Flags().StringVarP(&opt.Output, "output", "o", "text", "output: text|json")
-	cmd.Flags().StringVar(&opt.Agent, "agent", config.DefaultAgent, "agent to deploy and ask")
+	// No --agent flag: quickstart deploys the hello-world manifest kmx
+	// carries, so a flag naming a different agent would deploy one thing and
+	// question another. Your own agent is `kmx agent create`, and asking any
+	// agent anything is `kmx agent chat`.
 	cmd.Flags().StringVar(&opt.Task, "task", config.DefaultTask, "the question to ask it")
 	_ = cmd.RegisterFlagCompletionFunc("output", staticCompletion([]string{"text", "json"}))
 	cmd.RunE = appRun(state, func(a *app.App) error { return a.Quickstart(opt) })

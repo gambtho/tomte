@@ -3088,15 +3088,29 @@ jobs:
           mkdir -p /tmp/release
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o /tmp/release/kmx-linux-amd64 ./cmd/kmx
           ( cd /tmp/release && sha256sum kmx-linux-amd64 > checksums.txt )
-      # The premise, checked rather than assumed. kubectl, Helm and Go are all
-      # on a GitHub runner by default; the operator kmx is built for has none
-      # of them, so the steps below run on a PATH that has none of them
-      # either.
-      #
-      # The stripping is done INSIDE each script rather than through
-      # $GITHUB_ENV: the runner composes a job's PATH from its own list plus
-      # anything actions/setup-go added via $GITHUB_PATH, and that composition
-      # puts the Go toolchain back in front of an override written there.
+      # The premise, MADE TRUE rather than assumed. A GitHub runner ships
+      # kubectl and Go in /usr/bin and Helm in /usr/local/bin, so no amount of
+      # PATH arrangement produces the machine kmx is built for — /usr/bin is
+      # also where docker and coreutils live. They are moved aside for the
+      # length of this job and put back afterwards, which is the only way the
+      # "kmx fetches them" claim is actually under test rather than asserted.
+      - name: Make this runner the machine kmx is built for
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          set -euo pipefail
+          for t in kubectl helm kind go; do
+            while p=$(command -v "$t" 2>/dev/null); do
+              echo "hiding $p"
+              sudo mv "$p" "$p.w31-hidden"
+            done
+          done
+          for t in kubectl helm kind go; do
+            if command -v "$t" >/dev/null 2>&1; then
+              echo "premise broken: $t is still on PATH ($(command -v "$t"))"; exit 1
+            fi
+          done
+          command -v docker >/dev/null || { echo "no container engine"; exit 1; }
+          echo "this machine now has a container engine and nothing else kmx needs"
       - name: One command — install kmx and answer a question
         id: quickstart
         if: steps.changes.outputs.docs_only != 'true'
@@ -3105,14 +3119,6 @@ jobs:
           KIND_CLUSTER: kmx-quickstart
         run: |
           set -euo pipefail
-          echo "before stripping: $(command -v kubectl || true) $(command -v helm || true) $(command -v go || true)"
-          export PATH="/usr/bin:/bin:/usr/sbin:/sbin:$HOME/.local/bin"
-          for t in go kind kubectl helm; do
-            if command -v "$t" >/dev/null 2>&1; then
-              echo "premise broken: $t is on PATH ($(command -v "$t"))"; exit 1
-            fi
-          done
-          command -v docker >/dev/null || { echo "no container engine"; exit 1; }
           start=$(date +%s)
           sh install.sh --quickstart 2>&1 | tee quickstart.out
           elapsed=$(( $(date +%s) - start ))
@@ -3139,7 +3145,7 @@ jobs:
           KIND_CLUSTER: kmx-quickstart
         run: |
           set -euo pipefail
-          export PATH="/usr/bin:/bin:/usr/sbin:/sbin:$HOME/.local/bin"
+          export PATH="$HOME/.local/bin:$PATH"
           kmx quickstart --output json > quickstart.json 2> quickstart2.err
           python3 - <<'EOF'
           import json, sys
@@ -3163,7 +3169,7 @@ jobs:
           KIND_CLUSTER: kmx-quickstart
         run: |
           set -euo pipefail
-          export PATH="/usr/bin:/bin:/usr/sbin:/sbin:$HOME/.local/bin"
+          export PATH="$HOME/.local/bin:$PATH"
           kmx up
           k="$HOME/.config/kmx/path/kubectl"
           "$k" --context kind-kmx-quickstart -n kagent get deploy kagent-ui \
@@ -3188,10 +3194,16 @@ jobs:
             echo "This number is the point of W31. Find what got slower before raising it."
             exit 1
           fi
-      - name: Tear down
+      - name: Tear down, and give the runner its tools back
         if: always() && steps.changes.outputs.docs_only != 'true'
         run: |
           "$HOME/.local/bin/kmx" down || true
+          # Put back what was moved aside, so nothing after this job (or any
+          # post step) meets a runner missing its own toolchain.
+          for hidden in /usr/bin/*.w31-hidden /usr/local/bin/*.w31-hidden /usr/local/go/bin/*.w31-hidden; do
+            [ -e "$hidden" ] || continue
+            sudo mv "$hidden" "${hidden%.w31-hidden}"
+          done
       - name: Docs-only short-circuit
         id: docs-only-summary
         if: steps.changes.outputs.docs_only == 'true'

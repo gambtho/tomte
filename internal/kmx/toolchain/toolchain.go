@@ -31,6 +31,7 @@ package toolchain
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
@@ -266,7 +267,7 @@ func install(path string, binary []byte) error {
 
 // memberOf pulls one file out of a verified .tar.gz.
 func memberOf(archive []byte, member string) ([]byte, error) {
-	zr, err := gzip.NewReader(strings.NewReader(string(archive)))
+	zr, err := gzip.NewReader(bytes.NewReader(archive))
 	if err != nil {
 		return nil, fmt.Errorf("cannot read the downloaded archive: %w", err)
 	}
