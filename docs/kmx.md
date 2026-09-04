@@ -29,6 +29,22 @@ key, none of which kmx does (see [aks.md](aks.md)).
 ## Install
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/kaimahi-agents/kaimahi/main/install.sh | sh
+```
+
+The script works out your platform, downloads that release binary, **checks it
+against the release's published sha256 before installing it**, and puts it in
+`~/.local/bin` — no sudo, and nothing outside your home directory.
+`--quickstart` carries straight on into `kmx quickstart`; `--version=v0.1.0`
+pins a version; `--bin-dir=DIR` installs elsewhere.
+
+Stated rather than implied: the binary and its checksum come from the same
+GitHub release over TLS, so this proves the download was not corrupted or
+truncated. It is not an independent signature. `go install` is the other
+route, and it goes through the Go module proxy and the Go checksum database
+instead:
+
+```bash
 go install github.com/kaimahi-agents/kaimahi/cmd/kmx@latest
 ```
 
@@ -55,16 +71,23 @@ make up    # build if stale, then create/update the local runtime
 
 | Prerequisite | Why |
 |---|---|
-| Go 1.26+ | to install or build kmx — and to build the plane, which kmx fetches at its own revision |
-| Docker **or** Podman | kind runs Kubernetes in containers |
-| kind | the local cluster |
-| kubectl | kmx shells out to it for every read and write |
-| Helm | installs kagent |
+| Docker **or** Podman | kind runs Kubernetes in containers. **The only thing you must install.** |
+| kind, kubectl, Helm | kmx downloads them if the machine has none, pinned and checksum-verified; a copy already on PATH is preferred and never shadowed |
+| Go 1.26+ | only for `kmx plane` (it builds the plane's image locally) and for `go install` |
 
-kmx fetches the pinned kagent CLI itself, checksum-verified, the first time
-you chat. A clone uses the same verified kmx cache unless `KAGENT=<path>` is
-explicitly supplied; the Makefile's `bin/kagent` remains for legacy
-action-oriented helpers such as `slack-post`.
+kmx has always fetched the pinned kagent CLI itself, checksum-verified, the
+first time you chat. Since W31 the cluster tools work the same way: pinned
+versions, the publisher's own sha256 file, the digest re-checked on every
+later use rather than only at download — because "checksum-verified" has to
+mean the bytes about to run with your kubeconfig, not the bytes that arrived
+some other day. They land in `~/.config/kmx/bin`, and `~/.config/kmx/path`
+holds the plain-named symlinks kmx puts on PATH for the length of one
+command.
+
+`KMX_TOOLCHAIN=off` turns the fetching off entirely: a missing tool goes back
+to being an error that names its install page. A clone uses the same verified
+kmx cache unless `KAGENT=<path>` is explicitly supplied; the Makefile's
+`bin/kagent` remains for legacy action-oriented helpers such as `slack-post`.
 
 ## The journey
 
@@ -102,6 +125,7 @@ swap plus a credential the agent cannot read past.
 |---|---|
 | `kmx ctx` | print the context kmx will act on, where that came from, and its posture |
 | `kmx ctx <context>` | select that context for later commands (recorded in kmx's config directory — `~/.config/kmx/context` on Linux; set `KMX_HOME` to put it elsewhere) |
+| `kmx quickstart` | the shortest honest path to a working agent: equip the machine, create the cluster, deploy Ollama and pull the model, install kagent **without the components a first question cannot reach**, deploy one agent, ask it a question and print the answer. `--output json` for a machine, `--agent`/`--task` to change what is asked. Safe to run twice. Deploys no plane, and says so |
 | `kmx up` | check all host dependencies in one pass before the guard or first use, create the kind cluster, deploy Ollama, pull the pinned model, install kagent by helm, apply both agents, wait for each to be Ready, print status |
 | `kmx up --step <step>` | one step only: `cluster`, `ollama`, `model`, `kagent`, `agent`, `tools-agent` |
 | `kmx agent list [-o table\|json\|yaml]` | list agents with readiness, acceptance, active ModelConfig, and tool-server wiring |
@@ -557,7 +581,7 @@ entangled with capturing a credential, which kmx accepts in no form at all:
 | Capturing a secret of any kind | `make model-secret`, `make copilot-secret`, `make slack-secret` — key-bearing steps stay in standalone scripts |
 | A managed cluster (AKS) | `TARGET=aks make …` ([aks.md](aks.md)) |
 | The network and tool probes | `scripts/*-probe.sh` |
-| Publishing — a tap, a release, a package | nowhere, by decision (D26/D27) |
+| Publishing — a tap, a package manager namespace | nowhere. D34 lifted the freeze on publishing, and W28 shipped tagged releases with checksummed binaries; `install.sh` and `go install` are the two install paths, and no npm/crates/PyPI/Homebrew namespace is claimed ([NAMING.md](NAMING.md)) |
 
 `kmx up` says the plane is not deployed, in one line, at the end of a run,
 and names the two commands that change that.

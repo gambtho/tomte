@@ -23,6 +23,33 @@ func newCtxCommand(state *commandState) *cobra.Command {
 	return cmd
 }
 
+// newQuickstartCommand is the front door: one command, from a machine with a
+// container engine to an agent that has answered a question.
+//
+// It is a sibling of `up` rather than a flag on it because the two make
+// different promises. `up` brings up the RUNTIME — every agent, the tool
+// server, everything a later step might need. `quickstart` promises one
+// thing, an answer, and defers everything that is not on the way to it.
+// Folding them together would mean one command with two contracts and a flag
+// deciding which you got.
+func newQuickstartCommand(state *commandState) *cobra.Command {
+	var opt app.QuickstartOptions
+	cmd := &cobra.Command{
+		Use:   "quickstart",
+		Short: "From nothing to an agent answering a question",
+		Args:  cobra.NoArgs,
+	}
+	cmd.Flags().StringVarP(&opt.Output, "output", "o", "text", "output: text|json")
+	// No --agent flag: quickstart deploys the hello-world manifest kmx
+	// carries, so a flag naming a different agent would deploy one thing and
+	// question another. Your own agent is `kmx agent create`, and asking any
+	// agent anything is `kmx agent chat`.
+	cmd.Flags().StringVar(&opt.Task, "task", config.DefaultTask, "the question to ask it")
+	_ = cmd.RegisterFlagCompletionFunc("output", staticCompletion([]string{"text", "json"}))
+	cmd.RunE = appRun(state, func(a *app.App) error { return a.Quickstart(opt) })
+	return cmd
+}
+
 func newUpCommand(state *commandState) *cobra.Command {
 	var step string
 	cmd := &cobra.Command{Use: "up", Short: "Bring up the local runtime", Args: cobra.NoArgs}

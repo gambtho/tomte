@@ -204,13 +204,16 @@ func (a *App) stepCluster() error {
 		}
 	}
 
-	// The Docker path, unchanged: create it if it is not there.
+	// The Docker path: create it if it is not there.
 	if a.Cfg.ContainerEngine != "podman" {
 		if listed {
 			a.notef("kind cluster %q already exists", a.Cfg.KindCluster)
-			return nil
+			return a.waitClusterServing()
 		}
-		return a.Run.Run("kind", "create", "cluster", "--name", a.Cfg.KindCluster)
+		if err := a.Run.Run("kind", "create", "cluster", "--name", a.Cfg.KindCluster); err != nil {
+			return err
+		}
+		return a.waitClusterServing()
 	}
 
 	// The Podman path (#53, by @sajayantony): restarting the podman machine
@@ -235,16 +238,36 @@ func (a *App) stepCluster() error {
 		return err
 	}
 
-	// Restarted or freshly created, the API server and CoreDNS have to be up
-	// before anything else runs: without this the Ollama model pull could
-	// start into a cluster that was not yet serving.
+	return a.waitClusterServing()
+}
+
+// waitClusterServing refuses to leave the cluster step until the API server
+// answers and CoreDNS is actually serving.
+//
+// This used to run on the Podman path only, where a restarted machine made
+// the need obvious. W31 found it is not engine-specific: on a nested-runtime
+// machine where kube-proxy crash-looped, the cluster came up "successfully"
+// and the run died two minutes later on
+//
+//	Error: pull model manifest: ... dial tcp: lookup registry.ollama.ai: i/o timeout
+//
+// which reads as "the internet is broken" and is really "this cluster has no
+// working DNS". The failure belongs at the step that caused it, in words that
+// say so — a first run that fails is survivable, a first run that fails
+// somewhere unrelated is what makes people give up.
+func (a *App) waitClusterServing() error {
 	ready := run.Poll(60, 2*time.Second, func() bool {
 		return a.kubectlQuiet("get", "--raw=/readyz")
 	})
 	if !ready {
 		return fmt.Errorf("kind cluster %q API did not become ready after 120s", a.Cfg.KindCluster)
 	}
-	return a.kubectlRun("-n", "kube-system", "rollout", "status", "deployment/coredns", "--timeout=180s")
+	if err := a.kubectlRun("-n", "kube-system", "rollout", "status", "deployment/coredns", "--timeout=180s"); err != nil {
+		return fmt.Errorf("kind cluster %q came up but its DNS did not: %w\n"+
+			"  nothing that needs to resolve a name will work until it does — check `kubectl -n kube-system get pods`\n"+
+			"  (a crash-looping kube-proxy or CNI is the usual cause, and is a problem with the container runtime, not with what kmx applied)", a.Cfg.KindCluster, err)
+	}
+	return nil
 }
 
 // podmanNodes turns `podman ps -a --format {{.Names}}` output into the node
@@ -272,14 +295,50 @@ func (a *App) stepOllama() error {
 	return a.kubectlRun("-n", "ollama", "rollout", "status", "deploy/ollama", "--timeout=300s")
 }
 
-// stepModel pulls the pinned model into the running Ollama.
+// stepModel pulls the pinned model into the running Ollama, retrying a
+// transient failure.
+//
+// The retry is not defensive padding — it was measured. Two of five clean-machine
+// first runs during W31 died here with
+//
+//	Error: pull model manifest: Get "https://registry.ollama.ai/...": dial tcp: lookup registry.ollama.ai: i/o timeout
+//
+// which is the cluster's DNS not being ready for the outside world yet, a
+// minute or two into a first run. Failing the whole bring-up on it costs the
+// operator everything done so far and reads as "this does not work", which is
+// the abandonment this command exists to prevent. Three attempts, and the
+// failure is still the real one if the network genuinely is not there.
+//
+// It is safe to repeat: `ollama pull` of a model already present is a no-op,
+// and a partial pull resumes.
 func (a *App) stepModel() error {
-	return a.kubectlRun("-n", "ollama", "exec", "deploy/ollama", "--", "ollama", "pull", a.Cfg.Model)
+	var err error
+	for attempt := 1; attempt <= 3; attempt++ {
+		if err = a.kubectlRun("-n", "ollama", "exec", "deploy/ollama", "--", "ollama", "pull", a.Cfg.Model); err == nil {
+			return nil
+		}
+		if attempt != 3 {
+			a.notef("the model pull failed (attempt %d/3) — retrying in 10s", attempt)
+			time.Sleep(10 * time.Second)
+		}
+	}
+	return err
 }
 
 // ---- kagent ---------------------------------------------------------------
 
-func (a *App) stepKagent() error {
+func (a *App) stepKagent() error { return a.installKagent() }
+
+// installKagent installs the chart, optionally with extra `--set` values.
+//
+// The extras exist for exactly one caller — `kmx quickstart`, which turns off
+// the components a first question cannot reach (the console, the bundled tool
+// server, the MCP controller) because they are ~360MB of image pulls and two
+// more pods to become Ready before anyone sees an answer. They are `--set`
+// overlays on the SAME values file rather than a second one: two values files
+// would be two descriptions of one install, and the later `kmx up` restores
+// the full set simply by not passing them.
+func (a *App) installKagent(extra ...string) error {
 	version := a.Cfg.KagentVersion
 	if err := a.Run.Run("helm", "upgrade", "--install", "kagent-crds",
 		"oci://ghcr.io/kagent-dev/kagent/helm/kagent-crds",
@@ -306,10 +365,12 @@ func (a *App) stepKagent() error {
 		return err
 	}
 
-	if err := a.Run.Run("helm", "upgrade", "--install", "kagent",
+	args := []string{"upgrade", "--install", "kagent",
 		"oci://ghcr.io/kagent-dev/kagent/helm/kagent",
 		"--version", version, "--namespace", "kagent",
-		"--kube-context", a.Cfg.KubeContext, "-f", tmp.Name()); err != nil {
+		"--kube-context", a.Cfg.KubeContext, "-f", tmp.Name()}
+	args = append(args, extra...)
+	if err := a.Run.Run("helm", args...); err != nil {
 		return err
 	}
 	return a.kubectlRun("-n", "kagent", "wait", "--for=condition=Ready", "pods", "--all", "--timeout=420s")

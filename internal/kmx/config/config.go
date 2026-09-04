@@ -184,6 +184,21 @@ func CacheDir() (string, error) {
 	return filepath.Join(dir, "bin"), nil
 }
 
+// ToolchainDir is where kmx puts a plain-named symlink for each cluster tool
+// it had to fetch itself (kind, kubectl, Helm). It is prepended to PATH for
+// the life of one command.
+//
+// It cannot be CacheDir: entries there carry their version in the name, so a
+// pin bump can never be served the previous binary, and nothing looks for a
+// command under `kind-0.33.0-linux-amd64`.
+func ToolchainDir() (string, error) {
+	dir, err := stateDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "path"), nil
+}
+
 // PlaneCacheDir is where the proxy binary built for the plane's image is put
 // on the clone-free path. It is kmx's own directory rather than the
 // operator's GOBIN, so building the plane never lands a binary on top of

@@ -14,14 +14,23 @@ substance and different wording.
 
 ## Prerequisites
 
-| Tool | Why | Install |
+**One**: a container engine.
+
+| Tool | Needed for | Install |
 |------|-----|---------|
-| Go 1.26+ | builds/installs `kmx`, which every command below runs through | <https://go.dev/dl/> |
-| Docker **or** Podman | kind runs Kubernetes in containers | <https://docs.docker.com/get-docker/> · <https://podman.io/docs/installation> |
-| kind | local Kubernetes cluster | <https://kind.sigs.k8s.io/docs/user/quick-start/#installation> |
-| kubectl | cluster interaction | <https://kubernetes.io/docs/tasks/tools/> |
-| Helm | installs kagent | <https://helm.sh/docs/intro/install/> |
-| make, curl | glue | your package manager |
+| Docker **or** Podman | everything — kind runs Kubernetes in containers | <https://docs.docker.com/get-docker/> · <https://podman.io/docs/installation> |
+| kind, kubectl, Helm | **fetched by `kmx`** when they are absent, pinned and checksum-verified into `~/.config/kmx`. A copy you already have on PATH is used instead, always | — |
+| curl | the install script (already present on macOS and every mainstream Linux) | your package manager |
+| Go 1.26+ | **only** `kmx plane`, which builds the plane's image locally, and `go install` as an alternative way to get `kmx` | <https://go.dev/dl/> |
+| make, git | **only** the clone path at the bottom of this page | your package manager |
+
+`kmx` acquiring its own tools is not new behaviour invented here: it has
+always downloaded the pinned kagent CLI the same way, verifying the published
+digest before executing it and re-verifying it on every later use. kind,
+kubectl and Helm now follow the same rule. If you would rather your machine
+only ran binaries your own package manager put there, set
+`KMX_TOOLCHAIN=off` and a missing tool goes back to being an error that names
+its install page.
 
 ### Using Podman instead of Docker
 
@@ -64,17 +73,61 @@ No API key is needed anywhere: the default model is an in-cluster
 [Ollama](https://ollama.com) server running `qwen2.5:3b` (free, local,
 keyless). Hosted models are in [models.md](models.md).
 
-## Up, and a first conversation
+## One command, and an agent that answers
 
-Install `kmx` — one binary, no clone:
+```bash
+curl -fsSL https://raw.githubusercontent.com/kaimahi-agents/kaimahi/main/install.sh | sh -s -- --quickstart
+```
+
+That downloads `kmx` for your platform, checks it against the release's
+published sha256, installs it into `~/.local/bin` (no sudo, ever), and runs
+`kmx quickstart`: a kind cluster, an in-cluster model, kagent, one agent, and
+the agent's answer to a question. Measured end to end on a clean machine with
+nothing but Docker installed: **2m43s**.
+
+Drop `--quickstart` to install `kmx` and stop there. Set `KMX_VERSION=v0.1.0`
+to pin a version, or `KMX_BIN_DIR=/somewhere/else` to install elsewhere.
+
+`kmx quickstart` is safe to run again — the second run finds the cluster it
+made and asks another question — and `--output json` makes it drivable by
+something other than a person:
+
+```bash
+kmx quickstart --output json
+```
+
+```json
+{
+  "ok": true,
+  "context": "kind-kaimahi-p1",
+  "agent": "hello-world",
+  "answer": "I am a declarative kagent agent defined entirely in YAML...",
+  "governed": false,
+  "elapsed_seconds": 42.1,
+  "next": ["kmx agent chat ...", "kmx agent create <name> ...", "kmx up", "kmx plane", "kmx govern hello-world"]
+}
+```
+
+`"governed": false` is not an oversight. **Nothing on the quickstart path is
+metered, budgeted, approved or audited** — the plane is the next command, not
+a gate you pass through first. See [governing that agent](#governing-that-agent)
+below.
+
+### With a Go toolchain instead
 
 ```bash
 go install github.com/kaimahi-agents/kaimahi/cmd/kmx@latest
 ```
 
 `@latest` is the newest tagged release, and `kmx version` says which one you
-have. If you would rather not build it, or have no Go toolchain, each release
-also carries checksum-verified binaries — see [releases.md](releases.md).
+have. Releases also carry checksum-verified binaries you can download by hand
+— see [releases.md](releases.md).
+
+### The whole runtime
+
+`kmx quickstart` deliberately deploys only what a first question touches. When
+you want the rest — kagent's console and bundled tool server, the second
+(tool-using) agent — that is `kmx up`, which reconciles the same cluster:
 
 ```bash
 kmx up      # kind cluster + Ollama + model pull + kagent + two agents (first run ~5-10 min)

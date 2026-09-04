@@ -86,57 +86,11 @@ func (a *App) ChatWithOptions(opt ChatOptions) error {
 		return err
 	}
 
-	cache, err := config.CacheDir()
-	if err != nil {
-		return err
-	}
-	kagent, err := kagentcli.Ensure(kagentcli.Options{
-		Version:  a.Cfg.KagentVersion,
-		CacheDir: cache,
-		Existing: a.Cfg.KagentBin,
-		Log:      a.Err,
-	})
-	if err != nil {
-		return err
-	}
-	if opt.Interactive {
-		return a.interactiveChat(kagent, agent, task, opt.Session)
-	}
-
-	if err := a.waitServable(agent); err != nil {
+	out, status, err := a.askAgent(agent, task, opt.Session, opt.Interactive)
+	if err != nil || opt.Interactive {
 		return err
 	}
 
-	port, stop, err := a.portForward()
-	if err != nil {
-		return err
-	}
-	defer stop()
-
-	url := "http://127.0.0.1:" + port
-	// The CLI defaults to localhost:8083; name the port we actually opened
-	// so it can never fall back to someone else's.
-	args := []string{"--kagent-url", url, "invoke", "--agent", agent, "--task", task}
-	if opt.Session != "" {
-		args = append(args, "--session", opt.Session)
-	}
-	fmt.Fprintf(a.Err, "%s %s\n", kagent, "invoke --agent "+agent)
-
-	var out string
-	var status int
-	for attempt := 1; attempt <= 4; attempt++ {
-		out, status, err = a.Run.CaptureCombined(kagent, args...)
-		if err != nil {
-			return err
-		}
-		if !ChatRetryable.MatchString(out) {
-			break
-		}
-		if attempt != 4 {
-			a.notef("kagent could not reach agent %q yet (transport error); retry %d/3 in 5s", agent, attempt)
-			time.Sleep(5 * time.Second)
-		}
-	}
 	// A terminal gets the readable view; a pipe gets the bytes, because CI
 	// and scripts/verify-chat.py parse them. Rendering is best-effort: if
 	// this is not a task we recognise, print what kagent printed.
@@ -312,4 +266,66 @@ func forwardedPort(output string) (string, error) {
 		return "", fmt.Errorf("kubectl did not report the selected loopback port")
 	}
 	return match[1], nil
+}
+
+// askAgent runs one non-interactive invoke and returns kagent's combined
+// output and exit status. It is the body `chat` always had; `quickstart`
+// needs the same bytes to report the answer it just proved, and a second
+// invoke path would be a second set of retry rules to keep in step.
+//
+// The interactive flag is handled here rather than by the caller so that the
+// kagent CLI is fetched once, in one place, whichever mode is asked for.
+func (a *App) askAgent(agent, task, session string, interactive bool) (string, int, error) {
+	cache, err := config.CacheDir()
+	if err != nil {
+		return "", 0, err
+	}
+	kagent, err := kagentcli.Ensure(kagentcli.Options{
+		Version:  a.Cfg.KagentVersion,
+		CacheDir: cache,
+		Existing: a.Cfg.KagentBin,
+		Log:      a.Err,
+	})
+	if err != nil {
+		return "", 0, err
+	}
+	if interactive {
+		return "", 0, a.interactiveChat(kagent, agent, task, session)
+	}
+
+	if err := a.waitServable(agent); err != nil {
+		return "", 0, err
+	}
+
+	port, stop, err := a.portForward()
+	if err != nil {
+		return "", 0, err
+	}
+	defer stop()
+
+	url := "http://127.0.0.1:" + port
+	// The CLI defaults to localhost:8083; name the port we actually opened
+	// so it can never fall back to someone else's.
+	args := []string{"--kagent-url", url, "invoke", "--agent", agent, "--task", task}
+	if session != "" {
+		args = append(args, "--session", session)
+	}
+	fmt.Fprintf(a.Err, "%s %s\n", kagent, "invoke --agent "+agent)
+
+	var out string
+	var status int
+	for attempt := 1; attempt <= 4; attempt++ {
+		out, status, err = a.Run.CaptureCombined(kagent, args...)
+		if err != nil {
+			return "", 0, err
+		}
+		if !ChatRetryable.MatchString(out) {
+			break
+		}
+		if attempt != 4 {
+			a.notef("kagent could not reach agent %q yet (transport error); retry %d/3 in 5s", agent, attempt)
+			time.Sleep(5 * time.Second)
+		}
+	}
+	return out, status, nil
 }

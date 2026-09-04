@@ -475,10 +475,14 @@ func TestGovernedModelSearchContinuesPastOtherBaseURLs(t *testing.T) {
 	}
 }
 
+// With the opt-out set, a missing tool is reported rather than fetched — and
+// every missing one is reported at once, so a first run does not discover
+// them one install at a time.
 func TestUpPreflightReportsAllMissingDependencies(t *testing.T) {
 	dir := t.TempDir()
 	fakeTool(t, dir, "docker", "exit 0")
 	t.Setenv("PATH", dir)
+	t.Setenv("KMX_TOOLCHAIN", "off")
 	a := &App{Cfg: &config.Config{ContainerEngine: "docker"}, Run: &run.Runner{}}
 	err := a.preflightUp([]string{"cluster", "kagent"})
 	if err == nil {

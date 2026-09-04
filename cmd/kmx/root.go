@@ -81,7 +81,8 @@ func newRootCommand(state *commandState) *cobra.Command {
 	root.PersistentFlags().String("context", "", "act on this kube context for one command (may appear anywhere)")
 	_ = root.RegisterFlagCompletionFunc("context", completeContexts)
 	root.AddCommand(
-		newVersionCommand(state), newCompletionCommand(root), newCtxCommand(state), newUpCommand(state),
+		newVersionCommand(state), newCompletionCommand(root), newCtxCommand(state),
+		newQuickstartCommand(state), newUpCommand(state),
 		newPlaneCommand(state), newGovernCommand(state), newCredentialsCommand(state), newCredentialCommand(state),
 		newLedgerCommand(state), newGrantsCommand(state), newAuditCommand(state), newUseCommand(state),
 		newBudgetCommand(state), newApprovalsCommand(state), newApproveCommand(state), newDenyCommand(state),

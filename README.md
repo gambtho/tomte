@@ -116,8 +116,13 @@ clone, because it fetches the plane at its own revision from the public Go
 proxy.
 
 ```bash
+# One command. A container engine is the only thing you need installed.
+curl -fsSL https://raw.githubusercontent.com/kaimahi-agents/kaimahi/main/install.sh | sh -s -- --quickstart
+
+# Or, if you have a Go toolchain and would rather build it:
 go install github.com/kaimahi-agents/kaimahi/cmd/kmx@latest
-kmx up      # kind cluster + local model + kagent + agents (~5–10 minutes)
+kmx quickstart          # cluster + local model + kagent + an agent that answers
+kmx up                  # the rest of the runtime (tool server, second agent)
 kmx agent chat hello-world "Who are you?"
 
 kmx plane             # the governance plane: metering proxy + spend ledger
@@ -126,15 +131,22 @@ kmx agent chat hello-world "Who are you?"
 kmx ledger            # what that answer cost, and to whom it was attributed
 ```
 
-That is a real agent conversation with **no API key**: `kmx up` brings up a
-kind cluster running an in-cluster Ollama model, and the governed half is
-keyless too. Create your own agent with `kmx agent create <name>`, which
+`kmx quickstart` ends with an agent answering a question — measured at **under
+three minutes on a clean machine with one prerequisite** (Docker or Podman).
+`kind`, `kubectl` and Helm are downloaded and checksum-verified by `kmx` itself
+if the machine does not have them, the way it already acquires the kagent CLI.
+Add `--output json` and it is drivable by an agent inside whatever harness you
+are already using.
+
+That is a real agent conversation with **no API key**: the cluster runs an
+in-cluster Ollama model, and the governed half is keyless too. **Nothing on
+that path is governed** — the plane is the next command, not a gate you pass
+through first. Create your own agent with `kmx agent create <name>`, which
 writes reviewable YAML and applies it.
 
 `@latest` is the newest tagged release; `kmx version` tells you which one you
-got. Without a Go toolchain, download a checksum-verified binary from the
-[releases](https://github.com/kaimahi-agents/kaimahi/releases) instead — the
-verified download, the version scheme and the upgrade path are in
+got. The install script verifies the release checksum before it installs
+anything; the version scheme and the upgrade path are in
 [docs/releases.md](docs/releases.md).
 
 Continue with the [getting-started guide](docs/getting-started.md), or choose
@@ -149,14 +161,12 @@ make up     # kind cluster + local model + kagent + agents (~5–10 minutes)
 make chat   # talk to the default agent
 ```
 
-| Prerequisite | Why | Install |
+| Prerequisite | Needed for | Install |
 |---|---|---|
-| Go 1.26+ | installs `kmx` (a released binary needs it only for `kmx plane`) | <https://go.dev/dl/> |
-| Docker | kind runs Kubernetes in containers | <https://docs.docker.com/get-docker/> |
-| kind | local Kubernetes cluster | <https://kind.sigs.k8s.io/docs/user/quick-start/#installation> |
-| kubectl | cluster interaction | <https://kubernetes.io/docs/tasks/tools/> |
-| Helm | installs kagent | <https://helm.sh/docs/intro/install/> |
-| make, curl | glue | your package manager |
+| Docker **or** Podman | everything: kind runs Kubernetes in containers | <https://docs.docker.com/get-docker/> · <https://podman.io/docs/installation> |
+| kind, kubectl, Helm | fetched and checksum-verified by `kmx` when absent — yours are used if you have them | — |
+| Go 1.26+ | only `kmx plane` (it builds the plane's image locally) and `go install` | <https://go.dev/dl/> |
+| make, git | only the clone path below | your package manager |
 
 ```bash
 make chat TASK="What are you defined in?"
