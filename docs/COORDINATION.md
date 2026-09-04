@@ -311,6 +311,38 @@ Deliberately NOT on this list: multi-cluster policy distribution and
 reconciliation from a central controller. Real for a fleet, premature
 for a project whose story is one cluster.
 
+## Upstream candidates (kagent) — things we work around and should not
+
+D40 ruled that Kaimahi stays thin over kagent and that contributing
+upstream remains a live option rather than a rejected one. This is where
+that stops being a sentiment. **We have contributed nothing to kagent so
+far** — no issue, no PR — which is a weak position from which to argue
+that kagent is the bet.
+
+**The rule that keeps this list honest: a lane that works around kagent
+behaviour records it here, with its reproduction, in the same PR.** A
+workaround nobody writes down becomes folklore, and then becomes
+something we maintain forever because nobody remembers it was someone
+else's bug.
+
+**What belongs here:** behaviour we work around, and seams that would
+make kagent more *governable* by anyone. **What does not:** our
+opinionated policy — call-bound approvals, argument digests,
+deny-and-pend, a standing constraint that overrides an allowlist. Those
+are the product: a general-purpose runtime should not be forced to hold
+our opinions, and the opinion is what we sell.
+
+| # | Finding | Evidence we already hold | Confidence |
+|---|---------|--------------------------|------------|
+| U1 | **The Agent's `Ready` condition never flips during a preset switch, and reconcile is async** — so `kubectl rollout status` can report on the OLD template, and any consumer waiting on `Ready` gets a false positive. Confirmed on a lane's cluster: the old pod was Ready AND Terminating after "successfully rolled out". | CI flake class 3 and the W16 delta sheet, including the failing run that started it — a governed chat completed and the ledger had zero rows, because the old ungoverned pod answered. Our workaround is `wait_switched`: three waits, carried into `kmx` at milestone 3, which every consumer driving kagent programmatically would otherwise reinvent. | **High.** Reproduced, understood, and the cost is borne by other people too. |
+| U2 | **Agent pods carry no security context.** `k8s/plane/proxy.yaml` and `k8s/erp-mcp.yaml` set `runAsNonRoot`, `allowPrivilegeEscalation: false` and `readOnlyRootFilesystem`; the Agent CRDs set none, because the pod spec is kagent's. The workload that actually executes model output is the least constrained thing in the cluster. | The agentdesktop positioning note, where the gap surfaced by comparison. | **Medium — verify first.** Check whether the Agent CRD already exposes a `securityContext` we simply are not setting. If it does, this is OUR gap and belongs nowhere near an upstream issue. If it does not, hardened defaults (or a field) is a genuine ask. |
+| U3 | **`kagent invoke` emits raw JSON with no human-readable mode.** We built a readable terminal view and kept raw JSON for pipes (#71). | The chat view and its tests. | **Low.** A preference, not a defect, and possibly deliberate. Offer it; do not press it. |
+
+Sequencing: **U1 first and alone.** It is reproducible, it costs other
+people too, and one good issue with a real reproduction is a better
+opening than three of mixed quality. U2 gets verified against the CRD
+before it is written down anywhere public.
+
 ## Under consideration (not GO — do not build yet)
 
 - **`make up` guard for governed agents** (W6 finding, 2026-09-01):
