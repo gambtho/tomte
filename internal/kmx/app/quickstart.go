@@ -87,6 +87,18 @@ func (a *App) Quickstart(opt QuickstartOptions) error {
 		return fmt.Errorf("unknown --output %q — expected text or json", opt.Output)
 	}
 
+	// Machine-readable means the WHOLE stream, not the last line of it.
+	// Every command kmx shells out to writes its own stdout to kmx's
+	// (cmd/kmx wires Runner.Stdout to it), so `kind create`, `helm upgrade`
+	// and every `kubectl wait` would land in front of the JSON and the
+	// caller would get "Expecting value: line 1 column 1". Under --output
+	// json those go to stderr with everything else humans read, leaving
+	// stdout carrying exactly one document. `kmx metrics` already draws this
+	// line for the same reason.
+	if asJSON {
+		a.Run.Stdout = a.Err
+	}
+
 	// Equip the machine first. Everything after this point assumes kind,
 	// kubectl and Helm are runnable, and the whole point of the command is
 	// that a machine which had none of them still gets there.

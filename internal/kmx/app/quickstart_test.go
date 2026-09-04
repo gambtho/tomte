@@ -47,6 +47,27 @@ func TestQuickstartResultSaysPlainlyThatNothingIsGoverned(t *testing.T) {
 	}
 }
 
+// --output json must leave stdout carrying one document and nothing else.
+// The regression this pins was real: kind, helm and kubectl all write to
+// kmx's stdout, so the caller's parser met `Creating cluster "..."` before it
+// met the JSON.
+func TestJSONOutputKeepsSubprocessChatterOffStdout(t *testing.T) {
+	out, errOut := &bytes.Buffer{}, &bytes.Buffer{}
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("KMX_TOOLCHAIN", "off")
+	a := &App{Cfg: &config.Config{ContainerEngine: "docker"}, Run: &run.Runner{}, Out: out, Err: errOut}
+	a.Run.Stdout = out
+	// It fails at preflight on an empty PATH — long after the routing
+	// decision, which is the part under test.
+	_ = a.Quickstart(QuickstartOptions{Output: "json"})
+	if a.Run.Stdout != errOut {
+		t.Error("subprocess output still goes to stdout under --output json")
+	}
+	if out.Len() != 0 {
+		t.Errorf("stdout is not empty before the JSON document: %q", out.String())
+	}
+}
+
 // The answer is read out of the A2A task the same way `chat` reads it, and a
 // response with no readable reply must not be reported as an answer.
 func TestParseTaskFindsTheReplyAndRefusesRubbish(t *testing.T) {

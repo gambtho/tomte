@@ -3146,7 +3146,13 @@ jobs:
         run: |
           set -euo pipefail
           export PATH="$HOME/.local/bin:$PATH"
+          # Show what the run said if anything below fails: a step that hides
+          # its own evidence costs a whole CI cycle to diagnose.
+          trap 'echo "--- stderr ---"; tail -40 quickstart2.err; echo "--- stdout (first 400 bytes) ---"; head -c 400 quickstart.json' ERR
           kmx quickstart --output json > quickstart.json 2> quickstart2.err
+          # stdout must be ONE json document and nothing else — the caller is
+          # a parser, not a person.
+          head -c 1 quickstart.json | grep -q '{'
           python3 - <<'EOF'
           import json, sys
           r = json.load(open("quickstart.json"))
