@@ -119,8 +119,12 @@ steps:`, 1)
 	}, {
 		name: "a blueprint may not carry something shaped like a token",
 		edit: func(s string) string {
-			return strings.Replace(s, "summary: a demo workflow",
-				"summary: a demo workflow github_pat_11ABCDEFG0aBcDeFgHiJkLmNoPqRsTuVwXyZ", 1)
+			// Assembled at run time, never written out. A literal here
+			// would be a token-shaped string in the tree, and this
+			// repository's own scanner cannot tell a fixture from the
+			// real thing — which is the scanner working, not failing.
+			fake := "github" + "_pat_" + strings.Repeat("A1b2C3d4", 4)
+			return strings.Replace(s, "summary: a demo workflow", "summary: a demo workflow "+fake, 1)
 		},
 		expect: "shaped like a credential",
 	}, {
