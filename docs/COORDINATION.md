@@ -505,14 +505,13 @@ before it is written down anywhere public.
   to create this exact agent, what would that process look like" and then
   the sharper half — "how does a user clearly communicate that, or a
   slightly different scenario, when creating a new agent?" Everything
-  below reads the W32 lane at **PR #95, still open**; if that lane changes
-  shape before merge, re-read it before ruling.
+  below reads the W32 lane as merged (**PR #95**, main `56c6efa`).
 
   **The finding.** For the scenario W32 was built for — a GitHub release
   cut from the results of Azure DevOps pipeline runs — the interface is
   flags on `make release`. One step off that path there is no interface
-  at all, because the intent is split across FOUR artifacts in four
-  languages:
+  at all, because the intent is split across FOUR layers — three files
+  and a pair of Make targets, two of the layers sharing one file:
 
   1. **Procedure** — the ~60-line `systemMessage` in
      `k8s/release-agent.yaml`. It is a numbered drill ("ONE STEP PER
@@ -547,14 +546,24 @@ before it is written down anywhere public.
   model. Any authoring story that hands orchestration to the agent gives
   back exactly what P13 bought.
 
-  **The gradient, which is the size of the problem.** Different repo,
-  org, pipelines, artifacts or base branch: flags, free today. A hotfix
-  cut from a tag rather than main: a flag, and the approval shape
-  survives because `from_branch` is a bound policy field. Also post to
+  **The gradient, which is the size of the problem.** Version, base
+  branch, release branch, which workflows are dispatched, which artifacts
+  become assets, which approver: flags, free today. A hotfix cut from a
+  tag rather than main is one of them, and the approval shape survives
+  because `from_branch` is a bound policy field. A different REPOSITORY
+  is not a flag — the fine-grained token reaches exactly one repository
+  (`release-secret` refuses one that reaches more), and `release-bind`
+  writes a standing constraint naming `owner` and `repo` into the overlay
+  ConfigMap, so it is re-onboarding: new credential, then bind again. A
+  different Azure DevOps project or set of pipeline ids is `release-bind`
+  again on its own, because the same constraint names them; a different
+  ORG additionally re-proves the Entra token against it (`ado-secret`
+  probes the org, though the token itself is resource-scoped). Also post to
   Slack on success: the seam exists, but it needs `toolNames` + allowlist
   + a new driver step — three of the four layers. GitLab instead of Azure
-  DevOps: all four. Require two approvers: exists at no layer. The flags
-  cover a narrow band and the cliff after it is sheer.
+  DevOps: all four. Require two approvers: exists at no layer. So the
+  flags vary the PARAMETERS of one workflow; changing what it reaches
+  costs a re-onboarding, and changing its shape costs bash.
 
   **Option A — a blueprint, plus one generic driver.** One declarative
   file naming the seams, the policy, the ordered STEPS (each marked read
