@@ -308,7 +308,18 @@ project*. It cannot bind *which ref that pipeline builds*.
 The branch a run builds is not a top-level argument. It lives at
 `resources.repositories.<name>.refName`, and Kaimahi's policy vocabulary
 is top-level argument names only — `policy.go` says so and enforces it.
-`templateParameters` and `variables` are nested for the same reason.
+`templateParameters` is nested for the same reason.
+
+Verified against the LIVE hosted schema, not inferred from the local
+server's source: `pipelines_write` on `mcp.dev.azure.com` takes `action`,
+`orgName`, `project`, `pipelineId`, `pipelineVersion`, `previewRun`,
+`resources`, `stagesToSkip`, `templateParameters` and `yamlOverride`, and
+`resources` is a JSON object. There is no top-level ref. (Worth checking
+this way round, because the hosted schema is NOT the local one — see
+`orgName` above, which the local source does not have at all. The same
+check on `pipelines_build` action `list` found a top-level `branchName`,
+so READING builds for a branch can be bound even though running one
+cannot.)
 
 This is the first hole this project has found by pointing the plane at a
 server it did not write, and it is real: an approval to build pipeline 41
