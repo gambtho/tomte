@@ -59,6 +59,7 @@ func TestBareGroupsShowCobraHelpWithoutLoadingConfig(t *testing.T) {
 func TestCobraCommandTreeContainsEveryPublicCommand(t *testing.T) {
 	root := newRootCommand(&commandState{deps: productionDependencies()})
 	paths := [][]string{
+		{"quickstart"},
 		{"ctx"}, {"up"}, {"agent", "list"}, {"agent", "create"}, {"agent", "edit"}, {"agent", "chat"},
 		{"plane"}, {"govern"}, {"credentials"}, {"credential", "renew"}, {"ledger"}, {"grants"}, {"audit"},
 		{"use"}, {"budget"}, {"approvals"}, {"approve"}, {"deny"}, {"request"},

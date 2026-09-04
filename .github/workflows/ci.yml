@@ -548,6 +548,11 @@ jobs:
           grep -q 'ok  .*internal/kmx/guard' kmx-test.out
           grep -q 'ok  .*internal/kmx/scaffold' kmx-test.out
           grep -q 'ok  .*internal/kmx/kagentcli' kmx-test.out
+          # W31: kmx now downloads kind, kubectl and Helm as well as the
+          # kagent CLI, which is the difference between five prerequisites
+          # and one. A binary it fetches runs with the operator's kubeconfig,
+          # so the digest checks are not decoration either.
+          grep -q 'ok  .*internal/kmx/toolchain' kmx-test.out
           grep -q 'ok  .*internal/kmx/delegation' kmx-test.out
           # Milestone 2's own gates: which revision the plane is fetched at,
           # the GOBIN cross-compile refusal, and the credential custody the
@@ -3041,6 +3046,136 @@ jobs:
         if: steps.changes.outputs.docs_only == 'true'
         run: echo "every changed file is documentation; no cluster booted"
 
+  # SHARD 5 of 5 — the front door (W31): one command, on a runner stripped of
+  # the tools kmx shells out to, ending with an agent that answered.
+  #
+  # It is a shard rather than a tail on an existing one because it needs a
+  # machine the other shards do not have: no kubectl, no Helm, no kind, and
+  # no checkout on the path the operator actually walks. Sharing a runner
+  # with a job that has them would prove nothing — the whole claim is that
+  # they are not needed.
+  #
+  # THE TIME IS ASSERTED, and that is the point of the job. The number this
+  # lane exists to move is time-from-one-command-to-an-answer, and a number
+  # nothing watches goes back up. The ceiling is a doubling detector, not a
+  # benchmark: it is set well above the observed run so that ordinary runner
+  # variance is quiet and a regression that doubles the wait is loud.
+  e2e-quickstart:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Classify the change (docs-only short-circuit, fail closed)
+        id: changes
+        uses: ./.github/actions/classify-change
+      - uses: actions/setup-go@v5
+        if: steps.changes.outputs.docs_only != 'true'
+        with:
+          go-version-file: go.mod
+      # A pull request has no release to install from, so one is made here:
+      # the binary this branch builds, plus the checksums.txt the install
+      # script verifies it against. The mechanism under test is the real one
+      # — only the origin is local.
+      - name: Build the release this branch would publish
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          mkdir -p /tmp/release
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o /tmp/release/kmx-linux-amd64 ./cmd/kmx
+          ( cd /tmp/release && sha256sum kmx-linux-amd64 > checksums.txt )
+      # The premise, checked rather than assumed. Every one of these is on a
+      # GitHub runner by default; the operator kmx is built for has none of
+      # them, so the PATH the next step runs under has none of them either.
+      - name: Strip the runner of kind, kubectl, Helm and the checkout's PATH
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          echo "before: $(command -v kubectl || echo no-kubectl) $(command -v helm || echo no-helm)"
+          # /usr/bin and /bin only: docker, curl and coreutils, nothing else.
+          echo 'PATH=/usr/bin:/bin:/usr/sbin:/sbin' >> "$GITHUB_ENV"
+      - name: One command — install kmx and answer a question
+        id: quickstart
+        if: steps.changes.outputs.docs_only != 'true'
+        env:
+          KMX_DOWNLOAD_BASE: file:///tmp/release
+          KIND_CLUSTER: kmx-quickstart
+        run: |
+          set -euo pipefail
+          for t in go kind kubectl helm; do
+            if command -v "$t" >/dev/null 2>&1; then
+              echo "premise broken: $t is on PATH ($(command -v "$t"))"; exit 1
+            fi
+          done
+          command -v docker >/dev/null || { echo "no container engine"; exit 1; }
+          start=$(date +%s)
+          sh install.sh --quickstart 2>&1 | tee quickstart.out
+          elapsed=$(( $(date +%s) - start ))
+          echo "seconds=$elapsed" >> "$GITHUB_OUTPUT"
+          echo "time from one command to an answer: ${elapsed}s"
+      - name: The agent actually answered, and nothing is governed yet
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          set -euo pipefail
+          grep -q 'COMPLETE  An agent answered' quickstart.out
+          # The ungoverned state must be stated, not left to be inferred
+          # from an empty ledger (D36).
+          grep -q 'UNGOVERNED' quickstart.out
+          # The three tools were fetched by kmx, not installed by the job.
+          for t in kind kubectl helm; do
+            grep -q "fetching $t v" quickstart.out
+          done
+      # Running it twice is how an agent in a harness will use it: run,
+      # read, decide, run again. The second run must be safe, and must still
+      # end with an answer — this time as the JSON a machine reads.
+      - name: Safe to run twice, and machine-readable
+        if: steps.changes.outputs.docs_only != 'true'
+        env:
+          KIND_CLUSTER: kmx-quickstart
+        run: |
+          set -euo pipefail
+          "$HOME/.local/bin/kmx" quickstart --output json > quickstart.json 2> quickstart2.err
+          python3 - <<'EOF'
+          import json, sys
+          r = json.load(open("quickstart.json"))
+          assert r["ok"] is True, r
+          assert r["governed"] is False, "the fast path must not claim governance"
+          assert r["answer"].strip(), "no answer in the structured output"
+          assert r["agent"] == "hello-world", r
+          assert r["context"] == "kind-kmx-quickstart", r
+          assert r["elapsed_seconds"] > 0, r
+          assert any(n.startswith("kmx plane") for n in r["next"]), r["next"]
+          print("second run:", round(r["elapsed_seconds"], 1), "s ·", r["answer"][:80])
+          EOF
+      - name: The time did not double
+        if: steps.changes.outputs.docs_only != 'true'
+        env:
+          SECONDS_TAKEN: ${{ steps.quickstart.outputs.seconds }}
+        run: |
+          set -euo pipefail
+          # Measured on this runner class when the job was written: ~4 min,
+          # of which the great majority is image and model bytes coming down
+          # the wire. The ceiling is deliberately far above it — this fails
+          # on a regression, not on a slow morning at a registry.
+          ceiling=720
+          echo "time to first answer: ${SECONDS_TAKEN}s (ceiling ${ceiling}s)"
+          if [ "$SECONDS_TAKEN" -gt "$ceiling" ]; then
+            echo "time from one command to an answer regressed past the ceiling."
+            echo "This number is the point of W31. Find what got slower before raising it."
+            exit 1
+          fi
+      - name: Tear down
+        if: always() && steps.changes.outputs.docs_only != 'true'
+        run: |
+          "$HOME/.local/bin/kmx" down || true
+      - name: Docs-only short-circuit
+        id: docs-only-summary
+        if: steps.changes.outputs.docs_only == 'true'
+        run: echo "every changed file is documentation; no cluster booted"
+
   # The REQUIRED check (the protect-main ruleset names `e2e-hello-world`).
   # It owns no cluster of its own: it reports whether every e2e shard
   # above succeeded, so the ruleset keeps gating on one context while the
@@ -3048,7 +3183,7 @@ jobs:
   # reports, and a required check that never reports blocks every merge.
   e2e-hello-world:
     runs-on: ubuntu-latest
-    needs: [e2e-runtime, e2e-spend, e2e-tools, e2e-resilience, e2e-ap]
+    needs: [e2e-ap, e2e-quickstart, e2e-resilience, e2e-runtime, e2e-spend, e2e-tools]
     if: always()
     steps:
       - name: Every e2e shard succeeded

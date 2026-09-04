@@ -22,12 +22,48 @@ to do. Sections: **Added**, **Changed**, **Fixed**, **Breaking**, **Upgrading**.
 
 ## Unreleased
 
+### Added
+
+- **`kmx quickstart`** — one command from a machine that has a container
+  engine to an agent that has answered a question. It runs `kmx up`'s steps in
+  `kmx up`'s order, with the same waits and fail-closed checks, but defers
+  everything a first question cannot reach: kagent's console, its bundled tool
+  server, the MCP controller, the second agent and the whole governance plane.
+  `--output json` makes the result machine-readable (`ok`, `answer`,
+  `governed`, `elapsed_seconds`, `next`) for an agent driving kmx from inside
+  a harness; the command is safe to run twice.
+- **`install.sh`** — `curl -fsSL .../install.sh | sh` downloads the release
+  binary for the platform, verifies its published sha256 before installing it,
+  and puts it in `~/.local/bin` without sudo. `--quickstart` carries on into
+  `kmx quickstart`, so one command ends with a working agent.
+- **kmx fetches kind, kubectl and Helm** when the machine does not have them,
+  pinned and checksum-verified into `~/.config/kmx`, exactly as it has always
+  fetched the pinned kagent CLI — the digest is re-verified on every use, not
+  only at download. A copy already on PATH is always preferred and never
+  shadowed. `KMX_TOOLCHAIN=off` restores the previous behaviour, where a
+  missing tool is an error naming its install page.
+
 ### Changed
 
+- **The prerequisite list is one item: a container engine.** It was five (Go,
+  Docker or Podman, kind, kubectl, Helm) plus make and curl. Go is now needed
+  only by `kmx plane`, which builds the plane's image locally.
+- Measured on a clean machine (no tooling, no checkout), time from one command
+  to an agent's answer: **246s → 178s**. Against the same measurement of `kmx
+  up` from this branch's parent, 217s → 178s; the first-answer kagent profile
+  is 33s where the full one is 64s.
 - `kmx` now uses one Cobra command tree for nested commands, flags,
   command-specific help, validation, and Bash/Zsh/Fish completion. Operational
   behavior, context guards, Make delegation, and machine-readable stdout remain
   in the existing application layer.
+
+### Fixed
+
+- The documented by-hand install used `sha256sum --ignore-missing`, a GNU
+  coreutils flag that macOS (no `sha256sum`) and BusyBox (Alpine, slim images)
+  both reject — so the verification step failed on two of the platforms the
+  release publishes for. `docs/releases.md` now shows a portable comparison,
+  and `install.sh` uses whichever of `sha256sum`, `shasum` or `openssl` exists.
 
 ### Breaking
 

@@ -39,6 +39,17 @@ kmx's own version, and Go resolves a nested module's version from a
 The one-line install, and the one the [README](../README.md) quickstart uses:
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/kaimahi-agents/kaimahi/main/install.sh | sh
+```
+
+It resolves the latest tag, downloads the binary for your platform, verifies
+its published sha256 **before** installing it, and puts it in `~/.local/bin`
+without sudo. `--quickstart` goes straight on to a running agent;
+`KMX_VERSION=v0.1.0` pins a version; `KMX_BIN_DIR=DIR` installs elsewhere.
+
+The other route, if you have a Go toolchain:
+
+```bash
 go install github.com/kaimahi-agents/kaimahi/cmd/kmx@latest
 ```
 
@@ -48,23 +59,36 @@ checksum database, so the bytes you get are the bytes the sum database
 recorded — no namespace of ours is involved, and there is nothing new to
 trust.
 
-### Without a Go toolchain
+### By hand
 
-Every release also carries binaries and a `checksums.txt`. Download both and
-check the digest before you run anything:
+`install.sh` above does exactly this, and doing it yourself is a reasonable
+preference. Every release carries binaries and a `checksums.txt`:
 
 ```bash
 version=v0.1.0
 base=https://github.com/kaimahi-agents/kaimahi/releases/download/$version
 curl -fsSLO "$base/kmx-linux-amd64"
 curl -fsSLO "$base/checksums.txt"
-sha256sum --ignore-missing -c checksums.txt
+
+want=$(grep ' kmx-linux-amd64$' checksums.txt | cut -d' ' -f1)
+got=$(sha256sum kmx-linux-amd64 | cut -d' ' -f1)   # macOS: shasum -a 256
+[ "$want" = "$got" ] || { echo "checksum mismatch"; exit 1; }
+
 install -m 0755 kmx-linux-amd64 /usr/local/bin/kmx
 ```
 
-Do not skip the `sha256sum` line. This project verifies the pinned kagent
-CLI's digest before it will execute it
-([internal/kmx/kagentcli](../internal/kmx/kagentcli)); applying less care to
+The comparison is written out rather than left to `sha256sum -c` on purpose.
+`--ignore-missing` is a GNU coreutils flag: macOS has no `sha256sum` at all
+(it has `shasum`), and BusyBox — Alpine, most slim container images — has one
+that rejects the flag. The instruction that used to be here failed on both,
+which is a poor first impression from a project whose whole argument is
+fail-closed verification. `install.sh` picks whichever of `sha256sum`,
+`shasum` and `openssl` the machine has, and refuses to install if it finds
+none.
+
+Do not skip the digest check. This project verifies the pinned kagent CLI's
+digest before it will execute it, and now kind's, kubectl's and Helm's too
+([internal/kmx/toolchain](../internal/kmx/toolchain)); applying less care to
 its own binary would be indefensible.
 
 **Platforms**: `linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64`.

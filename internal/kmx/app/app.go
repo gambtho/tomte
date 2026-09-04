@@ -19,6 +19,7 @@ import (
 	"github.com/kaimahi-agents/kaimahi/internal/kmx/config"
 	"github.com/kaimahi-agents/kaimahi/internal/kmx/guard"
 	"github.com/kaimahi-agents/kaimahi/internal/kmx/run"
+	"github.com/kaimahi-agents/kaimahi/internal/kmx/toolchain"
 )
 
 // App carries the resolved configuration and the streams every command
@@ -33,6 +34,11 @@ type App struct {
 	Stdin    *os.File
 	// now is injectable so progress timing can be tested without sleeping.
 	now func() time.Time
+
+	// provisioned records the cluster tools this run had to fetch, so a
+	// command that reports structured output can say what it put on the
+	// machine.
+	provisioned []toolchain.Tool
 
 	// guarded records that the context guard has already run in this
 	// process, so a multi-step command asks at most once — the same
