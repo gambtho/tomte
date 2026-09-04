@@ -348,9 +348,16 @@ kind cluster, an Agent with a working `ModelConfig` and at least one
 Ready pod.
 
 **Steps.** Patch the Agent's `spec.declarative.modelConfig` to a
-different, existing preset. Then wait the way a naive consumer would:
-`kubectl -n kagent wait --for=condition=Ready agent/<name>` followed by
-`kubectl -n kagent rollout status deploy/<name>`.
+different preset — and it must differ in EFFECTIVE configuration, not
+merely in name, or kagent has nothing to roll and the race never opens.
+Two ModelConfigs pointing at the same provider, endpoint and model
+produce an identical Deployment and will not reproduce this. The pair
+used here was `ollama` (`provider: Ollama`) and `governed-ollama`
+(`provider: OpenAI`, pointed at a different endpoint) — different
+providers, so the pod spec genuinely changes. Then wait the way a naive
+consumer would: `kubectl -n kagent wait --for=condition=Ready
+agent/<name>` followed by `kubectl -n kagent rollout status
+deploy/<name>`.
 
 **Expected.** When both return, the agent is serving the NEW preset.
 
