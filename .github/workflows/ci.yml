@@ -773,71 +773,11 @@ jobs:
           # locally: that parent IS the base this PR was merged onto, and it
           # is what the classifier diffs against.
           fetch-depth: 2
+      # One definition, in .github/actions/classify-change. It used to be
+      # this block, copied into five jobs.
       - name: Classify the change (docs-only short-circuit, fail closed)
         id: changes
-        env:
-          EVENT: ${{ github.event_name }}
-          # push: the previous tip (all zeros on a new branch). HEAD is the
-          # PR merge commit or the pushed commit — what checkout checked out.
-          #
-          # A pull_request's base is resolved BELOW as HEAD^1, not from
-          # `pull_request.base.sha`: that field is the base tip when the event
-          # fired, so once anything else merges it names an older commit and
-          # the diff picks up OTHER PEOPLE'S changes — a docs-only PR then
-          # reads as "non-doc change: Makefile" and pays the full e2e. The
-          # merge commit's first parent is the base it was actually merged
-          # onto, by construction, however stale the event data is.
-          BASE: ${{ github.event.before }}
-          HEAD: ${{ github.sha }}
-        run: |
-          # The job's `shell: bash` runs with -e; turn it off here — every
-          # failure path must land on docs_only=false, never on a red step.
-          set +e
-          docs_only=false
-          reason=""
-          files=""
-          # A pull_request's base is the merge commit's FIRST parent: the
-          # commit this PR was merged onto. Resolving it from the commit
-          # rather than from the event keeps a stale base.sha from dragging
-          # other people's merges into this PR's diff. Fail closed: if it
-          # cannot be resolved, docs_only stays false.
-          if [ "$EVENT" = pull_request ]; then
-            if ! BASE=$(git rev-parse --verify "$HEAD^1" 2>/dev/null); then
-              reason="cannot resolve the merge commit's first parent"
-            fi
-          fi
-          case "$BASE" in
-            ""|0000000000000000000000000000000000000000) reason="no base commit for $EVENT" ;;
-          esac
-          # Already local for a pull_request (fetch-depth: 2); a push may not
-          # have it, so fetch only when it is genuinely absent.
-          if [ -z "$reason" ] && ! git cat-file -e "$BASE^{commit}" 2>/dev/null \
-             && ! git fetch --no-tags --depth=1 origin "$BASE"; then
-            reason="cannot fetch base $BASE"
-          fi
-          if [ -z "$reason" ]; then
-            # --no-renames: a pure rename lists only its destination, so a
-            # file moved INTO docs/ would otherwise read as documentation.
-            if files=$(git diff --name-only --no-renames "$BASE" "$HEAD") && [ -n "$files" ]; then
-              docs_only=true
-              while IFS= read -r f; do
-                case "$f" in
-                  docs/*|*.md) ;;
-                  *) docs_only=false; reason="non-doc change: $f"; break ;;
-                esac
-              done <<<"$files"
-              if [ "$docs_only" = true ]; then
-                reason="every changed file is documentation"
-              fi
-            else
-              reason="cannot diff $BASE..$HEAD, or the diff is empty"
-            fi
-          fi
-          echo "event=$EVENT base=$BASE head=$HEAD"
-          echo "changed files:"
-          echo "${files:-(undetermined)}" | sed 's/^/  /'
-          echo "docs_only=$docs_only ($reason)"
-          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+        uses: ./.github/actions/classify-change
       - name: Install kind
         if: steps.changes.outputs.docs_only != 'true'
         run: |
@@ -1177,71 +1117,11 @@ jobs:
           # locally: that parent IS the base this PR was merged onto, and it
           # is what the classifier diffs against.
           fetch-depth: 2
+      # One definition, in .github/actions/classify-change. It used to be
+      # this block, copied into five jobs.
       - name: Classify the change (docs-only short-circuit, fail closed)
         id: changes
-        env:
-          EVENT: ${{ github.event_name }}
-          # push: the previous tip (all zeros on a new branch). HEAD is the
-          # PR merge commit or the pushed commit — what checkout checked out.
-          #
-          # A pull_request's base is resolved BELOW as HEAD^1, not from
-          # `pull_request.base.sha`: that field is the base tip when the event
-          # fired, so once anything else merges it names an older commit and
-          # the diff picks up OTHER PEOPLE'S changes — a docs-only PR then
-          # reads as "non-doc change: Makefile" and pays the full e2e. The
-          # merge commit's first parent is the base it was actually merged
-          # onto, by construction, however stale the event data is.
-          BASE: ${{ github.event.before }}
-          HEAD: ${{ github.sha }}
-        run: |
-          # The job's `shell: bash` runs with -e; turn it off here — every
-          # failure path must land on docs_only=false, never on a red step.
-          set +e
-          docs_only=false
-          reason=""
-          files=""
-          # A pull_request's base is the merge commit's FIRST parent: the
-          # commit this PR was merged onto. Resolving it from the commit
-          # rather than from the event keeps a stale base.sha from dragging
-          # other people's merges into this PR's diff. Fail closed: if it
-          # cannot be resolved, docs_only stays false.
-          if [ "$EVENT" = pull_request ]; then
-            if ! BASE=$(git rev-parse --verify "$HEAD^1" 2>/dev/null); then
-              reason="cannot resolve the merge commit's first parent"
-            fi
-          fi
-          case "$BASE" in
-            ""|0000000000000000000000000000000000000000) reason="no base commit for $EVENT" ;;
-          esac
-          # Already local for a pull_request (fetch-depth: 2); a push may not
-          # have it, so fetch only when it is genuinely absent.
-          if [ -z "$reason" ] && ! git cat-file -e "$BASE^{commit}" 2>/dev/null \
-             && ! git fetch --no-tags --depth=1 origin "$BASE"; then
-            reason="cannot fetch base $BASE"
-          fi
-          if [ -z "$reason" ]; then
-            # --no-renames: a pure rename lists only its destination, so a
-            # file moved INTO docs/ would otherwise read as documentation.
-            if files=$(git diff --name-only --no-renames "$BASE" "$HEAD") && [ -n "$files" ]; then
-              docs_only=true
-              while IFS= read -r f; do
-                case "$f" in
-                  docs/*|*.md) ;;
-                  *) docs_only=false; reason="non-doc change: $f"; break ;;
-                esac
-              done <<<"$files"
-              if [ "$docs_only" = true ]; then
-                reason="every changed file is documentation"
-              fi
-            else
-              reason="cannot diff $BASE..$HEAD, or the diff is empty"
-            fi
-          fi
-          echo "event=$EVENT base=$BASE head=$HEAD"
-          echo "changed files:"
-          echo "${files:-(undetermined)}" | sed 's/^/  /'
-          echo "docs_only=$docs_only ($reason)"
-          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+        uses: ./.github/actions/classify-change
       - name: Install kind
         if: steps.changes.outputs.docs_only != 'true'
         run: |
@@ -1645,71 +1525,11 @@ jobs:
           # locally: that parent IS the base this PR was merged onto, and it
           # is what the classifier diffs against.
           fetch-depth: 2
+      # One definition, in .github/actions/classify-change. It used to be
+      # this block, copied into five jobs.
       - name: Classify the change (docs-only short-circuit, fail closed)
         id: changes
-        env:
-          EVENT: ${{ github.event_name }}
-          # push: the previous tip (all zeros on a new branch). HEAD is the
-          # PR merge commit or the pushed commit — what checkout checked out.
-          #
-          # A pull_request's base is resolved BELOW as HEAD^1, not from
-          # `pull_request.base.sha`: that field is the base tip when the event
-          # fired, so once anything else merges it names an older commit and
-          # the diff picks up OTHER PEOPLE'S changes — a docs-only PR then
-          # reads as "non-doc change: Makefile" and pays the full e2e. The
-          # merge commit's first parent is the base it was actually merged
-          # onto, by construction, however stale the event data is.
-          BASE: ${{ github.event.before }}
-          HEAD: ${{ github.sha }}
-        run: |
-          # The job's `shell: bash` runs with -e; turn it off here — every
-          # failure path must land on docs_only=false, never on a red step.
-          set +e
-          docs_only=false
-          reason=""
-          files=""
-          # A pull_request's base is the merge commit's FIRST parent: the
-          # commit this PR was merged onto. Resolving it from the commit
-          # rather than from the event keeps a stale base.sha from dragging
-          # other people's merges into this PR's diff. Fail closed: if it
-          # cannot be resolved, docs_only stays false.
-          if [ "$EVENT" = pull_request ]; then
-            if ! BASE=$(git rev-parse --verify "$HEAD^1" 2>/dev/null); then
-              reason="cannot resolve the merge commit's first parent"
-            fi
-          fi
-          case "$BASE" in
-            ""|0000000000000000000000000000000000000000) reason="no base commit for $EVENT" ;;
-          esac
-          # Already local for a pull_request (fetch-depth: 2); a push may not
-          # have it, so fetch only when it is genuinely absent.
-          if [ -z "$reason" ] && ! git cat-file -e "$BASE^{commit}" 2>/dev/null \
-             && ! git fetch --no-tags --depth=1 origin "$BASE"; then
-            reason="cannot fetch base $BASE"
-          fi
-          if [ -z "$reason" ]; then
-            # --no-renames: a pure rename lists only its destination, so a
-            # file moved INTO docs/ would otherwise read as documentation.
-            if files=$(git diff --name-only --no-renames "$BASE" "$HEAD") && [ -n "$files" ]; then
-              docs_only=true
-              while IFS= read -r f; do
-                case "$f" in
-                  docs/*|*.md) ;;
-                  *) docs_only=false; reason="non-doc change: $f"; break ;;
-                esac
-              done <<<"$files"
-              if [ "$docs_only" = true ]; then
-                reason="every changed file is documentation"
-              fi
-            else
-              reason="cannot diff $BASE..$HEAD, or the diff is empty"
-            fi
-          fi
-          echo "event=$EVENT base=$BASE head=$HEAD"
-          echo "changed files:"
-          echo "${files:-(undetermined)}" | sed 's/^/  /'
-          echo "docs_only=$docs_only ($reason)"
-          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+        uses: ./.github/actions/classify-change
       - name: Install kind
         if: steps.changes.outputs.docs_only != 'true'
         run: |
@@ -2637,71 +2457,11 @@ jobs:
           # locally: that parent IS the base this PR was merged onto, and it
           # is what the classifier diffs against.
           fetch-depth: 2
+      # One definition, in .github/actions/classify-change. It used to be
+      # this block, copied into five jobs.
       - name: Classify the change (docs-only short-circuit, fail closed)
         id: changes
-        env:
-          EVENT: ${{ github.event_name }}
-          # push: the previous tip (all zeros on a new branch). HEAD is the
-          # PR merge commit or the pushed commit — what checkout checked out.
-          #
-          # A pull_request's base is resolved BELOW as HEAD^1, not from
-          # `pull_request.base.sha`: that field is the base tip when the event
-          # fired, so once anything else merges it names an older commit and
-          # the diff picks up OTHER PEOPLE'S changes — a docs-only PR then
-          # reads as "non-doc change: Makefile" and pays the full e2e. The
-          # merge commit's first parent is the base it was actually merged
-          # onto, by construction, however stale the event data is.
-          BASE: ${{ github.event.before }}
-          HEAD: ${{ github.sha }}
-        run: |
-          # The job's `shell: bash` runs with -e; turn it off here — every
-          # failure path must land on docs_only=false, never on a red step.
-          set +e
-          docs_only=false
-          reason=""
-          files=""
-          # A pull_request's base is the merge commit's FIRST parent: the
-          # commit this PR was merged onto. Resolving it from the commit
-          # rather than from the event keeps a stale base.sha from dragging
-          # other people's merges into this PR's diff. Fail closed: if it
-          # cannot be resolved, docs_only stays false.
-          if [ "$EVENT" = pull_request ]; then
-            if ! BASE=$(git rev-parse --verify "$HEAD^1" 2>/dev/null); then
-              reason="cannot resolve the merge commit's first parent"
-            fi
-          fi
-          case "$BASE" in
-            ""|0000000000000000000000000000000000000000) reason="no base commit for $EVENT" ;;
-          esac
-          # Already local for a pull_request (fetch-depth: 2); a push may not
-          # have it, so fetch only when it is genuinely absent.
-          if [ -z "$reason" ] && ! git cat-file -e "$BASE^{commit}" 2>/dev/null \
-             && ! git fetch --no-tags --depth=1 origin "$BASE"; then
-            reason="cannot fetch base $BASE"
-          fi
-          if [ -z "$reason" ]; then
-            # --no-renames: a pure rename lists only its destination, so a
-            # file moved INTO docs/ would otherwise read as documentation.
-            if files=$(git diff --name-only --no-renames "$BASE" "$HEAD") && [ -n "$files" ]; then
-              docs_only=true
-              while IFS= read -r f; do
-                case "$f" in
-                  docs/*|*.md) ;;
-                  *) docs_only=false; reason="non-doc change: $f"; break ;;
-                esac
-              done <<<"$files"
-              if [ "$docs_only" = true ]; then
-                reason="every changed file is documentation"
-              fi
-            else
-              reason="cannot diff $BASE..$HEAD, or the diff is empty"
-            fi
-          fi
-          echo "event=$EVENT base=$BASE head=$HEAD"
-          echo "changed files:"
-          echo "${files:-(undetermined)}" | sed 's/^/  /'
-          echo "docs_only=$docs_only ($reason)"
-          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+        uses: ./.github/actions/classify-change
       - name: Install kind
         if: steps.changes.outputs.docs_only != 'true'
         run: |
@@ -2888,67 +2648,11 @@ jobs:
           # locally: that parent IS the base this PR was merged onto, and it
           # is what the classifier diffs against.
           fetch-depth: 2
+      # One definition, in .github/actions/classify-change. It used to be
+      # this block, copied into five jobs.
       - name: Classify the change (docs-only short-circuit, fail closed)
         id: changes
-        env:
-          EVENT: ${{ github.event_name }}
-          # push: the previous tip (all zeros on a new branch). HEAD is the
-          # PR merge commit or the pushed commit — what checkout checked out.
-          #
-          # A pull_request's base is resolved BELOW as HEAD^1, not from
-          # `pull_request.base.sha`: that field is the base tip when the event
-          # fired, so once anything else merges it names an older commit and
-          # the diff picks up OTHER PEOPLE'S changes — a docs-only PR then
-          # reads as "non-doc change: Makefile" and pays the full e2e. The
-          # merge commit's first parent is the base it was actually merged
-          # onto, by construction, however stale the event data is.
-          BASE: ${{ github.event.before }}
-          HEAD: ${{ github.sha }}
-        run: |
-          set +e
-          docs_only=false
-          reason=""
-          files=""
-          # A pull_request's base is the merge commit's FIRST parent: the
-          # commit this PR was merged onto. Resolving it from the commit
-          # rather than from the event keeps a stale base.sha from dragging
-          # other people's merges into this PR's diff. Fail closed: if it
-          # cannot be resolved, docs_only stays false.
-          if [ "$EVENT" = pull_request ]; then
-            if ! BASE=$(git rev-parse --verify "$HEAD^1" 2>/dev/null); then
-              reason="cannot resolve the merge commit's first parent"
-            fi
-          fi
-          case "$BASE" in
-            ""|0000000000000000000000000000000000000000) reason="no base commit for $EVENT" ;;
-          esac
-          # Already local for a pull_request (fetch-depth: 2); a push may not
-          # have it, so fetch only when it is genuinely absent.
-          if [ -z "$reason" ] && ! git cat-file -e "$BASE^{commit}" 2>/dev/null \
-             && ! git fetch --no-tags --depth=1 origin "$BASE"; then
-            reason="cannot fetch base $BASE"
-          fi
-          if [ -z "$reason" ]; then
-            if files=$(git diff --name-only --no-renames "$BASE" "$HEAD") && [ -n "$files" ]; then
-              docs_only=true
-              while IFS= read -r f; do
-                case "$f" in
-                  docs/*|*.md) ;;
-                  *) docs_only=false; reason="non-doc change: $f"; break ;;
-                esac
-              done <<<"$files"
-              if [ "$docs_only" = true ]; then
-                reason="every changed file is documentation"
-              fi
-            else
-              reason="cannot diff $BASE..$HEAD, or the diff is empty"
-            fi
-          fi
-          echo "event=$EVENT base=$BASE head=$HEAD"
-          echo "changed files:"
-          echo "${files:-(undetermined)}" | sed 's/^/  /'
-          echo "docs_only=$docs_only ($reason)"
-          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+        uses: ./.github/actions/classify-change
       - name: Install kind
         if: steps.changes.outputs.docs_only != 'true'
         run: |
