@@ -123,14 +123,56 @@ az account get-access-token --scope "$ADO_API_SCOPE" \
 test -s "$work/ado.tok" || { echo 'az returned an empty token' >&2; exit 1; }
 { printf 'Authorization: Bearer '; cat "$work/ado.tok"; printf '\n'; } > "$work/ado.hdr"
 
+# --- 0. did those builds actually succeed? -----------------------------
+#
+# Checked FIRST, because a failed build's artifacts are the wrong thing to
+# put on a release and "no installers were produced" is a confusing way to
+# learn that a build failed. On the first real run two of three builds hit
+# Azure DevOps' 60-minute job cap during signing, and the only symptom
+# here was an empty asset list.
+step "Checking those builds succeeded"
+IFS=',' read -ra builds <<< "$ado_builds"
+bad=0
+for b in "${builds[@]}"; do
+  b="${b// /}"; [ -n "$b" ] || continue
+  [[ "$b" =~ ^[0-9]+$ ]] || { echo "invalid build id '$b'" >&2; exit 2; }
+  curl -sS -H @"$work/ado.hdr" -H 'Accept: application/json' \
+    -o "$work/build-$b.json" -w '%{http_code}' \
+    "$api/build/builds/$b?api-version=7.1" > "$work/status" || true
+  st=$(cat "$work/status")
+  if [ "$st" = 302 ] || [ "$st" = 401 ]; then
+    echo "the Azure DevOps REST API refused this token (HTTP $st) — see ADO_API_SCOPE" >&2; exit 1
+  fi
+  [ "$st" = 200 ] || { echo "reading build $b answered HTTP $st" >&2; exit 1; }
+  read -r bstatus bresult bname < <(python3 - "$work/build-$b.json" <<'EOF'
+import json, sys
+d = json.load(open(sys.argv[1]))
+print(d.get("status", "?"), d.get("result", "?"),
+      (d.get("definition") or {}).get("name", "?").replace(" ", "_"))
+EOF
+)
+  case "$bstatus/$bresult" in
+    completed/succeeded) note "OK        $b  ${bname//_/ }" ;;
+    completed/partiallySucceeded)
+      note "PARTIAL   $b  ${bname//_/ } — partially succeeded"
+      [ "${ALLOW_PARTIAL:-0}" = 1 ] || bad=1 ;;
+    *) note "NOT OK    $b  ${bname//_/ } — status=$bstatus result=$bresult"; bad=1 ;;
+  esac
+done
+if [ "$bad" != 0 ]; then
+  echo >&2
+  echo 'refusing to publish from builds that did not succeed.' >&2
+  echo 'Re-run the builds, then publish with the new build ids.' >&2
+  echo '(ALLOW_PARTIAL=1 accepts a partially-succeeded build.)' >&2
+  exit 1
+fi
+
 # --- 1. every artifact the named builds published ----------------------
 step "Reading the artifacts those builds published"
 : > "$work/plan"
-IFS=',' read -ra builds <<< "$ado_builds"
 for b in "${builds[@]}"; do
   b="${b// /}"
   [ -n "$b" ] || continue
-  [[ "$b" =~ ^[0-9]+$ ]] || { echo "invalid build id '$b'" >&2; exit 2; }
   curl -sS -H @"$work/ado.hdr" -H 'Accept: application/json' \
     -o "$work/arts-$b.json" -w '%{http_code}' \
     "$api/build/builds/$b/artifacts?api-version=7.1" > "$work/status" || true
@@ -212,11 +254,22 @@ done < "$work/files"
 note ""
 note "$kept file(s) match ASSET_GLOBS=$asset_globs"
 
+# The empty case is a FAILURE in both modes, and that matters more in
+# --list than in the real run: --list is what the driver calls BEFORE it
+# asks a human, so exiting 0 here meant the driver went on to request
+# approval for a release with no assets. The real run would still have
+# refused — the same check, one line down — but a person had already been
+# asked to approve something that could never happen.
+if [ "$kept" -eq 0 ]; then
+  echo 'no file matched ASSET_GLOBS — there is nothing to publish.' >&2
+  echo 'Either the builds have not produced installers yet, or ASSET_GLOBS' >&2
+  echo "does not describe them. Current globs: $asset_globs" >&2
+  exit 1
+fi
 if [ "$list_only" = 1 ]; then
   note "--list: nothing was created and nothing was moved."
   exit 0
 fi
-[ "$kept" -gt 0 ] || { echo 'no file matched ASSET_GLOBS — refusing to publish an empty release' >&2; exit 1; }
 
 # --- 2. the release, with the agent's notes ----------------------------
 step "Creating release $version on $repo"
