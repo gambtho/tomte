@@ -267,7 +267,53 @@ if [ "$list_only" = 1 ]; then
   exit 0
 fi
 
-# --- 2. the release, with the agent's notes ----------------------------
+# --- 3. fetch and filter, BEFORE anything is created ------------------
+#
+# The release used to be created first and the artifacts fetched after,
+# so an artifact that turned out to hold nothing matching left an empty
+# release behind on a public repository. Pipeline artifacts make that
+# likely rather than theoretical: their contents cannot be listed without
+# downloading, so "nothing matched" is only knowable at this point.
+step "Fetching the artifacts"
+staged="$work/staged"
+mkdir -p "$staged"
+matched=0
+while IFS=$'\t' read -r b name url; do
+  note "downloading $name (build $b)"
+  curl -sSL -H @"$work/ado.hdr" -o "$work/$name.zip" -w '%{http_code}' "$url" > "$work/status"
+  status=$(cat "$work/status")
+  [ "$status" = 200 ] || { echo "downloading $name answered HTTP $status" >&2; exit 1; }
+  rm -rf "$work/x"; mkdir -p "$work/x"
+  unzip -q "$work/$name.zip" -d "$work/x"
+  rm -f "$work/$name.zip"
+  # An ADO artifact is a zip of a folder; the assets are the files inside.
+  # Directories and empty files get skipped, not uploaded broken. Staged
+  # under build/artifact so two artifacts carrying the same filename
+  # cannot overwrite each other before either is uploaded.
+  while IFS= read -r f; do
+    base=$(basename "$f")
+    if [ ! -s "$f" ]; then note "skip (empty)      $base"; continue; fi
+    if ! matches_glob "$base"; then
+      note "skip (not an asset) $base ($(du -h "$f" | cut -f1))"
+      continue
+    fi
+    mkdir -p "$staged/$b/$name"
+    mv "$f" "$staged/$b/$name/$base"
+    note "KEEP              $base ($(du -h "$staged/$b/$name/$base" | cut -f1))"
+    matched=$((matched + 1))
+  done < <(find "$work/x" -type f | sort)
+  rm -rf "$work/x"
+done < "$work/plan"
+
+if [ "$matched" -eq 0 ]; then
+  echo >&2
+  echo 'no file inside any artifact matched ASSET_GLOBS — nothing to publish.' >&2
+  echo "Globs: $asset_globs" >&2
+  echo 'No release was created.' >&2
+  exit 1
+fi
+
+# --- 4. the release, with the agent's notes ---------------------------
 step "Creating release $version on $repo"
 if gh release view "$version" -R "$repo" >/dev/null 2>&1; then
   note "release $version already exists — assets will be added to it"
@@ -278,39 +324,21 @@ else
     $( [ "$prerelease" = 1 ] && printf -- '--prerelease' ) >&2
 fi
 
-# --- 3. the bytes ------------------------------------------------------
-step "Moving the artifacts"
+# --- 5. upload ---------------------------------------------------------
+step "Uploading $matched asset(s)"
 uploaded=0
-while IFS=$'\t' read -r b name url; do
-  note "downloading $name (build $b)"
-  curl -sSL -H @"$work/ado.hdr" -o "$work/$name.zip" -w '%{http_code}' "$url" > "$work/status"
-  status=$(cat "$work/status")
-  [ "$status" = 200 ] || { echo "downloading $name answered HTTP $status" >&2; exit 1; }
-  rm -rf "$work/x"; mkdir -p "$work/x"
-  unzip -q "$work/$name.zip" -d "$work/x"
-  rm -f "$work/$name.zip"
-  # An ADO artifact is a zip of a folder; the assets are the files inside.
-  # Directories and empty files get skipped, not uploaded broken.
-  while IFS= read -r f; do
-    base=$(basename "$f")
-    if [ ! -s "$f" ]; then note "skip (empty)      $base"; continue; fi
-    if ! matches_glob "$base"; then
-      note "skip (not an asset) $base ($(du -h "$f" | cut -f1))"
-      continue
-    fi
-    note "UPLOAD            $base ($(du -h "$f" | cut -f1))"
-    gh release upload "$version" "$f" -R "$repo" --clobber >&2
-    uploaded=$((uploaded + 1))
-  done < <(find "$work/x" -type f | sort)
-  rm -rf "$work/x"
-done < "$work/plan"
+while IFS= read -r f; do
+  note "uploading $(basename "$f") ($(du -h "$f" | cut -f1))"
+  gh release upload "$version" "$f" -R "$repo" --clobber >&2
+  uploaded=$((uploaded + 1))
+done < <(find "$staged" -type f | sort)
 
 [ "$uploaded" -gt 0 ] || {
   echo 'nothing was uploaded: no file inside any artifact matched ASSET_GLOBS.' >&2
   echo "Globs: $asset_globs" >&2
   exit 1; }
 
-# --- 4. what actually landed, read back from GitHub --------------------
+# --- 6. what actually landed, read back from GitHub --------------------
 step "What is on the release, read back from GitHub"
 gh release view "$version" -R "$repo" --json assets \
   --jq '.assets[] | "   \(.name)\t\(.size/1048576|floor)MB"' >&2

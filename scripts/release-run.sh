@@ -381,8 +381,14 @@ do_cut() {
 
 # --- 3. start the builds ---------------------------------------------
 do_build() {
-  local IFS=,
-  for wf in $gh_workflows; do
+  # IFS scoped to the split itself: `local IFS=,` covered the whole
+  # function, so `turn`'s unquoted $RELEASE_CHAT would have split on
+  # commas instead of spaces and never resolved to a command.
+  local -a workflows=() pipelines=()
+  [ -z "$gh_workflows" ] || IFS=, read -ra workflows <<< "$gh_workflows"
+  [ -z "$ado_pipelines" ] || IFS=, read -ra pipelines <<< "$ado_pipelines"
+  for wf in "${workflows[@]}"; do
+    wf="${wf// /}"
     [ -n "$wf" ] || continue
     consequential actions_run_trigger \
       "{\"method\": \"run_workflow\", \"owner\": \"$owner\", \"repo\": \"$name\", \"workflow_id\": \"$wf\", \"ref\": \"$branch\"}" \
@@ -390,7 +396,8 @@ do_build() {
 "Call actions_run_trigger with method run_workflow, owner $owner, repo $name, workflow_id $wf, ref $branch. Make exactly that one call and report what the tool returned."
   done
   refresh_ado
-  for pid in $ado_pipelines; do
+  for pid in "${pipelines[@]}"; do
+    pid="${pid// /}"
     [ -n "$pid" ] || continue
     consequential pipelines_write \
       "{\"action\": \"run_pipeline\", \"orgName\": \"$ado_org\", \"project\": \"$ado_project\", \"pipelineId\": $pid}" \
@@ -406,7 +413,7 @@ do_build() {
 # driver's, not the gateway's — see scripts/release-publish.sh for why.
 do_publish() {
   [ -n "$ado_builds" ] || fail "publishing needs ADO_BUILDS (the build ids whose artifacts to attach)"
-  [ -s "$work/notes.txt" ] || fail "no drafted notes to publish — run STEP=propose first, or pass NOTES_FILE"
+  [ -s "$work/notes.txt" ] || fail "no composed notes to publish — STEP=publish composes them itself; run STEP=compose to see them first"
 
   local want="release_publish: owner $owner, repo $name, tag $version"
   step "Proposing: the release itself — $want"
@@ -472,11 +479,16 @@ do_watch() {
     fi
     ask="$ask End your answer with exactly one line reading STATE: RUNNING if anything is still in progress, or STATE: DONE if everything finished successfully, or STATE: FAILED if anything failed."
     turn "$work/watch.$n.out" "$ask" || true
-    if grep -q '^STATE: DONE' "$work/watch.$n.out"; then
+    # Against the EXTRACTED reply, not the raw output: watch.N.out holds
+    # the whole A2A task object (and make's noise), so an anchored
+    # ^STATE: match never fired and the loop always ran to timeout.
+    python3 "$here/show-turn.py" "$work/watch.$n.out" --reply-only \
+      > "$work/watch.$n.reply" 2>/dev/null || : > "$work/watch.$n.reply"
+    if grep -q '^STATE: DONE' "$work/watch.$n.reply"; then
       note "The agent reports every build finished successfully."
       return 0
     fi
-    if grep -q '^STATE: FAILED' "$work/watch.$n.out"; then
+    if grep -q '^STATE: FAILED' "$work/watch.$n.reply"; then
       step "A build failed — the agent reads the log"
       turn "$work/watch.fail.out" \
 "A build failed. Read the failure. For Azure DevOps, call pipelines_build with action get_status and then \

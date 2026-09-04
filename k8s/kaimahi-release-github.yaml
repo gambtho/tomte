@@ -30,9 +30,11 @@ spec:
   description: Kaimahi-governed GitHub for releases — the hosted GitHub MCP server behind the enforcing MCP gateway
   protocol: STREAMABLE_HTTP
   url: http://kaimahi-mcp-gateway.kaimahi:8081/upstream/github-release/mcp
-  # A hosted server answers slower than an in-cluster one, and the dialer
-  # re-resolves and re-handshakes on every call by design.
-  timeout: 60s
+  # 180s to match EGRESS_HEADER_TIMEOUT on the proxy: the dialer will wait
+  # that long for a hosted server's first header, and a shorter timeout
+  # here would cut off a call the dialer is still legitimately waiting on.
+  # A hosted server also re-resolves and re-handshakes on every call.
+  timeout: 180s
   sseReadTimeout: 5m0s
   terminateOnClose: true
   headersFrom:

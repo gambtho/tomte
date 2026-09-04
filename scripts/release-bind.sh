@@ -88,8 +88,18 @@ test -s "$work/base.json" || { echo 'the plane is not deployed (no kaimahi-upstr
 if [ "$repo" = "-" ]; then
   # Remove just this fragment. A null value in a merge patch DELETES the
   # key, leaving every other operator's fragment alone.
-  $KUBECTL -n kaimahi patch configmap "$OVERLAY_CM" --type merge \
-    -p "{\"data\": {\"$FRAGMENT\": null}}" >/dev/null 2>&1 || true
+  # A null value in a merge patch deletes the key, leaving other
+  # operators' fragments alone. Only NotFound is tolerated: `|| true` on
+  # everything would let an RBAC denial or an unreachable API server end
+  # with "the binding is removed" printed below, which is the one thing
+  # this repo tells its agent never to do.
+  if ! err=$($KUBECTL -n kaimahi patch configmap "$OVERLAY_CM" --type merge \
+       -p "{\"data\": {\"$FRAGMENT\": null}}" 2>&1 >/dev/null); then
+    case "$err" in
+      *NotFound*|*"not found"*) : ;;   # nothing to remove
+      *) echo "release-bind: could not remove the fragment: $err" >&2; exit 1 ;;
+    esac
+  fi
 else
   python3 - "$work/base.json" "$CRED_RELEASE" "$repo" "$ado_org" "$ado_project" "$ado_pipelines" <<'EOF' > "$work/fragment.json"
 import json, sys

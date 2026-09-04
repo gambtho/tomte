@@ -69,7 +69,7 @@ binds is the `policy_fields` the committed table declares
 |---|---|
 | `create_branch` | `owner`, `repo`, `branch`, `from_branch` |
 | `actions_run_trigger` | `method`, `owner`, `repo`, `workflow_id`, `ref` |
-| `pipelines_write` | `action`, `project`, `pipelineId`, `previewRun` |
+| `pipelines_write` | `action`, `orgName`, `project`, `pipelineId`, `previewRun` |
 
 **Why the dispatcher argument comes first.** Both servers this lane talks
 to consolidate several operations into one tool. `actions_run_trigger`'s

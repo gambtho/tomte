@@ -1400,6 +1400,10 @@ ado-secret: guard
 	@test -n "$(ADO_ORG)" || \
 		{ echo 'usage: make ado-secret ADO_ORG=<organization>  (Entra access token on stdin)' >&2; exit 1; }
 	@KUBECTL="$(KUBECTL)" ADO_ORG="$(ADO_ORG)" bash scripts/ado-secret.sh
+	@# The same 443-to-public allowance release-secret applies. Without it
+	@# an ADO-only setup stores a good token and still cannot reach
+	@# mcp.dev.azure.com. `make release-revoke` removes it.
+	$(KUBECTL) apply -f k8s/egress-hosted.yaml
 	$(KUBECTL) -n kaimahi rollout restart deploy/kaimahi-proxy
 	$(KUBECTL) -n kaimahi rollout status deploy/kaimahi-proxy --timeout=300s
 
