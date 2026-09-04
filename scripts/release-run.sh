@@ -107,11 +107,35 @@ fail()  { printf '\nrelease-run: %s\n' "$*" >&2; exit 1; }
 # the raw output is kept for the caller to read back.
 turn() {
   local out=$1 task=$2
+  # TASK travels as a make variable into a shell recipe ("$(TASK)"), so a
+  # double quote or a newline in it breaks the RECIPE — the failure looks
+  # like `/bin/sh: Syntax error: Unterminated quoted string`, nowhere near
+  # the prompt that caused it. Refuse both here rather than debug that
+  # twice. (Found the hard way on the first real run.)
+  # $'\n' and not "$(printf '\n')": command substitution strips trailing
+  # newlines, so the latter is an EMPTY pattern that matches every task.
+  case "$task" in
+    *'"'*)   fail "internal: a task carries a double quote: $task" ;;
+    *$'\n'*) fail "internal: a task carries a newline: $task" ;;
+  esac
   # shellcheck disable=SC2086 # RELEASE_CHAT is a command line, not a word
-  if ! $RELEASE_CHAT TASK="$task" > "$out" 2>&1; then
-    note "the agent's turn did not complete cleanly; its output follows"
+  local chat_rc=0
+  $RELEASE_CHAT TASK="$task" > "$out" 2>&1 || chat_rc=$?
+  python3 "$here/show-turn.py" "$out" >&2 || tail -30 "$out" >&2
+  # The turn is only a turn if the task COMPLETED with a reply. Anything
+  # else is a failure the caller must see, because everything downstream
+  # reads the answer. This function used to print a note and return 0,
+  # which made a failed turn look like a successful one to every caller —
+  # the exact thing the agent's own instructions forbid, committed in the
+  # driver that enforces them.
+  if [ "$chat_rc" != 0 ]; then
+    note "the agent's turn exited $chat_rc"
+    return 1
   fi
-  python3 "$here/show-turn.py" "$out" >&2 || { tail -30 "$out" >&2; return 1; }
+  python3 "$here/verify-chat.py" "$out" >/dev/null 2>&1 || {
+    note "the agent's turn did not complete with a reply"
+    return 1
+  }
 }
 
 # ---------------------------------------------------------------------
@@ -179,10 +203,16 @@ consequential() {
 do_propose() {
   step "What shipped last, and what merged since — on $repo"
   turn "$work/propose.out" \
-"For the GitHub repository owner \"$owner\" repo \"$name\":
-1. Call get_latest_release and list_tags and tell me the previous release tag and its date.
-2. Call list_pull_requests with state \"closed\", base \"$base\", sort \"updated\", direction \"desc\", perPage 100. Count only pull requests whose merged_at is set and later than the previous release.
-3. Draft release notes for $version as short user-facing bullets, and say which pull requests you could not write a line for and why.
+"For the GitHub repository with owner $owner and repo $name, do three things in order. \
+First, call get_latest_release and list_tags, and report the previous release tag and its date. \
+Second, call list_pull_requests with state closed, base $base, sort updated, direction desc, perPage 50, \
+and fields set to exactly number, title and merged_at -- do NOT ask for the body field, the listing does not \
+fit in your context with it. A closed pull request is not necessarily merged, so count only those whose \
+merged_at field is set and is later than the previous release; if every one of the 50 merged after it, \
+say so and ask for the next page rather than guessing. \
+Third, draft release notes for $version as short user-facing bullets grouped by theme, working from the \
+titles alone, and list separately any pull request whose title says nothing a user could act on, with its \
+number and title -- do not invent a meaning for it. \
 Do not create anything. Report only what the tools told you." \
     || fail "the agent could not complete the proposal turn"
   python3 "$here/show-turn.py" "$work/propose.out" --reply-only > "$work/notes.txt" || true
@@ -193,8 +223,8 @@ Do not create anything. Report only what the tools told you." \
 do_cut() {
   consequential create_branch \
     "create_branch: owner $owner, repo $name, branch $branch, from_branch $base" \
-"Call create_branch with owner \"$owner\", repo \"$name\", branch \"$branch\", from_branch \"$base\". Make exactly that one call and report what happened." \
-"Call create_branch again with exactly the same arguments: owner \"$owner\", repo \"$name\", branch \"$branch\", from_branch \"$base\". Report what the tool returned."
+"Call create_branch with owner $owner, repo $name, branch $branch, from_branch $base. Make exactly that one call and report what happened." \
+"Call create_branch again with exactly the same arguments -- owner $owner, repo $name, branch $branch, from_branch $base. Report what the tool returned."
 }
 
 # --- 3. start the builds ---------------------------------------------
@@ -204,15 +234,15 @@ do_build() {
     [ -n "$wf" ] || continue
     consequential actions_run_trigger \
       "actions_run_trigger: method run_workflow, owner $owner, repo $name, workflow_id $wf, ref $branch" \
-"Call actions_run_trigger with method \"run_workflow\", owner \"$owner\", repo \"$name\", workflow_id \"$wf\", ref \"$branch\". Make exactly that one call and report what happened." \
-"Call actions_run_trigger again with exactly the same arguments: method \"run_workflow\", owner \"$owner\", repo \"$name\", workflow_id \"$wf\", ref \"$branch\". Report what the tool returned."
+"Call actions_run_trigger with method run_workflow, owner $owner, repo $name, workflow_id $wf, ref $branch. Make exactly that one call and report what happened." \
+"Call actions_run_trigger again with exactly the same arguments -- method run_workflow, owner $owner, repo $name, workflow_id $wf, ref $branch. Report what the tool returned."
   done
   for pid in $ado_pipelines; do
     [ -n "$pid" ] || continue
     consequential pipelines_write \
       "pipelines_write: action run_pipeline, project $ado_project, pipelineId $pid" \
-"Call pipelines_write with action \"run_pipeline\", project \"$ado_project\", pipelineId $pid. Make exactly that one call and report what happened." \
-"Call pipelines_write again with exactly the same arguments: action \"run_pipeline\", project \"$ado_project\", pipelineId $pid. Report what the tool returned."
+"Call pipelines_write with action run_pipeline, project $ado_project, pipelineId $pid. Make exactly that one call and report what happened." \
+"Call pipelines_write again with exactly the same arguments -- action run_pipeline, project $ado_project, pipelineId $pid. Report what the tool returned."
   done
 }
 
@@ -234,12 +264,12 @@ do_watch() {
     n=$((n + 1))
     local ask="Report the current state of the release builds, from the tools only."
     if [ -n "$gh_workflows" ]; then
-      ask="$ask For GitHub: call actions_list with method \"list_workflow_runs\", owner \"$owner\", repo \"$name\" and report the runs on branch \"$branch\" with their status and conclusion."
+      ask="$ask For GitHub, call actions_list with method list_workflow_runs, owner $owner, repo $name, and report the runs on branch $branch with their status and conclusion."
     fi
     if [ -n "$ado_pipelines" ]; then
-      ask="$ask For Azure DevOps: call pipelines_build with action \"list\", project \"$ado_project\" and report the most recent builds with their status and result."
+      ask="$ask For Azure DevOps, call pipelines_build with action list, project $ado_project, and report the most recent builds with their status and result."
     fi
-    ask="$ask End your answer with exactly one line: STATE: RUNNING if anything is still in progress, STATE: DONE if everything finished successfully, or STATE: FAILED if anything failed."
+    ask="$ask End your answer with exactly one line reading STATE: RUNNING if anything is still in progress, or STATE: DONE if everything finished successfully, or STATE: FAILED if anything failed."
     turn "$work/watch.$n.out" "$ask" || true
     if grep -q '^STATE: DONE' "$work/watch.$n.out"; then
       note "The agent reports every build finished successfully."
@@ -248,7 +278,9 @@ do_watch() {
     if grep -q '^STATE: FAILED' "$work/watch.$n.out"; then
       step "A build failed — the agent reads the log"
       turn "$work/watch.fail.out" \
-"A build failed. Read the failure: for Azure DevOps call pipelines_build with action \"get_status\" and then pipelines_build_log for the failing build in project \"$ado_project\"; for GitHub call actions_get with method \"get_workflow_run\". Say what failed and quote what the log says. Do not guess at a cause."
+"A build failed. Read the failure. For Azure DevOps, call pipelines_build with action get_status and then \
+pipelines_build_log for the failing build in project $ado_project. For GitHub, call actions_get with method \
+get_workflow_run. Say what failed and quote what the log says. Do not guess at a cause."
       fail "a build failed — see above. Nothing further was done."
     fi
     sleep "$WATCH_POLL"

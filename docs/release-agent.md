@@ -109,13 +109,22 @@ The lane's hard guardrail is: no force-push, no tag deletion, no branch
 deletion. Four layers, and one that is honestly not available.
 
 1. **The servers are told not to offer them.** The `github-release`
-   upstream sets `X-MCP-Exclude-Tools` and an `X-MCP-Tools` allowlist;
+   upstream sets an `X-MCP-Tools` allowlist plus `X-MCP-Exclude-Tools`;
    the `ado` upstream sets `X-MCP-Toolsets: pipelines`. A tool excluded
    this way is not in `tools/list`, is not discovered by kagent's
    controller, is not projected to the agent, and cannot be reached even
    by an approval. This is the strongest layer, because it does not
    depend on Kaimahi's own bookkeeping. It is also why the tool seam
    gained `extra_headers` in this lane.
+
+   **Measured, and it matters:** GitHub's server honours `X-MCP-Tools`
+   only when `X-MCP-Toolsets` is absent. Sending both offered 26 tools
+   instead of the 10 named; dropping the toolsets header brought it to
+   exactly 10, which the gateway then projects down to the 8 reads. The
+   boot log line to check is
+   `gateway: projected tools/list … offered=10 projected=8` — if
+   `offered` is larger than the tool list you sent, the outer ring is not
+   doing what you think it is.
 2. **The gateway forwards to exactly two servers.** `tool_upstreams` is
    the whole reachable set.
 3. **Nothing destructive is allowlisted, or selected.** The credential's

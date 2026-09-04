@@ -2025,6 +2025,15 @@ jobs:
           for destructive in ("delete_repository", "delete_file", "push_files"):
               assert destructive in ghr["X-MCP-Exclude-Tools"], ghr
               assert destructive not in ghr["X-MCP-Tools"], ghr
+          # MEASURED, not assumed: GitHub's server honours X-MCP-Tools only
+          # when X-MCP-Toolsets is absent — combining them offered 26 tools
+          # instead of the 10 named, and dropping the toolsets header
+          # brought it to exactly 10 (W32). Their docs do say the two
+          # should not be combined. Asserted so nobody re-adds it and
+          # silently widens the surface back to a whole toolset.
+          assert "X-MCP-Toolsets" not in ghr, (
+              "github-release must narrow with X-MCP-Tools ALONE: adding X-MCP-Toolsets "
+              "makes the server ignore the tool list and offer the whole toolset")
           # And no committed header may occupy a credential slot.
           for name, up in t.items():
               for k in (up.get("extra_headers") or {}):

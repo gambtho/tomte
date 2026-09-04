@@ -85,6 +85,17 @@ spec:
               value: kaimahi
             - name: PGUSER
               value: kaimahi
+            # How long a hosted upstream may take to START answering.
+            # The dialer's default is 60s, which is generous for a tool
+            # call and for a short completion. Drafting release notes
+            # over a large pull-request listing is neither: a reasoning
+            # model can take longer than a minute to its first token, and
+            # the 60s bound turned a legitimate call into a 502
+            # (W32, docs/release-agent.md). This raises PATIENCE only —
+            # every other bound the hardened dialer enforces, and every
+            # address it refuses, is unchanged.
+            - name: EGRESS_HEADER_TIMEOUT
+              value: "180s"
             # Secrets arrive as mounted files only (PGPASSWORD_FILE,
             # ADMIN_TOKEN_FILE defaults) — no secret-valued env vars.
           ports:
