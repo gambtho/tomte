@@ -3202,7 +3202,16 @@ what you reused rather than rebuilt.
 Build:
 - **One guided path from a working local agent to the same agent on
   AKS.** Bring-your-own cluster must be first-class — plenty of adopters
-  have one — and creating a new one is the other branch. The path names
+  have one — and creating a new one is the other branch.
+  **On a BYO cluster you did not create, PREFLIGHT NetworkPolicy
+  enforcement and stop if it fails.** `aks-up.sh` guarantees a policy
+  engine on clusters we create; on someone else's you have no such
+  guarantee, and the P7a finding is that a cluster without one accepts
+  every policy and enforces none — the plane's manifests would be
+  present and inert, which reads as protection and is none. Reuse the
+  existing negative proof (`make netpol-verify`) rather than inventing a
+  check, and refuse to install rather than installing something whose
+  boundary is decorative. The path names
   what it will do and where before it does it (the context guard is not
   optional when the target is a cloud subscription), and it is
   resumable: a step that fails should be re-runnable without unpicking
@@ -3217,6 +3226,16 @@ Build:
   the seam. Do NOT put `/metrics` on a Service to make a dashboard
   easier; that would trade a security property for convenience, and the
   comment in k8s/plane/proxy.yaml explains why it is there.
+- **Say who owns teardown, per branch, before you build either.** On a
+  cluster THIS LANE CREATED, everything it created comes back down and
+  `az group exists` proves it. On a **bring-your-own** cluster the rule
+  is the opposite and it is absolute: **the cluster and its resource
+  group are never deleted and never adopted.** What the lane adds there
+  — a Managed Prometheus rule, a Container Insights or Log Analytics
+  association, a data-collection rule — it must be able to REMOVE by
+  name, and the doc must say which of those bill the owner after the
+  demo ends. Leaving a stranger's subscription quietly accruing charges
+  is the worst outcome available to this lane.
 - **Say what the opinion IS.** "Opinionated" means we made choices so the
   adopter does not have to — node size, policy engine, observability
   wiring, where the image lives. Every one of those belongs in
@@ -3229,8 +3248,11 @@ Build:
 
 Guardrails, all hard: **teardown is mandatory** and the PR reports a
 spend figure (the precedent is ~US$0.35 for a demo-length run); the
-Azure identifier scanner must pass — cluster names, workspace IDs, ACR
-names and public IPs are identifiers and never land in the tree
+Azure identifier scanner must pass, and **P5b's redaction rule applies
+to the PR's transcript and to anything attached to it, not only to the
+tree** — subscription and tenant IDs, resource-group names, ACR login
+servers, cluster FQDNs, Log Analytics workspace IDs and public IPs are
+all identifiers, and a transcript is exactly where they leak
 (scripts/check-no-azure-ids.sh, and its self-test); **kind must keep
 working exactly as it does now** and you must prove it, because a lane
 that improves AKS by changing shared manifests is the regression this
@@ -3249,8 +3271,10 @@ CI/CD. If the lift makes any of those obviously next, say which and why.
 
 Verification is real: a transcript in the PR of a local agent lifted to
 a REAL AKS cluster in one path — the agent answering there, the
-dashboard showing its traffic, the `az group list` proving teardown, and
-the spend figure. Then the same path against a cluster you did NOT
+dashboard showing its traffic, teardown proved the way scripts/aks-down.sh
+proves it — `az group exists --name "$RG"` returning **false**, with an
+unreadable or any other result treated as FAILURE rather than as absence
+— and the spend figure. Then the same path against a cluster you did NOT
 create, because bring-your-own is the case most adopters are in. Branch
 from current main; PR targets main; no stacked bases; lane ends at
 PR-open-with-checks-green — do not merge. Report deviations in the PR.
