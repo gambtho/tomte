@@ -335,7 +335,6 @@ our opinions, and the opinion is what we sell.
 | # | Finding | Evidence we already hold | Confidence |
 |---|---------|--------------------------|------------|
 | U1 | **The Agent's `Ready` condition never flips during a preset switch, and reconcile is async** — so `kubectl rollout status` can report on the OLD template. A consumer that waits ONLY on `Ready` (and does not also check `observedGeneration`, the pod-template hash, or termination state) therefore gets a false positive. Confirmed on a lane's cluster: the old pod was Ready AND Terminating after "successfully rolled out". | CI flake class 3 and the W16 delta sheet, including the failing run that started it — a governed chat completed and the ledger had zero rows, because the old ungoverned pod answered. Our workaround is `wait_switched`: three waits, carried into `kmx` at milestone 3, which every consumer driving kagent programmatically would otherwise reinvent. | **High.** Reproduced, understood, and the cost is borne by other people too. |
-| U2 | **Agent pods carry no security context.** `k8s/plane/proxy.yaml` and `k8s/erp-mcp.yaml` set `runAsNonRoot`, `allowPrivilegeEscalation: false` and `readOnlyRootFilesystem`; the Agent CRDs set none, because the pod spec is kagent's. The workload that actually executes model output is the least constrained thing in the cluster. | The agentdesktop positioning note, where the gap surfaced by comparison. | **Medium — verify first.** Check whether the Agent CRD already exposes a `securityContext` we simply are not setting. If it does, this is OUR gap and belongs nowhere near an upstream issue. If it does not, hardened defaults (or a field) is a genuine ask. |
 | U3 | **`kagent invoke` emits raw JSON with no human-readable mode.** We built a readable terminal view and kept raw JSON for pipes (#71). | The chat view and its tests. | **Low.** A preference, not a defect, and possibly deliberate. Offer it; do not press it. |
 
 ### U1, as a reproduction someone else can run
@@ -377,6 +376,29 @@ the trap. That is `wait_switched` (Makefile, and carried into
 **The ask** is not that kagent adopt those three waits, but that
 `Ready` mean the switch is done — or that the documentation say plainly
 that it does not, so consumers know to look further.
+
+### U2 is WITHDRAWN — it was ours, not kagent's
+
+The row that stood here said agent pods carry no security context and
+that the pod spec is kagent's to fix. It was marked verify-first, and
+verifying it killed it. **The Agent CRD at v0.9.12 — the version this
+repo pins — exposes `spec.declarative.deployment.securityContext`
+(`runAsNonRoot`, `readOnlyRootFilesystem`, `allowPrivilegeEscalation`,
+`capabilities`, `privileged`, …) and `spec.declarative.deployment.
+podSecurityContext` beside it.** kagent hands us the field. We do not
+set it.
+
+So this is a **Kaimahi todo, not an upstream ask**, and filing it would
+have been both wrong and embarrassing: a project asking another to add
+a field it already ships. It moves to the candidates list as our own
+work — set a hardened context on `k8s/hello-world.yaml`,
+`k8s/tools-agent.yaml`, `k8s/ap-agent.yaml` and whatever `kmx agent
+create` scaffolds, so the workload that executes model output stops
+being the least constrained thing in the cluster.
+
+Kept as a row rather than deleted, because the near-miss is the useful
+part: "verify first" was the right label, and it was applied to the one
+row that turned out to be wrong.
 
 Sequencing: **U1 first and alone.** It is reproducible, it costs other
 people too, and one good issue with a real reproduction is a better
