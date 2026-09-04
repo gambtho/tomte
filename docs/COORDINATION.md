@@ -3224,10 +3224,32 @@ onboarded on the coordinator's cluster, then called.
   range, and that it is exactly the proxy-to-server pair and nothing
   wider. That is the least-privilege guardrail W29 was given, tested.
 - **`--out -` mutates nothing**, asserted by diffing NetworkPolicies and
-  ConfigMaps around it.
+  ConfigMaps around it — which is exactly what CI diffs, and therefore
+  exactly what this claim covers. **Gap worth closing:** the
+  `RemoteMCPServer` the command also scaffolds is NOT diffed, so a
+  regression that created one under `--out -` would pass. One more
+  `kubectl get remotemcpserver -o name` either side would close it.
 - The guide's worked example carries the same digest this run produced,
   so `docs/govern-your-agent.md` was written from a real run rather than
   composed.
+- **Two of W29's rulings were NOT implemented, and the first draft of
+  this sheet claimed coverage it did not have.** Checked statically
+  after review pressure, and both are absences rather than untested
+  claims: (a) **D36's amendment — onboarding must succeed with NO policy
+  declaration** — is not met: `kmx tools add` REFUSES a bare `--tool
+  name` and CI asserts the refusal. The refusal is a good one (it names
+  all three answers, including `tool:*` to bind everything), so the gate
+  is mild and arguably better than the amendment asked for, but it IS a
+  gate, and D36 said the fast path must not have one. (b) **The
+  "countable, not merely warned about" rule** — `kmx status` reporting
+  something like "3 tool servers, 0 governed" — is absent: `status.go`
+  contains no ungoverned count, and the only ungoverned signal in the
+  tree is the one-shot warning in `create.go`. **Ruling: accept (a)**,
+  because a refusal that names `tool:*` costs one flag and prevents a
+  silent weak default; **(b) stands open** as the insurance D41-era
+  reasoning asked for and did not get. Neither is a defect in what was
+  built; both are gaps between the amended prompt and the delivery, and
+  the sheet should have said so before review did.
 
 ### W30 — identity on the call, and credentials that expire (PR #86, merged 2026-09-03)
 
@@ -3251,6 +3273,20 @@ onboarded on the coordinator's cluster, then called.
   renew it with 'make credential-renew NAME=hello-world TTL=720h', or
   re-issue the credential and re-point its Secret* — the problem, the
   time, and two ways out.
+- **Scope of that check, stated precisely:** the REFUSAL was verified
+  live; that the refusal is AUDITED was not. What is verified statically
+  is that all three seams (proxy, gateway, inbound bridge) recognise
+  `store.ExpiredPrefix` and classify it as
+  `metrics.ReasonCredentialExpired`. Whether an expired call lands in
+  `tool_audit` is untested by this pass.
+- **The legacy class, because it is the same shape as migration 00008's
+  and matters to anyone upgrading:** `expires_at` is NULLABLE and NULL
+  means a credential issued before expiry existed, which still works —
+  the conservative reading, since silently expiring every token in a
+  running cluster at migration time is an outage rather than a control.
+  No new credential can be minted without one (the admin surface applies
+  a default TTL and refuses an explicit "never"), so the class only
+  shrinks.
 
 ### Findings from this pass: two version-skew traps
 
@@ -3274,6 +3310,17 @@ both are adopter-facing.
    W28's upgrade test covers plane-old → plane-new; nothing covers
    CLI-new → plane-old. A version handshake, or reading a 404 on the
    admin API as "this plane predates X", turns a puzzle into a sentence.
+
+**Candidate arising from that error (NOT GO, recorded for a later
+ruling):** `kmx govern` and its siblings could REFUSE a context derived
+solely from the default `KIND_CLUSTER`, requiring one of `KIND_CLUSTER`,
+`KUBE_CTX`, `kmx ctx` or `--context` to have been chosen explicitly
+before a mutation proceeds. That would have turned the error below into
+a refusal instead of a no-op that happened to be harmless. It is a
+change to default behaviour on a shipped binary, so it is a decision
+rather than a patch — but it is the fix the incident actually argues
+for, and "the banner was printed and not read" is not a defence that
+scales.
 
 **Coordinator error, recorded because the lesson is the point:** during
 this pass the coordinator ran `kmx govern` with `KIND_CLUSTER` unset,
