@@ -96,31 +96,26 @@ if not isinstance(d, dict) or str(d.get("full_name", "")).lower() != want:
 print("token vetted: it reads %s" % sys.argv[2], file=sys.stderr)
 EOF
 
-# 2. ONE repository, not several. A fine-grained token's /user/repos is
-# restricted to the repositories it was granted, so a listing that names
-# more than one is a token with reach this lane does not accept — and
-# that is the fail-closed direction, so it REFUSES. A listing that cannot
-# be read at all is only a warning: the reach is then unproven, not
-# proven wide, and the check above already established the token reaches
-# the right repository.
-status=$(api 'https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator,organization_member')
-if [ "$status" = 200 ]; then
-  python3 - "$workdir/resp" "$repo" <<'EOF'
-import json, sys
-d = json.load(open(sys.argv[1]))
-if not isinstance(d, list):
-    print("could not read the repository listing — scope unproven", file=sys.stderr)
-    sys.exit(0)
-names = sorted({str(r.get("full_name", "")) for r in d if isinstance(r, dict)})
-want = sys.argv[2].lower()
-if len(names) > 1 or (names and names[0].lower() != want):
-    sys.exit("REFUSING: this token reaches %d repositories (%s). A release token is\n"
-             "scoped to exactly one." % (len(names), ", ".join(names[:5])))
-print("token vetted: it reaches exactly one repository", file=sys.stderr)
-EOF
-else
-  echo "note: /user/repos answered HTTP $status — one-repository scope unproven (not refused)" >&2
-fi
+# 2. ONE repository: NOT proven here, and the reason is worth writing down
+# because a check used to sit here and was wrong.
+#
+# It asked GET /user/repos and refused a token that listed more than one
+# repository. That endpoint answers by the USER's affiliations, not by the
+# token's repository scope — for a member of a large organization it
+# returns thousands whatever the token is scoped to — so the check
+# refused correctly-scoped tokens and proved nothing about wrong ones.
+#
+# There is no sound replacement: GitHub exposes no endpoint that reports a
+# fine-grained token's repository grant, and a negative control against
+# another repository cannot distinguish "the token cannot reach it" from
+# "the token can read it because it is public".
+#
+# So single-repository scope is asserted by the OPERATOR when they create
+# the token (Repository access -> Only select repositories), and enforced
+# by the PLANE afterwards: `make release-bind` adds a standing constraint
+# so the read tools are callable only with that owner and repo, and every
+# consequential call binds owner and repo in its approval digest. That is
+# a real control that does not depend on trusting this script's guess.
 
 # 3. Its deadline, said now rather than when it bites — the same rule
 # P16 applied to Kaimahi's own credentials. GitHub returns this header
@@ -147,11 +142,16 @@ echo "Secret $NAMESPACE/$SECRET_NAME stored. It expires $expiry." >&2
 cat >&2 <<'NOTE'
 
 The gateway injects this token on calls to the github-release upstream
-from plane custody; the agent never holds it. What was PROVEN here: the
-token is fine-grained, it reads the one repository named, it reaches no
-other, and it has a deadline. What was NOT, because GitHub does not
-expose a fine-grained token's permissions: that you granted Contents,
-Pull requests and Actions and nothing else — that part is yours.
+from plane custody; the agent never holds it.
+
+PROVEN here: the token is fine-grained, it reads the repository named,
+and it has a deadline.
+
+NOT proven, because GitHub exposes neither: which permissions you granted,
+and whether the token is scoped to that ONE repository. Both are yours to
+get right when you create it. The plane enforces the second one anyway —
+run `make release-bind GITHUB_REPO=owner/name`, which constrains the read
+tools to that repository and denies anything else at the gateway.
 
 Delete it with: make release-revoke
 NOTE
