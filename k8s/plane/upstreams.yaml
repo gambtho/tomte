@@ -236,10 +236,11 @@ data:
             "X-MCP-Toolsets": "pipelines"
           },
           "tools": {
-            "pipelines_definition": {"policy_fields": ["action", "project"]},
-            "pipelines_build":      {"policy_fields": ["action", "project", "buildId"]},
-            "pipelines_build_log":  {"policy_fields": ["action", "project", "buildId"]},
-            "pipelines_write":      {"policy_fields": ["action", "project", "pipelineId", "previewRun"]}
+            "core_list_projects":   {"policy_fields": ["orgName"]},
+            "pipelines_definition": {"policy_fields": ["action", "orgName", "project"]},
+            "pipelines_build":      {"policy_fields": ["action", "orgName", "project", "buildId"]},
+            "pipelines_build_log":  {"policy_fields": ["action", "orgName", "project", "buildId"]},
+            "pipelines_write":      {"policy_fields": ["action", "orgName", "project", "pipelineId", "previewRun"]}
           }
         }
       },

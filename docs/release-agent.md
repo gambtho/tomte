@@ -281,6 +281,19 @@ must be backed by an Entra tenant (standalone Microsoft-account
 organizations are not supported), and whichever client mints the token
 must be consented in that tenant.
 
+**Every ADO call must name the organization.** The upstream is configured
+at the ORG-LESS URL (`https://mcp.dev.azure.com/`), because the
+organization is an Azure identifier and this repository does not carry
+one — so each tool call passes `orgName`, which Microsoft documents as
+the alternative. `orgName` is therefore a bound policy field on every ADO
+tool: an approval for a build names *which organization*, not just which
+pipeline. Pass it to the driver as `ADO_ORG`.
+
+Note that the hosted server's tool schema is not the local server's:
+`orgName` does not exist in `@azure-devops/mcp`'s source at all. Read the
+schema from a live `tools/list` before declaring policy fields against a
+hosted server, rather than from the repository behind it.
+
 **The cost, stated where it will be met:** an access token lives about an
 hour. A release session begins by refreshing it. The seam does not break
 when it dies — the server answers 401, the gateway audits it, nothing is

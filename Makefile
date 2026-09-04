@@ -181,7 +181,7 @@ GITHUB_TOOLNAMES_JSON = $(if $(filter -,$(GITHUB_AGENT_TOOLS)),,"$(subst $(comma
 # offered by the servers either — the upstream table excludes them at the
 # server with X-MCP-Exclude-Tools / X-MCP-Toolsets.
 CRED_RELEASE   ?= release-agent
-RELEASE_TOOLS  ?= get_latest_release,list_tags,list_releases,get_release_by_tag,list_pull_requests,list_commits,actions_list,actions_get,pipelines_definition,pipelines_build,pipelines_build_log
+RELEASE_TOOLS  ?= get_latest_release,list_tags,list_releases,get_release_by_tag,list_pull_requests,list_commits,actions_list,actions_get,core_list_projects,pipelines_definition,pipelines_build,pipelines_build_log
 RELEASE_ACT_TOOLS := create_branch,actions_run_trigger,pipelines_write
 # P13: the accounts-payable seam (the demo's fixture ERP behind the
 # gateway) has its own credential, agent and allowlist. The SIX READ
@@ -1461,7 +1461,7 @@ release: guard
 	@KUBECTL="$(KUBECTL)" CRED_RELEASE=$(CRED_RELEASE) \
 		GITHUB_REPO='$(GITHUB_REPO)' VERSION='$(VERSION)' BASE='$(BASE)' \
 		RELEASE_BRANCH='$(RELEASE_BRANCH)' GH_WORKFLOW='$(GH_WORKFLOW)' \
-		ADO_PROJECT='$(ADO_PROJECT)' ADO_PIPELINES='$(ADO_PIPELINES)' \
+		ADO_ORG='$(ADO_ORG)' ADO_PROJECT='$(ADO_PROJECT)' ADO_PIPELINES='$(ADO_PIPELINES)' \
 		SLACK_USER='$(SLACK_USER)' DRY_RUN='$(DRY_RUN)' STEP='$(STEP)' \
 		RELEASE_CHAT='make chat AGENT=release-agent TARGET=$(TARGET) KIND_CLUSTER=$(KIND_CLUSTER)' \
 		bash scripts/release-run.sh

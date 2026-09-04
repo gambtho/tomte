@@ -153,6 +153,7 @@ spec:
           kind: RemoteMCPServer
           name: kaimahi-release-ado
           toolNames:
+            - core_list_projects
             - pipelines_definition
             - pipelines_build
             - pipelines_build_log

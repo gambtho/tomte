@@ -74,6 +74,10 @@ branch="${RELEASE_BRANCH:-release/${version}}"
 gh_workflows="${GH_WORKFLOW:-}"
 ado_project="${ADO_PROJECT:-}"
 ado_pipelines="${ADO_PIPELINES:-}"
+# The hosted Azure DevOps server is reached at its ORG-LESS URL, so every
+# call must name the organization (its tools take orgName). It is an
+# Azure identifier: passed in, never committed.
+ado_org="${ADO_ORG:-}"
 
 usage() { echo "usage: make release GITHUB_REPO=owner/name VERSION=v1.2.3 [BASE=main] [GH_WORKFLOW=...] [ADO_PROJECT=... ADO_PIPELINES=...]" >&2; exit 2; }
 [ -n "$repo" ] || usage
@@ -86,8 +90,10 @@ usage() { echo "usage: make release GITHUB_REPO=owner/name VERSION=v1.2.3 [BASE=
   || { echo "invalid VERSION '$version'" >&2; exit 2; }
 [[ "$base" =~ ^[A-Za-z0-9._/-]{1,200}$ ]] || { echo "invalid BASE '$base'" >&2; exit 2; }
 [[ "$branch" =~ ^[A-Za-z0-9._/-]{1,200}$ ]] || { echo "invalid RELEASE_BRANCH '$branch'" >&2; exit 2; }
-[ -z "$ado_pipelines" ] || [ -n "$ado_project" ] \
-  || { echo "ADO_PIPELINES needs ADO_PROJECT" >&2; exit 2; }
+[ -z "$ado_pipelines" ] || { [ -n "$ado_project" ] && [ -n "$ado_org" ]; } \
+  || { echo "ADO_PIPELINES needs ADO_PROJECT and ADO_ORG" >&2; exit 2; }
+[ -z "$ado_org" ] || [[ "$ado_org" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,62}$ ]] \
+  || { echo "invalid ADO_ORG '$ado_org'" >&2; exit 2; }
 case "$WATCH_TIMEOUT$WATCH_POLL" in (*[!0-9]*|'') echo "WATCH_TIMEOUT and WATCH_POLL must be whole seconds" >&2; exit 2 ;; esac
 
 owner="${repo%%/*}"
@@ -240,9 +246,9 @@ do_build() {
   for pid in $ado_pipelines; do
     [ -n "$pid" ] || continue
     consequential pipelines_write \
-      "pipelines_write: action run_pipeline, project $ado_project, pipelineId $pid" \
-"Call pipelines_write with action run_pipeline, project $ado_project, pipelineId $pid. Make exactly that one call and report what happened." \
-"Call pipelines_write again with exactly the same arguments -- action run_pipeline, project $ado_project, pipelineId $pid. Report what the tool returned."
+      "pipelines_write: action run_pipeline, orgName $ado_org, project $ado_project, pipelineId $pid" \
+"Call pipelines_write with action run_pipeline, orgName $ado_org, project $ado_project, pipelineId $pid. Make exactly that one call and report what happened." \
+"Call pipelines_write again with exactly the same arguments -- action run_pipeline, orgName $ado_org, project $ado_project, pipelineId $pid. Report what the tool returned."
   done
 }
 
@@ -267,7 +273,7 @@ do_watch() {
       ask="$ask For GitHub, call actions_list with method list_workflow_runs, owner $owner, repo $name, and report the runs on branch $branch with their status and conclusion."
     fi
     if [ -n "$ado_pipelines" ]; then
-      ask="$ask For Azure DevOps, call pipelines_build with action list, project $ado_project, and report the most recent builds with their status and result."
+      ask="$ask For Azure DevOps, call pipelines_build with action list, orgName $ado_org, project $ado_project, and report the most recent builds with their status and result."
     fi
     ask="$ask End your answer with exactly one line reading STATE: RUNNING if anything is still in progress, or STATE: DONE if everything finished successfully, or STATE: FAILED if anything failed."
     turn "$work/watch.$n.out" "$ask" || true
@@ -279,7 +285,7 @@ do_watch() {
       step "A build failed — the agent reads the log"
       turn "$work/watch.fail.out" \
 "A build failed. Read the failure. For Azure DevOps, call pipelines_build with action get_status and then \
-pipelines_build_log for the failing build in project $ado_project. For GitHub, call actions_get with method \
+pipelines_build_log for the failing build in orgName $ado_org project $ado_project. For GitHub, call actions_get with method \
 get_workflow_run. Say what failed and quote what the log says. Do not guess at a cause."
       fail "a build failed — see above. Nothing further was done."
     fi
