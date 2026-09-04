@@ -112,6 +112,11 @@ if [ "$any_approver" = yes ]; then
   printf '       @kaimahi approve %s uses=%s ttl=10m\n\n' "${id%%-*}" "$uses" >&2
   printf '   or from the operator'"'"'s chair:\n\n' >&2
   printf '       kmx approve %s --uses %s --ttl 10m\n\n' "$id" "$uses" >&2
+  # This script is holding a port-forward on ADMIN_PORT while it waits,
+  # so an operator command on the same port meets "address already in
+  # use". Name a free one for them rather than let them discover it.
+  printf '   (if that reports the admin port is in use, add ADMIN_PORT=%s)\n\n' \
+    "$(( ${ADMIN_PORT:-19091} + 100 ))" >&2
   printf '   No named approver was required, so this wait does NOT check who decided —\n' >&2
   printf '   only that THIS call was approved and that the grant is new.\n\n' >&2
 else

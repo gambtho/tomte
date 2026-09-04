@@ -65,6 +65,13 @@ GRANT_TTL="${GRANT_TTL:-15m}"
 # The chat command, handed down by the Makefile so every turn lands on
 # the SAME cluster as everything else. Word splitting is deliberate.
 RELEASE_CHAT="${RELEASE_CHAT:-make chat AGENT=release-agent}"
+# The driver polls the admin API while it waits for a human, through a
+# port-forward — and the human's own `make approve` needs the same port.
+# On the default (19091) the two collide, and the operator meets
+# "address already in use" on the ONE command this script just told them
+# to run. So the driver keeps its own port, and the default stays free
+# for the person. Found the hard way, on the first real approval.
+export ADMIN_PORT="${RELEASE_ADMIN_PORT:-19291}"
 export KUBECTL
 
 repo="${GITHUB_REPO:-}"
@@ -164,36 +171,70 @@ request_id() {
     '$3==cred && $4=="tool" && $5==tool && index($0, want) {print $1; exit}' "$work/approvals.out"
 }
 
-# consequential <tool> <expected summary> <task text> <retry task text>
+# consequential <tool> <args-json> <expected summary> <task text>
 #
-# Ask, expect a denial, verify the filed request is the call we asked
-# for, wait for a human, then ask again and require that the call was
-# admitted under the grant. Every one of those is checked against the
-# plane's own records, never against the agent's prose.
+# File the request for the exact call, wait for a human to approve it,
+# then have the AGENT make it, and require the plane's own audit to show
+# it admitted under the grant.
+#
+# WHY THE DRIVER FILES THE REQUEST AND NOT THE AGENT. The first real run
+# tried the obvious thing — ask the agent, let the gateway deny it, let
+# the denial file the request — and the agent answered "there is no
+# create_branch tool available in my toolset". It was right. The gateway
+# PROJECTS tools/list down to what a credential may call: the allowlist,
+# plus tools it holds a live grant for, plus tools it carries a standing
+# constraint for (gateway.go, projectable). A consequential tool is none
+# of those by design, so kagent wires the agent no such tool, so the
+# agent can never attempt the call, so no denial and no request can ever
+# happen. Deny-and-pend only closes the loop for a tool the agent can
+# already SEE.
+#
+# So the order inverts, and it is better for it. The driver files the
+# request naming the exact call — `plane-admin.sh request` exists for
+# this, and computes the digest exactly as the gateway will, so the
+# request and the agent's later call are provably the same call. A human
+# approves it. The grant then makes the tool projectable, the agent can
+# see it for the first time, and it makes the call under a grant welded
+# to those arguments. A different call is denied even now.
+#
+# What that buys, said plainly: a human can only ever be shown the call
+# the operator asked for, because the driver is what wrote it down. The
+# earlier design could show them whatever the model happened to emit.
 consequential() {
-  local tool=$1 want=$2 ask=$3 retry=$4
+  local tool=$1 args=$2 want=$3 ask=$4
 
-  step "The agent proposes: $tool — $want"
-  turn "$work/$tool.ask.out" "$ask" || true
+  step "Proposing: $tool — $want"
+
+  # An existing live grant would make the agent's call succeed without
+  # anyone approving anything in THIS run. Refuse rather than ride it.
+  admin grants "$CRED_RELEASE" > "$work/$tool.grants-before.out" 2>/dev/null || true
+  if awk -v cred="$CRED_RELEASE" -v subj="$tool" \
+      '$2==cred && $3=="tool" && $4==subj && $5=="yes" {found=1} END{exit !found}' \
+      "$work/$tool.grants-before.out"; then
+    cat "$work/$tool.grants-before.out" >&2
+    fail "$tool already carries a LIVE grant on $CRED_RELEASE. This run would
+  spend an approval somebody gave earlier, for a call this run did not
+  describe. Let it lapse, or deny it, and start again."
+  fi
+
+  admin request "$CRED_RELEASE" tool "$tool" "$args" >&2
 
   local id
   id=$(request_id "$tool" "$want")
   if [ -z "$id" ]; then
     admin approvals >&2 || true
-    fail "no pending approval request for the call that was asked for:
+    fail "the request for this call was not filed:
     $want
-  Either the agent did not make the call, or it made a DIFFERENT one. The
-  pending list is above; nothing has been approved, and nothing was done.
-  This is the check that stops a human approving a call nobody asked for."
+  Nothing has been approved and nothing was done."
   fi
-  note "Denied, and filed as request $id. What a human is asked is the CALL:"
+  note "Filed as request $id. What a human is asked is the CALL:"
   grep -F "$id" "$work/approvals.out" >&2
 
   CRED="$CRED_RELEASE" HUMAN_TIMEOUT="${HUMAN_TIMEOUT:-900}" \
-    bash "$here/await-approval.sh" "$id" "${SLACK_USER:--}" 1
+    ADMIN_PORT="$ADMIN_PORT" bash "$here/await-approval.sh" "$id" "${SLACK_USER:--}" 1
 
-  step "Approved — the agent makes that call again"
-  turn "$work/$tool.do.out" "$retry" || true
+  step "Approved — the agent makes the call"
+  turn "$work/$tool.do.out" "$ask" || note "the agent's turn did not complete cleanly"
 
   admin tool-audit "$CRED_RELEASE" > "$work/$tool.audit.out"
   grep -E "$CRED_RELEASE +[a-z-]+ +tools/call +$tool +allowed +2[0-9][0-9] +granted " \
@@ -201,7 +242,7 @@ consequential() {
     || { cat "$work/$tool.audit.out" >&2
          fail "$tool was approved but the call was not admitted under the grant.
   Nothing is being reported as done that the plane did not record."; }
-  note "Admitted under the grant. The denial row and this row carry the same"
+  note "Admitted under the grant. The filed request and this row carry the same"
   note "digest: the call a human approved is provably the call that ran."
 }
 
@@ -228,9 +269,9 @@ Do not create anything. Report only what the tools told you." \
 # --- 2. cut the release branch ---------------------------------------
 do_cut() {
   consequential create_branch \
+    "{\"owner\": \"$owner\", \"repo\": \"$name\", \"branch\": \"$branch\", \"from_branch\": \"$base\"}" \
     "create_branch: owner $owner, repo $name, branch $branch, from_branch $base" \
-"Call create_branch with owner $owner, repo $name, branch $branch, from_branch $base. Make exactly that one call and report what happened." \
-"Call create_branch again with exactly the same arguments -- owner $owner, repo $name, branch $branch, from_branch $base. Report what the tool returned."
+"Call create_branch with owner $owner, repo $name, branch $branch, from_branch $base. Make exactly that one call and report what the tool returned."
 }
 
 # --- 3. start the builds ---------------------------------------------
@@ -239,16 +280,16 @@ do_build() {
   for wf in $gh_workflows; do
     [ -n "$wf" ] || continue
     consequential actions_run_trigger \
+      "{\"method\": \"run_workflow\", \"owner\": \"$owner\", \"repo\": \"$name\", \"workflow_id\": \"$wf\", \"ref\": \"$branch\"}" \
       "actions_run_trigger: method run_workflow, owner $owner, repo $name, workflow_id $wf, ref $branch" \
-"Call actions_run_trigger with method run_workflow, owner $owner, repo $name, workflow_id $wf, ref $branch. Make exactly that one call and report what happened." \
-"Call actions_run_trigger again with exactly the same arguments -- method run_workflow, owner $owner, repo $name, workflow_id $wf, ref $branch. Report what the tool returned."
+"Call actions_run_trigger with method run_workflow, owner $owner, repo $name, workflow_id $wf, ref $branch. Make exactly that one call and report what the tool returned."
   done
   for pid in $ado_pipelines; do
     [ -n "$pid" ] || continue
     consequential pipelines_write \
+      "{\"action\": \"run_pipeline\", \"orgName\": \"$ado_org\", \"project\": \"$ado_project\", \"pipelineId\": $pid}" \
       "pipelines_write: action run_pipeline, orgName $ado_org, project $ado_project, pipelineId $pid" \
-"Call pipelines_write with action run_pipeline, orgName $ado_org, project $ado_project, pipelineId $pid. Make exactly that one call and report what happened." \
-"Call pipelines_write again with exactly the same arguments -- action run_pipeline, orgName $ado_org, project $ado_project, pipelineId $pid. Report what the tool returned."
+"Call pipelines_write with action run_pipeline, orgName $ado_org, project $ado_project, pipelineId $pid. Make exactly that one call and report what the tool returned."
   done
 }
 
