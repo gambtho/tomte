@@ -49,7 +49,9 @@ not the verb — `payment_schedule: amount_cents 3255000, payee_id MER-4471`.
 Approval issues a grant bounded by expiry, by use count, and **by that exact
 call**: the denial and the admitted call carry the same fingerprint, so what a
 human approved is provably what ran. A grant with a use left cannot be spent on
-a different call.
+a different call. (One closed exception: grants issued before argument binding
+existed are honoured tool-wide. No new ones can be created, so that class only
+shrinks.)
 
 ### Govern what triggers an agent
 
@@ -75,12 +77,20 @@ and current limitations.
 ### Why not just kagent?
 
 kagent runs the agent, and runs it well — which is why Kaimahi is thin over it
-and adds no runtime of its own. What kagent does not do is bound what a running
-agent may *do*: there is no budget on model spend, no policy on the arguments of
-a tool call, no human approval welded to a specific action, and no ledger to
-query afterwards. If your agent reads a wiki, you need none of that. If it moves
-money, changes infrastructure, or emails a customer, you need all of it — and
-that gap is the only thing Kaimahi fills.
+and adds no runtime of its own. It also already has a human-in-the-loop: mark a
+tool `requireApproval` on the Agent and a person gets Approve/Reject before it
+runs.
+
+What that gate binds is the **tool**. Kaimahi binds the **call**: the approval
+carries the arguments, so approving a $32,550 payment to one payee cannot be
+spent on $48,000 to another, and the audit proves the approved call is the one
+that ran. Around that sit the things a runtime has no reason to carry — a budget
+that fails closed on model spend, policy on tool *arguments*, and a queryable
+ledger of every call and denial.
+
+If your agent reads a wiki, you need none of this; use kagent. If it moves
+money, changes infrastructure, or emails a customer, the difference between
+"approve this tool" and "approve this transaction" is the whole point.
 
 ### When this is the wrong tool
 
@@ -89,8 +99,10 @@ that gap is the only thing Kaimahi fills.
 - **You do not want Kubernetes.** Kaimahi is thin over kagent, which is a
   Kubernetes runtime. There is no non-Kubernetes path.
 - **You want to watch rather than enforce.** Tracing tools tell you what an
-  agent did; this stops it beforehand. They complement each other, and we are
-  not the one with the nice trace view.
+  agent did; this refuses a *governed* action beforehand. Governance is opt-in
+  per agent and per seam, so what is not governed is not stopped — the docs
+  name every ungoverned path. They complement each other, and we are not the
+  one with the nice trace view.
 - **You need agent inventory across employee laptops.** That is a different
   layer, and tools built for fleet-managing developer AI tooling do it better.
 
