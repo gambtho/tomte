@@ -245,3 +245,32 @@ func TestTheReleaseBlueprintNeedsItsRunTimeParametersOnlyWhenTheStepRuns(t *test
 		t.Fatalf("a publish run was allowed without the build ids: %v", err)
 	}
 }
+
+// TestAForEachOverNothingIsNotAStepThatQuietlyVanishes.
+//
+// A step that renders to nothing is a step the run then reports as done.
+// If it is optional it says so with `when:` — a statement in the file
+// rather than an accident of an empty slice.
+func TestAForEachOverNothingIsNotAStepThatQuietlyVanishes(t *testing.T) {
+	doc := strings.Replace(base, `  - name: change`, `  - name: each
+    kind: read
+    for_each: ids
+    prompt: Look at ${item}.
+  - name: change`, 1)
+	doc = strings.Replace(doc, "  repo:", `  ids:
+    type: int_list
+    help: the ids
+  repo:`, 1)
+	b, err := blueprint.Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := b.Bind(map[string]string{"repo": "a/b"}, b.StepNames())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = b.Render(v, b.StepNames(), nil)
+	if err == nil || !strings.Contains(err.Error(), "nothing was supplied for it") {
+		t.Fatalf("a for_each over an empty list rendered to nothing without saying so: %v", err)
+	}
+}

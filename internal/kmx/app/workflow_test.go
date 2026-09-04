@@ -162,3 +162,83 @@ func TestTheCarriedBlueprintsAllParse(t *testing.T) {
 		}
 	}
 }
+
+// TestAPrefixOfAnotherCallIsNotThisCall.
+//
+// The summary has no terminator, so `pipelineId 4` is a substring of a
+// pending `pipelineId 41`, and `tag v1.0` of `tag v1.0.1`. A stale
+// request left pending by an earlier run that timed out — which the
+// driver explicitly tells the operator to expect and resume from — is
+// the ordinary way a longer summary comes to be sitting there.
+func TestAPrefixOfAnotherCallIsNotThisCall(t *testing.T) {
+	stale := "release_publish: owner o, repo r, tag v1.0.1"
+	mine := "release_publish: owner o, repo r, tag v1.0"
+	pending := []map[string]any{
+		{"id": "stale", "credential": "release-agent", "kind": "tool", "subject": "release_publish", "arg_summary": stale},
+	}
+	if got := selectRequest(pending, "release-agent", "release_publish", mine); got != "" {
+		t.Fatalf("selected %q — a request whose summary merely CONTAINS this call's is a different call", got)
+	}
+	pending = append(pending, map[string]any{
+		"id": "mine", "credential": "release-agent", "kind": "tool",
+		"subject": "release_publish", "arg_summary": mine,
+	})
+	if got := selectRequest(pending, "release-agent", "release_publish", mine); got != "mine" {
+		t.Fatalf("selected %q; the exact match is mine", got)
+	}
+}
+
+// TestAnApprovalOfSomeOtherRequestIsNotThisApproval.
+//
+// A run whose own request was denied must not find a colleague's live
+// grant on the same tool and carry on. For the publish step that would
+// be 1.28 GB onto a public release, on a denial.
+func TestAnApprovalOfSomeOtherRequestIsNotThisApproval(t *testing.T) {
+	grants := []map[string]any{
+		{"id": "g-other", "request_id": "req-other", "kind": "tool", "subject": "release_publish",
+			"live": true, "decided_by": "slack:U123", "arg_digest": "beef"},
+	}
+	if _, _, err := selectGrant(grants, "req-mine", "release_publish"); err == nil {
+		t.Fatal("another request's live grant was accepted as this request's approval")
+	} else if !strings.Contains(err.Error(), "DENIED") {
+		t.Fatalf("the message does not say what happened: %v", err)
+	}
+
+	grants = append(grants, map[string]any{
+		"id": "g-mine", "request_id": "req-mine", "kind": "tool", "subject": "release_publish",
+		"live": true, "decided_by": "slack:U999", "arg_digest": "cafe",
+	})
+	got, by, err := selectGrant(grants, "req-mine", "release_publish")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.id != "g-mine" || got.digest != "cafe" || by != "slack:U999" {
+		t.Fatalf("selected %+v decided by %q", got, by)
+	}
+
+	// A grant that has lapsed is not an approval to act on now.
+	lapsed := []map[string]any{
+		{"id": "g", "request_id": "req-mine", "kind": "tool", "subject": "release_publish", "live": false},
+	}
+	if _, _, err := selectGrant(lapsed, "req-mine", "release_publish"); err == nil ||
+		!strings.Contains(err.Error(), "no longer live") {
+		t.Fatalf("a spent grant was accepted: %v", err)
+	}
+}
+
+// TestAnUnparseableOverlayFragmentIsUnknownNotAbsent. The collision
+// guard exists so a merge refusal does not arrive as a proxy that will
+// not roll; a hand edit that broke the JSON is exactly that case.
+func TestAnUnparseableOverlayFragmentIsUnknownNotAbsent(t *testing.T) {
+	if _, err := fragmentConstrains("{not json", "release-agent"); err == nil {
+		t.Fatal("a fragment that does not parse was read as constraining nothing")
+	}
+	ok, err := fragmentConstrains(`{"standing_constraints": {"release-agent": {}}}`, "release-agent")
+	if err != nil || !ok {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+	ok, err = fragmentConstrains(`{"standing_constraints": {"ap-agent": {}}}`, "release-agent")
+	if err != nil || ok {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+}

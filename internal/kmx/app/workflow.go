@@ -233,7 +233,11 @@ func (a *App) GovernWorkflow(name string, opt WorkflowOptions) error {
 		if other == key {
 			continue
 		}
-		if fragmentConstrains(fragments[other], b.Credential) {
+		constrains, err := fragmentConstrains(fragments[other], b.Credential)
+		if err != nil {
+			return fmt.Errorf("reading the overlay fragment %q: %w", other, err)
+		}
+		if constrains {
 			return fmt.Errorf("the overlay already carries standing constraints for credential %q, in %q.\n"+
 				"  The plane refuses two fragments defining one credential's constraints — the merge is per name "+
 				"and refuses collisions rather than resolving by precedence, so applying this would take the next\n"+
@@ -482,15 +486,25 @@ func (a *App) writeOverlayFragment(key, fragment, version string) error {
 
 // fragmentConstrains reports whether an overlay fragment already carries
 // standing constraints for a credential.
-func fragmentConstrains(raw, credential string) bool {
+//
+// A fragment that does not parse answers UNKNOWN, not "no collision".
+// This guard exists so a merge refusal does not arrive as a proxy that
+// will not roll; a hand edit that broke the JSON is exactly the case
+// where that would happen, and reading it as "nothing there" would
+// deliver the outage the guard was written to prevent, under a success
+// message.
+func fragmentConstrains(raw, credential string) (bool, error) {
 	var doc struct {
 		StandingConstraints map[string]json.RawMessage `json:"standing_constraints"`
 	}
 	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
-		return false
+		return false, fmt.Errorf("an overlay fragment does not parse as JSON: %w.\n"+
+			"  kmx will not read that as \"it constrains nothing\" — the plane parses every fragment at boot, "+
+			"so this one would take the next rollout down whatever is applied on top of it. Fix or remove it "+
+			"first", err)
 	}
 	_, ok := doc.StandingConstraints[credential]
-	return ok
+	return ok, nil
 }
 
 func countBounds(r *blueprint.Rendered) int {

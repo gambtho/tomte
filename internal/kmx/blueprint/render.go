@@ -276,7 +276,12 @@ func (r *Rendered) renderStep(s Step, declared map[string][]string) ([]RenderedS
 	if s.ForEach != "" {
 		items = r.Values.Items(s.ForEach)
 		if len(items) == 0 {
-			return nil, nil
+			// NOT nil: a step that vanishes is a step the run then
+			// reports as done. If it should not happen without the list,
+			// say so with `when:` — which is a statement in the file
+			// rather than an accident of an empty slice.
+			return nil, fmt.Errorf("step %q repeats over ${%s}, and nothing was supplied for it. Guard the step "+
+				"with `when: %s` if it is optional, or make %s required", s.Name, s.ForEach, s.ForEach, s.ForEach)
 		}
 	}
 	var out []RenderedStep

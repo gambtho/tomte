@@ -116,13 +116,28 @@ func (a *App) RunWorkflow(name string, opt RunOptions) error {
 	if err != nil {
 		return err
 	}
-	_, declared, err := a.validateWorkflowOverlay(client, fragments)
+	upstreams, declared, err := a.validateWorkflowOverlay(client, fragments)
 	if err != nil {
+		return err
+	}
+	// The SAME assertion `kmx workflow govern` makes, and it belongs here
+	// more than there: govern ran days ago, and what binds an approval is
+	// the table as it stands NOW. A `policy_fields` list narrowed since —
+	// someone dropping `tag` from release_publish because "approvals keep
+	// not matching" — would otherwise file a request naming less than the
+	// call does, and the grant a human gave would admit every tag on that
+	// repository.
+	if err := checkSeams(b, upstreams, declared); err != nil {
 		return err
 	}
 	rendered, err := b.Render(values, steps, declared)
 	if err != nil {
 		return err
+	}
+	if len(rendered.Steps) == 0 {
+		return fmt.Errorf("nothing to run: every step asked for is conditional on a parameter that was not "+
+			"supplied. Reporting a workflow as run when it did nothing is the one thing this driver must not "+
+			"do.\n  Steps: %s", strings.Join(b.StepNames(), ", "))
 	}
 
 	run := &workflowRun{
@@ -447,7 +462,8 @@ func (r *workflowRun) consequentialStep(s blueprint.RenderedStep) error {
 	r.app.notef("Approve it with:  kmx approve %s --uses 1 --ttl 10m", id)
 	r.app.notef("or from Slack:    @kaimahi approve %s uses=1 ttl=10m", shortID(id))
 
-	if err := r.awaitApproval(id, s.Tool); err != nil {
+	permit, err := r.awaitApproval(id, s.Tool)
+	if err != nil {
 		return err
 	}
 
@@ -457,7 +473,14 @@ func (r *workflowRun) consequentialStep(s blueprint.RenderedStep) error {
 	}
 	r.app.notef("Approved — performing the call")
 	if s.Exec != nil {
-		// The DECISION was governed; the TRANSFER is this.
+		// The DECISION was governed; the TRANSFER is this, and the plane
+		// will record nothing further — no metering, no tool-audit row.
+		// So the grant this run's OWN request produced is named here,
+		// because it is the only evidence there will be that the thing
+		// about to move bytes was approved at all.
+		r.app.notef("Acting under grant %s from request %s, welded to digest %s.", permit.id, id, permit.digest)
+		r.app.notef("The plane records the DECISION and nothing about the transfer: it is outside the gateway,")
+		r.app.notef("so there will be no tool-audit row, no metering, and no record of what actually moved.")
 		return r.exec(s, s.Exec.Args)
 	}
 	if _, err := r.turn(s); err != nil {
@@ -552,13 +575,10 @@ func (r *workflowRun) newestAudit(tool string, before int) (auditRow, error) {
 }
 
 func (r *workflowRun) liveGrant(tool string) (bool, error) {
-	doc, err := r.client.Get("grants", "/admin/grants?credential="+r.bundle.Credential+"&limit=50")
+	grants, err := r.grants()
 	if err != nil {
 		return false, err
 	}
-	raw, _ := json.Marshal(doc["grants"])
-	var grants []map[string]any
-	_ = json.Unmarshal(raw, &grants)
 	for _, g := range grants {
 		if text(g["kind"]) == "tool" && text(g["subject"]) == tool && truthy(g["live"]) {
 			return true, nil
@@ -578,22 +598,35 @@ func (r *workflowRun) pendingRequest(s blueprint.RenderedStep) (string, error) {
 	_ = json.Unmarshal(raw, &requests)
 	id := selectRequest(requests, r.bundle.Credential, s.Tool, s.Summary())
 	if id == "" {
-		return "", fmt.Errorf("the request for this call was not filed:\n    %s\n"+
-			"  Nothing has been approved and nothing was done.", s.Summary())
+		found := "  Nothing is pending for that tool."
+		if others := candidateSummaries(requests, r.bundle.Credential, s.Tool); len(others) > 0 {
+			found = "  What IS pending for that tool:\n    " + strings.Join(others, "\n    ")
+		}
+		return "", fmt.Errorf("the request for this call was not filed:\n    %s\n%s\n"+
+			"  Nothing has been approved and nothing was done.", s.Summary(), found)
 	}
 	return id, nil
 }
 
 // selectRequest picks the pending request for one exact call.
 //
-// NEVER by position, and never by tool name alone. The summary names
-// every policy-relevant field of the call in the order the plane
-// declares them, so a selector less specific than this could match a
-// request for a DIFFERENT call — which a human would then approve
-// believing they had approved this one. That is the shape of P13's
-// failure: on its first live run the agent filed a payment for a
-// different invoice at the same amount, and the approval landed on the
-// wrong one.
+// NEVER by position, never by tool name alone, and never by SUBSTRING.
+// The summary names every policy-relevant field of the call in the order
+// the plane declares them, and the match is equality — because a
+// substring match is a wider selector than it looks. A call ending
+// `pipelineId 4` is a substring of a pending `pipelineId 41`, and a
+// branch `release/v1` of `release/v10`, so an unanchored match could
+// select somebody else's request and hand a human a call this run never
+// described. That is the shape of P13's failure: on its first live run
+// the agent filed a payment for a different invoice at the same amount,
+// and the approval landed on the wrong one.
+//
+// The plane builds the same string from the same declared fields
+// (plane/internal/gateway/digest.go, summarize), so equality is what
+// normally holds. Where it cannot — a value long enough for the plane to
+// clip — the plane's summary is SHORTER than this one, so a substring
+// test would not have rescued it either. It fails closed instead, and
+// names what it did find.
 func selectRequest(requests []map[string]any, credential, tool, want string) string {
 	for _, req := range requests {
 		if text(req["credential"]) != credential || text(req["kind"]) != "tool" {
@@ -602,32 +635,45 @@ func selectRequest(requests []map[string]any, credential, tool, want string) str
 		if text(req["subject"]) != tool {
 			continue
 		}
-		if summary := text(req["arg_summary"]); summary == want || strings.Contains(summary, want) {
+		if text(req["arg_summary"]) == want {
 			return text(req["id"])
 		}
 	}
 	return ""
 }
 
+// candidateSummaries is what a failed selection reports: the calls that
+// ARE pending for this tool. An operator whose request was not found
+// needs to see what was, or the message is "no" with no way forward.
+func candidateSummaries(requests []map[string]any, credential, tool string) []string {
+	var out []string
+	for _, req := range requests {
+		if text(req["credential"]) == credential && text(req["kind"]) == "tool" &&
+			text(req["subject"]) == tool {
+			out = append(out, text(req["arg_summary"]))
+		}
+	}
+	return out
+}
+
 // awaitApproval blocks until a human decides, or the wait runs out.
-func (r *workflowRun) awaitApproval(id, tool string) error {
+func (r *workflowRun) awaitApproval(id, tool string) (grant, error) {
 	deadline := time.Now().Add(time.Duration(r.opt.HumanSeconds) * time.Second)
 	for time.Now().Before(deadline) {
 		still, err := r.stillPending(id)
 		if err != nil {
-			return err
+			return grant{}, err
 		}
 		if !still {
 			// The request left the pending list: approved, or denied.
-			// Which one is the GRANTS view's answer, not a guess — the
-			// approvals audit carries no request id to match on, and a
+			// Which one is the GRANTS view's answer, not a guess — a
 			// driver that assumed "gone means approved" would carry on
 			// after a denial.
 			return r.confirmDecision(id, tool)
 		}
 		time.Sleep(5 * time.Second)
 	}
-	return fmt.Errorf("nobody decided request %s within %ds. Nothing was done; resume with --step",
+	return grant{}, fmt.Errorf("nobody decided request %s within %ds. Nothing was done; resume with --step",
 		id, r.opt.HumanSeconds)
 }
 
@@ -648,31 +694,92 @@ func (r *workflowRun) stillPending(id string) (bool, error) {
 }
 
 // confirmDecision distinguishes an approval from a denial by the grant
-// it did or did not create, and honours --approver: P8b records WHO
-// decided, and a workflow that wanted one person's approval must not
-// accept somebody else's.
-func (r *workflowRun) confirmDecision(id, tool string) error {
-	doc, err := r.client.Get("grants", "/admin/grants?credential="+r.bundle.Credential+"&limit=50")
+// THIS REQUEST created, and honours --approver: P8b records who decided,
+// and a workflow that wanted one person's approval must not accept
+// somebody else's.
+//
+// Matched on `request_id`, never on the tool. A grant row carries the id
+// of the request it came from, and matching on the tool alone would
+// accept a colleague's approval of a different call on the same tool —
+// so a run whose own request was DENIED could find somebody else's live
+// grant and carry on. That is the "gone from the pending list means
+// approved" assumption this function exists to refuse, arriving by
+// another door.
+func (r *workflowRun) confirmDecision(id, tool string) (grant, error) {
+	grants, err := r.grants()
 	if err != nil {
-		return err
+		return grant{}, err
 	}
-	raw, _ := json.Marshal(doc["grants"])
-	var grants []map[string]any
-	_ = json.Unmarshal(raw, &grants)
+	permit, by, err := selectGrant(grants, id, tool)
+	if err != nil {
+		return grant{}, err
+	}
+	if r.opt.Approver != "" && by != r.opt.Approver {
+		return grant{}, fmt.Errorf("request %s was approved by %q, and this run requires %q. Nothing was done",
+			id, by, r.opt.Approver)
+	}
+	r.app.notef("Approved%s.", decidedBy(by))
+	return permit, nil
+}
+
+// selectGrant finds the grant one request produced, by REQUEST ID.
+//
+// Never by tool: a grant row names the request it came from, and
+// matching on the tool alone would accept a colleague's approval of a
+// different call on the same tool — so a run whose own request was
+// DENIED could find somebody else's live grant and carry on. That is the
+// "gone from the pending list means approved" assumption arriving by
+// another door.
+func selectGrant(grants []map[string]any, id, tool string) (grant, string, error) {
 	for _, g := range grants {
-		if text(g["kind"]) != "tool" || text(g["subject"]) != tool || !truthy(g["live"]) {
+		if text(g["request_id"]) != id {
 			continue
 		}
-		by := text(g["decided_by"])
-		if r.opt.Approver != "" && by != r.opt.Approver {
-			return fmt.Errorf("request %s was approved by %q, and this run requires %q. Nothing was done",
-				id, by, r.opt.Approver)
+		if !truthy(g["live"]) {
+			return grant{}, "", fmt.Errorf("request %s produced a grant that is no longer live — it lapsed, or "+
+				"its uses are spent, before this run could act on it. Nothing was done", id)
 		}
-		r.app.notef("Approved%s.", decidedBy(by))
-		return nil
+		return grant{id: text(g["id"]), digest: text(g["arg_digest"])}, text(g["decided_by"]), nil
 	}
-	return fmt.Errorf("request %s left the pending list and no live grant for %s exists — it was denied, or "+
-		"the grant it created has already lapsed. Nothing was done", id, tool)
+	return grant{}, "", fmt.Errorf("request %s left the pending list and produced no grant of its own — it was "+
+		"DENIED, or it was withdrawn. Nothing was done.\n"+
+		"  (A live grant on %s from some other request is not this one, and is not accepted.)", id, tool)
+}
+
+// grant is the authority this run's own request produced.
+type grant struct {
+	id     string
+	digest string
+}
+
+// grants reads the credential's grants, and FAILS CLOSED on a shape it
+// does not recognise.
+//
+// This is the one read in this file whose empty answer means "permitted"
+// — `liveGrant` reads it to decide whether a run may proceed. Every
+// other read here turns an empty result into an error by what it does
+// next; this one would turn a renamed key or a changed response shape
+// into "no grants, go ahead", silently and forever.
+func (r *workflowRun) grants() ([]map[string]any, error) {
+	doc, err := r.client.Get("grants", "/admin/grants?credential="+r.bundle.Credential+"&limit=200")
+	if err != nil {
+		return nil, err
+	}
+	value, ok := doc["grants"]
+	if !ok {
+		return nil, fmt.Errorf("the plane's grants view carried no \"grants\" key. kmx will not read that as " +
+			"\"no grants\": this is the answer that decides whether a run may proceed, and an unrecognised shape " +
+			"is not a permission. Is the plane a different version? (kmx plane)")
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	var grants []map[string]any
+	if err := json.Unmarshal(raw, &grants); err != nil {
+		return nil, fmt.Errorf("the plane's grants view is not a list of grants: %w", err)
+	}
+	return grants, nil
 }
 
 func decidedBy(who string) string {
@@ -792,8 +899,12 @@ func (r *workflowRun) refreshSeam(name string) error {
 		return nil
 	}
 	out, err := r.app.Run.Capture(ref.Command[0], ref.Command[1:]...)
-	if err != nil || strings.TrimSpace(out) == "" {
-		r.app.notef("could not mint a %s credential; the stored one stays in place", name)
+	if err != nil {
+		r.app.notef("could not mint a %s credential (%v); the stored one stays in place", name, err)
+		return nil
+	}
+	if strings.TrimSpace(out) == "" {
+		r.app.notef("%s returned nothing for the %s credential; the stored one stays in place", ref.Requires, name)
 		return nil
 	}
 	// Through a 0600 file and `--from-file`, never argv: a token in a
@@ -829,7 +940,15 @@ func (r *workflowRun) reconnectSeam(ref *blueprint.Refresh) error {
 	}
 	status, err := r.app.kubectlCapture("-n", "kagent", "get", "remotemcpserver", ref.Seam,
 		"-o", `jsonpath={range .status.conditions[?(@.type=="Accepted")]}{.status}|{.message}{end}`)
-	if err != nil || strings.HasPrefix(status, "True") {
+	if err != nil {
+		// Not fatal — but not silence either. An RBAC denial or a typo in
+		// `seam:` reads exactly like a healthy seam if the error is
+		// dropped, and the run then continues against a seam whose
+		// credential was just rotated.
+		r.app.notef("could not read the %s seam's Accepted condition (%v); not reconnecting it", ref.Seam, err)
+		return nil
+	}
+	if strings.HasPrefix(status, "True") {
 		return nil
 	}
 	r.app.notef("The %s seam last failed to connect (%s); re-checking it against the credential that exists now.",
