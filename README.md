@@ -23,6 +23,15 @@ tool call and every event that triggers an agent passes through a plane that
 meters it, bounds it, and records it — so delegating consequential work does
 not mean giving up control.
 
+That matters most when an agent is manipulated. In the
+[accounts-payable demo](docs/ap-demo.md) an invoice instructs the agent that
+it is pre-approved and that the payee has changed — and on the run that
+documentation is written from, **the agent complied**. The call was refused
+anyway, and the approval it had just been given could not be spent on it.
+
+> **We do not promise the agent cannot be fooled. We promise that fooling it
+> is not sufficient to move money.**
+
 ### Control model spend
 
 Meter model calls, fail closed on monthly budgets, write every request to a
@@ -35,9 +44,12 @@ per-credential tool allowlists, and an audit trail that includes denials.
 
 ### Approve consequential actions
 
-Turn a denied model or tool action into a pending request. Human approval issues
-a grant limited by expiry, use count, or both. The exception lapses when its
-limit is reached.
+A denied action files a pending request that shows a human the **transaction**,
+not the verb — `payment_schedule: amount_cents 3255000, payee_id MER-4471`.
+Approval issues a grant bounded by expiry, by use count, and **by that exact
+call**: the denial and the admitted call carry the same fingerprint, so what a
+human approved is provably what ran. A grant with a use left cannot be spent on
+a different call.
 
 ### Govern what triggers an agent
 
@@ -59,6 +71,28 @@ agent runtime of its own.
 
 Governance is opt-in per agent. The documentation identifies ungoverned paths
 and current limitations.
+
+### Why not just kagent?
+
+kagent runs the agent, and runs it well — which is why Kaimahi is thin over it
+and adds no runtime of its own. What kagent does not do is bound what a running
+agent may *do*: there is no budget on model spend, no policy on the arguments of
+a tool call, no human approval welded to a specific action, and no ledger to
+query afterwards. If your agent reads a wiki, you need none of that. If it moves
+money, changes infrastructure, or emails a customer, you need all of it — and
+that gap is the only thing Kaimahi fills.
+
+### When this is the wrong tool
+
+- **Your task is deterministic.** If a script or a scheduled job can do it,
+  write that. This is for judgement work with consequences.
+- **You do not want Kubernetes.** Kaimahi is thin over kagent, which is a
+  Kubernetes runtime. There is no non-Kubernetes path.
+- **You want to watch rather than enforce.** Tracing tools tell you what an
+  agent did; this stops it beforehand. They complement each other, and we are
+  not the one with the nice trace view.
+- **You need agent inventory across employee laptops.** That is a different
+  layer, and tools built for fleet-managing developer AI tooling do it better.
 
 ## Quickstart
 
