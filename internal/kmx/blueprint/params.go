@@ -154,12 +154,23 @@ type Values struct {
 func (v Values) Supplied(name string) bool { return v.supplied[name] }
 
 // Items returns a list parameter's elements as strings, for `for_each`.
+//
+// nil for a name that is not a bound list, and the distinction is
+// load-bearing: expand() uses "is this a list?" to decide whether to
+// join it, and an empty NON-nil slice there made every unresolved
+// reference render as the empty string instead of being reported. A
+// policy field silently substituted to "" is a constraint that binds
+// nothing.
 func (v Values) Items(name string) []string {
 	if s, ok := v.strs[name]; ok {
 		return s
 	}
-	out := make([]string, 0, len(v.ints[name]))
-	for _, n := range v.ints[name] {
+	ints, ok := v.ints[name]
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(ints))
+	for _, n := range ints {
 		out = append(out, strconv.FormatInt(n, 10))
 	}
 	return out

@@ -274,3 +274,47 @@ func TestAForEachOverNothingIsNotAStepThatQuietlyVanishes(t *testing.T) {
 		t.Fatalf("a for_each over an empty list rendered to nothing without saying so: %v", err)
 	}
 }
+
+// TestAnUnsuppliedParameterIsNeverAnEmptyString.
+//
+// The rule this file exists to keep: a policy field silently substituted
+// to "" is a constraint that binds nothing, and a request summary with a
+// hole in it is one a human approves anyway. An optional parameter left
+// out has to be an ERROR wherever a value is required, not a blank.
+func TestAnUnsuppliedParameterIsNeverAnEmptyString(t *testing.T) {
+	doc := strings.Replace(base, "  repo:", `  org:
+    type: string
+    help: an optional organization
+  repo:`, 1)
+	doc = strings.Replace(doc, `        - {field: owner, op: eq, value: "${repo.owner}"}`,
+		`        - {field: owner, op: eq, value: "${org}"}`, 1)
+	b, err := blueprint.Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := b.Bind(map[string]string{"repo": "a/b"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := b.Render(v, nil, nil)
+	if err == nil {
+		frag, _ := r.Fragment()
+		t.Fatalf("an unsupplied parameter rendered a constraint anyway:\n%s", frag)
+	}
+	if !strings.Contains(err.Error(), "unresolved reference") {
+		t.Fatalf("refused for the wrong reason: %v", err)
+	}
+}
+
+// TestAnUnknownKeyInsideAConstraintIsRefused. Parse enables KnownFields
+// on its own decoder, and a Constraint decodes through another one — so
+// a misspelled `feild:` would be dropped in silence, which is the one
+// thing this parser refuses to do anywhere else.
+func TestAnUnknownKeyInsideAConstraintIsRefused(t *testing.T) {
+	doc := strings.Replace(base, `        - {field: owner, op: eq, value: "${repo.owner}"}`,
+		`        - {field: owner, op: eq, value: "${repo.owner}", note: why}`, 1)
+	if _, err := blueprint.Parse([]byte(doc)); err == nil ||
+		!strings.Contains(err.Error(), `no "note" field`) {
+		t.Fatalf("an unknown key inside a constraint was accepted: %v", err)
+	}
+}

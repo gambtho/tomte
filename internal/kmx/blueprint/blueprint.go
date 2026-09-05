@@ -304,8 +304,20 @@ func (c *Constraint) UnmarshalYAML(node *yaml.Node) error {
 	}
 	c.Field, c.Op, c.Value, c.Values = p.Field, p.Op, p.Value, p.Values
 	c.When, c.Literal = p.When, p.Literal
+	// Parse enables KnownFields on ITS decoder, and this one is a
+	// different decoder — so an unknown key inside a constraint would be
+	// silently dropped, which is the one thing this parser refuses to do
+	// anywhere else. A misspelled `feild:` should be a message, not a
+	// constraint that quietly binds something else.
+	known := map[string]bool{"field": true, "op": true, "value": true, "values": true,
+		"when": true, "literal": true}
 	for i := 0; i+1 < len(node.Content); i += 2 {
-		if node.Content[i].Value == "values" {
+		key := node.Content[i].Value
+		if !known[key] {
+			return fmt.Errorf("line %d: a constraint has no %q field (it takes field, op, value, values, when, literal)",
+				node.Content[i].Line, key)
+		}
+		if key == "values" {
 			c.valuesSet = true
 		}
 	}

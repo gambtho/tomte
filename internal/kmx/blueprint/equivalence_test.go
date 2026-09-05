@@ -47,8 +47,16 @@ func TestTheBlueprintProducesTheSameAllowlistAsMakeReleaseAllow(t *testing.T) {
 		t.Fatalf("the blueprint's allowlist is not the one `make release-allow` sets.\n"+
 			" make:      %s\n blueprint: %s", strings.Join(want, ", "), strings.Join(got, ", "))
 	}
-	if len(want) == 0 {
-		t.Fatal("read no allowlist out of the Makefile; the test is not proving anything")
+	// strings.Split never returns a zero-length slice, so "len == 0" was
+	// a guard that could not fire: an EMPTY allowlist on both sides would
+	// have passed this test while proving nothing. Check the content.
+	if len(want) < 5 || want[0] == "" {
+		t.Fatalf("read no usable allowlist out of the Makefile (%v); the test is not proving anything", want)
+	}
+	for _, tool := range want {
+		if !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`).MatchString(tool) {
+			t.Fatalf("%q is not a tool name; the Makefile was parsed wrongly", tool)
+		}
 	}
 }
 
@@ -283,7 +291,21 @@ esac
 
 	cmd := exec.Command("bash", "scripts/release-bind.sh")
 	cmd.Dir = repoRoot
-	cmd.Env = append(os.Environ(),
+	// The script reads its inputs from the environment, so the caller's
+	// own exported GITHUB_REPO or ADO_PIPELINES would reach it and the
+	// "one repository" case would silently become the bounded-builds
+	// one. Every variable this test controls is dropped from the
+	// inherited environment first.
+	controlled := map[string]bool{
+		"GITHUB_REPO": true, "ADO_ORG": true, "ADO_PROJECT": true, "ADO_PIPELINES": true,
+		"CRED_RELEASE": true, "OVERLAY_CM": true, "FRAGMENT": true, "KUBECTL": true,
+	}
+	for _, kv := range os.Environ() {
+		if name, _, _ := strings.Cut(kv, "="); !controlled[name] {
+			cmd.Env = append(cmd.Env, kv)
+		}
+	}
+	cmd.Env = append(cmd.Env,
 		"PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"STUB_DIR="+dir,
 		"KUBECTL=kubectl",

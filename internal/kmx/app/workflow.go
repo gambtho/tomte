@@ -311,9 +311,13 @@ func (a *App) GovernWorkflow(name string, opt WorkflowOptions) error {
 		}
 		remove = true
 		a.notef("These parameters declare no standing bounds; the ones on the cluster will be REMOVED.")
-	case present && sameJSON(existing, fragment):
+	case present && sameJSON(existing, fragment) && !opt.Replace:
 		// Writing the identical bytes back would still roll the proxy,
-		// which is a real outage window spent on a no-op.
+		// which is a real outage window spent on a no-op. With --replace
+		// it is NOT skipped: that is the recovery the warning below
+		// advertises for a run that wrote the key and then failed while
+		// rolling, and an advertised recovery that quietly does nothing
+		// is worse than none.
 		unchanged = true
 		a.notef("The standing bounds on the cluster are already exactly these; nothing to write.")
 	case present && !opt.Replace:
@@ -492,16 +496,23 @@ func (a *App) writeOverlayFragment(key, fragment, version string) error {
 			scaffold.OverlayConfigMap); err != nil {
 			return err
 		}
-	} else if current, now, err := a.readOverlay(); err != nil {
+		// A ConfigMap this command just created has a version nobody
+		// read, and nobody else can have raced a fragment into it. Read
+		// it so the write below still carries a precondition.
+		if _, now, err := a.readOverlay(); err != nil {
+			return err
+		} else {
+			version = now
+		}
+	} else if _, now, err := a.readOverlay(); err != nil {
 		return err
 	} else if now != version {
-		_ = current
 		return fmt.Errorf("the overlay changed while this was being prepared (read at %s, now %s) — nothing "+
 			"has been applied. Somebody else onboarded an upstream or edited a fragment; run the same command "+
 			"again to build on their change", quoteVersion(version), quoteVersion(now))
 	}
 
-	patch, err := json.Marshal(map[string]any{"data": map[string]string{key: fragment}})
+	patch, err := overlayPatch(version, map[string]any{key: fragment})
 	if err != nil {
 		return err
 	}
@@ -531,7 +542,7 @@ func (a *App) removeOverlayFragment(key, version string) error {
 		return fmt.Errorf("the overlay changed while this was being prepared (read at %s, now %s) — nothing "+
 			"has been removed", quoteVersion(version), quoteVersion(now))
 	}
-	patch, err := json.Marshal(map[string]any{"data": map[string]any{key: nil}})
+	patch, err := overlayPatch(version, map[string]any{key: nil})
 	if err != nil {
 		return err
 	}
@@ -546,6 +557,18 @@ func (a *App) removeOverlayFragment(key, version string) error {
 	}
 	return a.kubectlRun("-n", scaffold.PlaneNamespace, "patch", "configmap", scaffold.OverlayConfigMap,
 		"--type", "merge", "--patch-file", path)
+}
+
+// overlayPatch builds a merge patch that carries the resourceVersion as
+// a REAL precondition rather than only as something re-read a moment
+// earlier. A merge patch naming a stale version is refused with a
+// Conflict, which closes the window between the check and the write.
+func overlayPatch(version string, data map[string]any) ([]byte, error) {
+	patch := map[string]any{"data": data}
+	if version != "" {
+		patch["metadata"] = map[string]string{"resourceVersion": version}
+	}
+	return json.Marshal(patch)
 }
 
 // fragmentConstrains reports whether an overlay fragment already carries
