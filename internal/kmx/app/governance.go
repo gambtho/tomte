@@ -217,27 +217,38 @@ func classifySeam(rawURL, service string) string {
 	if err != nil || parsed.Hostname() == "" {
 		return seamUnresolved
 	}
-	if planeHost(parsed.Hostname(), service) {
-		return seamGoverned
-	}
-	return seamDirect
+	return planeHost(parsed.Hostname(), service)
 }
 
-// planeHost reports whether a host is the named plane Service.
+// planeHost classifies a host against one of the plane's Services.
 //
-// kagent resolves these through the cluster DNS, so every form of the same
-// Service has to count: `svc.ns`, `svc.ns.svc` and the fully qualified
-// `svc.ns.svc.<cluster domain>`, with or without the root's trailing dot.
-// The cluster domain is NOT pinned to cluster.local — a cluster built with
-// another one resolves the same Service, and refusing it would report every
-// governed seam on that cluster as direct. `svc` in the third label is what
-// makes this safe: `kaimahi-proxy.kaimahi.evil.com` does not have it.
-func planeHost(host, service string) bool {
+// kagent resolves these through the cluster DNS, so every form the cluster
+// itself produces has to count: `svc.ns`, `svc.ns.svc`, and the fully
+// qualified `svc.ns.svc.cluster.local`, with or without the root's dot.
+//
+// The fourth shape is the interesting one. `svc.ns.svc.<something else>` is
+// EITHER the same Service under a non-default cluster domain OR an external
+// host wearing the Service's name — `kaimahi-proxy.kaimahi.svc.evil.com` is
+// a registrable domain anyone can own, and calling that governed would be
+// rule 2 inverted: a DIRECT seam reported as governed, which is the one
+// direction of error that matters. kmx cannot tell the two apart from the
+// URL alone, so it says so: `unresolved`, counted as neither.
+func planeHost(host, service string) string {
 	labels := strings.Split(strings.TrimSuffix(strings.ToLower(host), "."), ".")
 	if len(labels) < 2 || labels[0] != service || labels[1] != planeNamespace {
-		return false
+		return seamDirect
 	}
-	return len(labels) == 2 || labels[2] == "svc"
+	switch {
+	case len(labels) == 2:
+		return seamGoverned
+	case labels[2] != "svc":
+		return seamDirect
+	case len(labels) == 3:
+		return seamGoverned
+	case len(labels) == 5 && labels[3] == "cluster" && labels[4] == "local":
+		return seamGoverned
+	}
+	return seamUnresolved
 }
 
 // modelSeams counts agents by where their model calls actually go.

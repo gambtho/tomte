@@ -363,6 +363,7 @@ type statusData struct {
 	serverErr    string
 	planeErr     string
 	secretErr    string
+	ollamaErr    string
 }
 
 // collectStatus reads the cluster once.
@@ -419,9 +420,6 @@ func (a *App) collectStatus() (*statusData, error) {
 			d.kagentPods.Items = append(d.kagentPods.Items, pod)
 		}
 	}
-	if err := a.statusJSON("ollama", "pods", true, &d.ollamaPods); err != nil {
-		return nil, err
-	}
 	// The plane, the tool servers and the Secret names are read
 	// TOLERANTLY: none of them exists on the fast path D36 made the
 	// default, and a status command that fails because the thing it is
@@ -429,6 +427,7 @@ func (a *App) collectStatus() (*statusData, error) {
 	// `unknown`, never a silent zero — with one deliberate exception, noted
 	// on statusTolerant: a NotFound namespace or resource is a genuine
 	// absence and reads as an empty population.
+	d.ollamaErr = a.statusTolerant("ollama", "pods", &d.ollamaPods)
 	var deployments objectList[planeDeployment]
 	d.planeErr = a.statusTolerant(planeNamespace, "deployments", &deployments)
 	for _, deployment := range deployments.Items {
@@ -524,18 +523,25 @@ func (a *App) statusTable() error {
 	table(a.Out, []string{"CONFIG", "PROVIDER", "MODEL", "ACCEPTED"}, modelRows)
 	fmt.Fprintln(a.Out, "\nRuntime")
 	fmt.Fprintf(a.Out, "  kagent:     %d/%d pods ready, %d restarts\n", kReady, len(kagentPods.Items), kRestarts)
-	if len(ollamaPods.Items) > 0 {
+	switch {
+	case data.ollamaErr != "":
+		fmt.Fprintf(a.Out, "  ollama:     unknown — %s\n", data.ollamaErr)
+	case len(ollamaPods.Items) > 0:
 		fmt.Fprintf(a.Out, "  ollama:     %d/%d pods ready, %d restarts\n", oReady, len(ollamaPods.Items), oRestarts)
-	} else {
+	default:
 		fmt.Fprintln(a.Out, "  ollama:     not installed")
 	}
+	// Presence comes from the SAME fact the Governance section below uses —
+	// the proxy Deployment — or the two lines contradict each other for a
+	// plane that is installed and scaled to zero, and this one tells the
+	// operator to install what they already have.
 	switch {
 	case data.planeErr != "":
 		// Not "not installed": we could not look. Saying the plane is
 		// absent here would be the same false zero the governance counts
 		// below refuse to print.
 		fmt.Fprintf(a.Out, "  governance: unknown — %s\n", data.planeErr)
-	case len(planePods.Items) > 0:
+	case data.planeThere || len(planePods.Items) > 0:
 		fmt.Fprintf(a.Out, "  governance: %d/%d pods ready, %d restarts\n", pReady, len(planePods.Items), pRestarts)
 	default:
 		fmt.Fprintln(a.Out, "  governance: not installed (run `kmx plane` for budgets and audit)")

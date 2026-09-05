@@ -396,12 +396,60 @@ func TestAnUnreadableSeamURLIsUnresolvedNotDirect(t *testing.T) {
 // The cluster domain is not always cluster.local, and a cluster built with
 // another one resolves the same Service. Refusing it would report every
 // governed seam on that cluster as direct.
-func TestAnotherClusterDomainIsStillThePlane(t *testing.T) {
-	if classifySeam("http://kaimahi-proxy.kaimahi.svc.cluster.internal:8080/v1", planeProxyService) != seamGoverned {
-		t.Error("a non-default cluster domain was not recognised as the plane")
+func TestAnotherClusterDomainIsNotClaimedEitherWay(t *testing.T) {
+	if classifySeam("http://kaimahi-proxy.kaimahi.svc.cluster.internal:8080/v1", planeProxyService) != seamUnresolved {
+		t.Error("a non-default cluster domain was claimed rather than left unresolved")
 	}
-	// `svc` in the third label is what keeps that safe.
+	// `svc` in the third label is NOT enough on its own — see
+	// TestAnExternalHostWearingTheServiceNameIsNeverGoverned.
 	if classifySeam("http://kaimahi-proxy.kaimahi.evil.com/v1", planeProxyService) == seamGoverned {
 		t.Error("an external host wearing the Service's first two labels was counted as governed")
+	}
+}
+
+// The one direction of error that matters: a DIRECT seam reported as
+// governed. `kaimahi-proxy.kaimahi.svc.evil.com` is a registrable domain
+// anyone can own, and it wears the Service's first three labels. kmx cannot
+// tell it from the same Service under a non-default cluster domain, so it
+// claims neither.
+func TestAnExternalHostWearingTheServiceNameIsNeverGoverned(t *testing.T) {
+	for _, host := range []string{
+		"http://kaimahi-proxy.kaimahi.svc.evil.com/v1",
+		"http://kaimahi-proxy.kaimahi.svc.cluster.internal:8080/v1",
+	} {
+		if got := classifySeam(host, planeProxyService); got != seamUnresolved {
+			t.Errorf("%q classified as %q — a host kmx cannot place must be unresolved", host, got)
+		}
+	}
+	// The forms the cluster itself produces are still governed.
+	for _, host := range []string{
+		"http://kaimahi-proxy.kaimahi:8080/v1",
+		"http://kaimahi-proxy.kaimahi.svc:8080/v1",
+		"http://kaimahi-proxy.kaimahi.svc.cluster.local./v1",
+	} {
+		if got := classifySeam(host, planeProxyService); got != seamGoverned {
+			t.Errorf("%q classified as %q — the cluster's own DNS forms must be governed", host, got)
+		}
+	}
+	// And a plain lookalike is still plainly direct.
+	if got := classifySeam("http://kaimahi-proxy.kaimahi.evil.com/v1", planeProxyService); got != seamDirect {
+		t.Errorf("an unrelated host classified as %q", got)
+	}
+}
+
+// The Runtime line and the Governance section must decide the plane's
+// presence from the same fact, or a scaled-to-zero plane gets told to
+// install what it already has.
+func TestTheTwoPlaneLinesAgree(t *testing.T) {
+	d := &statusData{planeThere: true, planeDesired: 0}
+	if d.governanceOf().Plane.State != stateInstalled {
+		t.Fatal("the Governance section does not see the Deployment")
+	}
+	source, err := os.ReadFile("status.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(source), "case data.planeThere || len(planePods.Items) > 0:") {
+		t.Error("the Runtime governance line no longer decides presence from the Deployment")
 	}
 }

@@ -234,7 +234,7 @@ health across kagent/Ollama/the optional plane, pod restarts, next actions, and
 a **Governance** section that counts how much of the system is actually behind
 the plane:
 
-```
+```text
 Governance
   plane:        not installed — nothing is enforced in front of these seams (`kmx plane`)
   model seams:  0 of 2 agents governed, 2 direct
