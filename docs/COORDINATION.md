@@ -121,13 +121,14 @@ prefix.
 | CI: the e2e job takes ~15 min on every PR (D32) | W25 worker | PR #65 MERGED; coordinator verified 934s to 483s with all 62 assertion bodies byte-identical (delta sheet below) | lane closed | investigation-led: 934s over 68 serial steps, bring-up 186s, the model pull only 16s of it |
 | P14: the AP demo live on AKS (D33) | W26 worker | PR #83 MERGED; coordinator verified teardown, the scanner, the kind path unchanged and the render's fail-closed cases (delta sheet below) | lane closed; ap-injection not run verbatim on AKS — deviation accepted, see sheet |
 | `kmx` milestone 3 — the core plane verbs (D28(3), D33) | W27 worker | PR #81 MERGED; coordinator verified live — wait_switched carried, a destructive backup/restore round trip, approvals showing the call (delta sheet below) | lane closed |
-| W32: the release agent — Kaimahi's first real user (D38) | unassigned | SHAPED 2026-09-03 — prompt below; runs BEFORE W31 so that lane gets real friction |narrow agent: drafts and proposes, human approves, CI moves bytes; ADO via its official hosted MCP server |
-| W31: `create-kaimahi-agent` — nothing to a working agent, fast (D36, D37) | unassigned | SHAPED 2026-09-03 — prompt below; the D36 lane, highest priority | prerequisite and time reduction FIRST (5 prereqs, 5-10 min today); packaging second; MCP deferred |
+| W32: the release agent — Kaimahi's first real user (D38) | W32 worker | PR #95 MERGED (main 56c6efa) — ran before W31 as D38(4) ordered, and the friction it measured went into W31's prompt |narrow agent: drafts and proposes, human approves, CI moves bytes; ADO via its official hosted MCP server |
+| W31: `create-kaimahi-agent` — nothing to a working agent, fast (D36, D37) | W31 worker | PR #106 MERGED (main 95a4e1f) — **5 prerequisites become 1, 246s becomes 178s**; `install.sh` + `kmx quickstart` + a checksum-verifying toolchain provisioner | coordinator verification owed; the front door is now `curl \| sh` then one command, with no Go and no checkout |
 | W28: ship it — version, release, a published install path, a documented upgrade (D34, D35) | W28 worker | PR #85 MERGED (8e08603) — ran from the prompt handed over directly, because THIS ROW and D34/D35 were stranded on a squash-merged branch (see the recovery note in the open items) | coordinator verification owed |
 | W29: govern your own agent — the generic onboarding path (D35) | unassigned | SHAPED 2026-09-03 — prompt below; runs ALONE | the product-defining gap: nothing documents adding your own MCP server or governing an agent you already run |
 | W30: identity on the call, and credentials that expire (D35) | W30 worker | PR #86 MERGED (5f49235) — same: built from the handed-over prompt while its board record was stranded | coordinator verification owed |
 | W33: the lift — local agent to AKS in one path, with managed observability (D41) | unassigned | SHAPED 2026-09-03 — prompt below | mostly wiring, not building; must not put /metrics on a Service; teardown + spend mandatory |
-| W34: kmx tells the truth — the ungoverned count, and a version handshake | unassigned | SHAPED 2026-09-04 — prompt below | two findings from the W28/P15/W30 verification pass; deliberately a lane, not a coordinator PR |
+| W34: kmx tells the truth — the ungoverned count, and a version handshake | unassigned | **RE-SHAPED 2026-09-04** — prompt below, finding (b) TRIMMED because W35 (#107) solved it for one endpoint | two findings from the W28/P15/W30 verification pass; deliberately a lane, not a coordinator PR |
+| W35: a governed workflow, said once — the blueprint and one driver (D42) | W35 worker | PR #107 OPEN — prompt below; D42 ruled as staged option A | milestone 1 is an EQUIVALENCE test against the make targets, not "it works"; the driver keeps filing the approval itself (P13) |
 | Brand assets + architecture diagram + org/front-door plans | user-run lane (outside the board's prompt set) | PR #33 MERGED (+ kaimahi-agents/.github#1); main CI green | brand validator in the hygiene job |
 | README front door + CONTRIBUTING.md | user-run lane (outside the board's prompt set) | PR #34 MERGED; main CI green | anchored front-door checker in hygiene: section order enforced, no `npx kaimahi create` mention before the quickstart ends — PR #16's README hunk must land under "A scaffolder CLI: considered, not built" (was "Proposed CLI direction" until D23) |
 | CLI decisions + PR #16 review | user + coordinator | D19 ruled; coordinator review rounds done (2026-09-01/02) | not a build lane; parallelises with everything |
@@ -457,6 +458,14 @@ before it is written down anywhere public.
 
 ## Under consideration (not GO — do not build yet)
 
+"Not GO" is the DEFAULT for this section, not a property of every entry
+in it. An entry whose own heading records a ruling has been ruled, and
+that heading is authoritative over this one — D42 is the case today
+(ruled 2026-09-04, running as W35). Such an entry stays here only while
+its lane is unfinished, because the reasoning underneath is what the
+ruling rests on; it moves to the decisions table with its delta sheet.
+Everything without a ruling in its own heading is not GO.
+
 - **`make up` guard for governed agents** (W6 finding, 2026-09-01):
   `make up` re-applies `k8s/hello-world.yaml`, silently re-pointing the
   agent at the ungoverned model — governance quietly drops off after any
@@ -500,8 +509,13 @@ before it is written down anywhere public.
   needs explicit user approval (trademark counsel still owed on the name);
   (3) sequencing between P1 and P2 so P2 can extend the same scaffold.
 
-- **D42 (OPEN — needs a ruling): how a user expresses a governed
-  workflow.** Raised 2026-09-04 out of the W32 review: "if a user wanted
+- **D42 (RULED 2026-09-04 — staged option A; running as W35, PR #107):
+  how a user expresses a governed workflow.** Left filed under this
+  heading rather than moved, because the reasoning below is what the
+  ruling rests on and the lane is not finished; it moves to the
+  decisions table with its delta sheet.
+
+  Raised 2026-09-04 out of the W32 review: "if a user wanted
   to create this exact agent, what would that process look like" and then
   the sharper half — "how does a user clearly communicate that, or a
   slightly different scenario, when creating a new agent?" Everything
@@ -607,7 +621,19 @@ before it is written down anywhere public.
   glossing it. A blueprint that renders every step in one vocabulary
   would launder the distinction unless it marks it explicitly.
 
-  **Sequencing.** Not a lane yet, and deliberately after W31: the
+  **RULED 2026-09-04 as STAGED OPTION A, and running as W35 (PR #107).**
+  B is not the alternative to A, it is A's first milestone: the
+  governance becomes declarable and is proven EQUIVALENT to what the make
+  targets produce, and only then do the steps and the generic driver
+  arrive. Milestone 1 is worth shipping alone if milestone 2 cannot
+  absorb the seam-specific parts honestly. The prompt is below.
+
+  **Sequencing (satisfied).** #104 (Cobra) merged, and W31 merged as #106
+  — which changed the lane before it started: the front door is now
+  `curl | sh` then `kmx quickstart`, one prerequisite and no checkout, so
+  "a blueprint works from a released binary with no clone" was promoted
+  from a design question to a REQUIREMENT. The original reasoning, kept
+  because it is why the order was chosen: deliberately after W31, the
   blueprint's value depends on the runtime being cheap enough that anyone
   builds more than one workflow. #104 (Cobra routing) lands first, since
   a blueprint subcommand surface sits better on it. If ruled A, the lane
@@ -2963,7 +2989,7 @@ stacked bases; lane ends at PR-open-with-checks-green — do not merge.
 Report deviations in the PR.
 ```
 
-### W32 — the release agent: Kaimahi's first real user (UNASSIGNED — paste into a fresh CLI session; runs BEFORE W31)
+### W32 — the release agent: Kaimahi's first real user (RUN — merged as #95; kept as the record of what the lane was asked for)
 
 ```
 You are a worker session for the Kaimahi project (repo root: this
@@ -3057,7 +3083,7 @@ bases; lane ends at PR-open-with-checks-green — do not merge. Report
 deviations in the PR.
 ```
 
-### W31 — `create-kaimahi-agent`: from nothing to a working agent, fast (UNASSIGNED — paste into a fresh CLI session; the D36 lane)
+### W31 — `create-kaimahi-agent`: from nothing to a working agent, fast (RUN — merged as #106; the text below is the version handed over, which carried W32's measured friction as D38(4) intended)
 
 ```
 You are a worker session for the Kaimahi project (repo root: this
@@ -3592,13 +3618,26 @@ MORE important, not less, because the ungoverned path is now the default
 one and nothing tells you how much of your system is on it.
 
 **(b) A newer kmx against an older plane fails with `404 page not
-found`.** kmx from main validates an upstream table against an admin
-endpoint P15 added; a v0.1.0 plane does not serve it, so the CLI reports
-"the plane refused this upstream table — nothing has been applied: 404
-page not found". It fails CLOSED, which is right, and it never says the
-plane is too old. W28's upgrade probe covers plane-old to plane-new;
-nothing covers CLI-new against plane-old, which is the ordinary case for
-anyone who upgrades one and not the other.
+found` — NOW NARROWER THAN WHEN THIS LANE WAS SHAPED. READ THIS FIRST.**
+kmx from main validates an upstream table against an admin endpoint P15
+added; a v0.1.0 plane does not serve it, so the CLI reports "the plane
+refused this upstream table — nothing has been applied: 404 page not
+found". It fails CLOSED, which is right, and it never says the plane is
+too old. W28's upgrade probe covers plane-old to plane-new; nothing
+covers CLI-new against plane-old, which is the ordinary case for anyone
+who upgrades one and not the other.
+
+**W35 (#107) has since solved this for ONE endpoint**, and you must read
+what it did before writing anything: a plane that does not return
+`table_declared` from `/admin/validate` now produces "The plane is older
+than this kmx. Upgrade it: kmx plane" instead of a bare failure. So your
+job is NOT to redo that. It is the GENERAL policy that case was decided
+without: how kmx learns the plane's version rather than inferring age
+from one missing field, and what happens across the whole admin surface
+rather than at the one endpoint that happened to be extended. If your
+design would make W35's message redundant, say so and replace it; if it
+would sit beside it, say why two mechanisms are right. Do not leave two
+half-answers.
 
 Design decisions this lane owns — make them, justify them in the PR, and
 expect them to outlive the fix:
@@ -3641,6 +3680,139 @@ than reporting zero; and a new kmx against a deliberately older plane
 producing a message that names the version problem and the fix. Branch
 from current main; PR targets main; no stacked bases; lane ends at
 PR-open-with-checks-green — do not merge. Report deviations in the PR.
+```
+
+### W35 — a governed workflow, said once: the blueprint and one driver (RUN — open as #107; D42 ruled as staged option A)
+
+```
+You are a worker session for the Kaimahi project (repo root: this
+checkout, remote kaimahi-agents/kaimahi). Read docs/COORDINATION.md
+first — D27, D29, D31, D36, D38, D42 and the security standing guidance
+bind you, and the W32 delta sheet is the ground truth for what you are
+generalising. Your lane implements D42 as STAGED OPTION A: declarative
+governance first, the step vocabulary and generic driver second.
+
+The finding you are fixing is in D42 and reproduced; do not rediscover
+it. W32 works, and it is unrepeatable: its intent is spread over four
+layers — the drill in `k8s/release-agent.yaml`'s systemMessage,
+`toolNames` on the same CRD, the policy in `k8s/plane/upstreams.yaml`
+plus `release-allow`/`release-bind`, and 544 lines of
+`scripts/release-run.sh`. `kmx agent create` reaches neither of the last
+two. A user who wants a slightly different workflow has no interface.
+
+**W31 JUST MERGED (#106) AND IT CHANGES YOUR GROUND. Read it before you
+design.** D42 sequenced this lane after W31 precisely so you would build
+on what it produced:
+- **The front door is now `curl | sh` (`install.sh`) then `kmx
+  quickstart`** — ONE prerequisite, a container engine, no Go and no
+  checkout. 178s to a first answer.
+- **Which makes the clone your lane's central risk.** kmx's clone-free
+  property now runs all the way to a working agent; W32's workflow layer
+  is `make` targets in a checkout. If your blueprint needs a clone, W35
+  becomes the single reason an adopter has to git-clone anything.
+  **Treat "a blueprint works from a released binary with no checkout" as
+  a requirement, not a nice-to-have**, and if you cannot get there, say
+  exactly what blocks it.
+- **`kmx quickstart` deploys the hello-world agent only** — a
+  first-answer profile, not the full `kmx up`. Do not assume the tools
+  server, the second agent or the plane exist. The real onboarding
+  sequence is quickstart -> plane -> govern -> your blueprint; keep it
+  whole and say what it costs end to end.
+- **`internal/kmx/toolchain/` is your precedent for anything fetched at
+  run time**: download, checksum-verify, cache, with `KMX_TOOLCHAIN=off`
+  to opt out. Relevant because W32's publish step uses the operator's own
+  `az` and `gh`. Decide whether the driver provisions those the same way
+  or requires them, follow the opt-out convention either way, and justify
+  it.
+- **Commands are Cobra, in `cmd/kmx/commands.go` (#104).** Add there.
+  Reuse the expanded `internal/kmx/app/preflight.go` rather than writing
+  new readiness checks.
+- **CI now asserts a clean-runner time ceiling on quickstart.** Do not
+  regress it.
+
+**MILESTONE 1 — the governance is declarable, and provably identical.**
+One file expresses a workflow's seams and their policy: which upstreams,
+which tools are allowlisted, which argument fields are policy-relevant
+(`policy_fields`), and which standing constraints bound them. kmx
+consumes it and writes the overlay ConfigMap fragment, the credential
+allowlist and the constraints — through P15's overlay mechanism, which
+merges per name and refuses collisions, because `make plane` reapplies
+the base table and a binding that vanishes on redeploy is worse than
+none (`scripts/release-bind.sh` says why).
+
+The acceptance test is not "it works", it is EQUIVALENCE: express W32's
+governance as a blueprint, apply it to a clean cluster, and diff the
+resulting overlay ConfigMap, allowlist and constraints against what
+`make govern-release` + `make release-allow` + `make release-bind`
+produce. Identical, or the milestone is not done. Put the diff in the PR.
+
+**MILESTONE 2 — the steps, and one generic driver.** Ordered steps, each
+marked read / propose / consequential, executed by one driver so
+`release-run.sh` becomes a blueprint plus that driver. Non-negotiable
+properties, all of which release-run.sh has and any replacement must
+keep:
+- **The driver files the approval request itself**, for the exact call
+  the operator named, and refuses to continue if the agent proposed
+  something else. This is the P13 property: a model proposing a
+  different call files a request that looks identical in `make
+  approvals`. A blueprint must not be able to express "the agent
+  decides". If your design cannot enforce this, stop and say so.
+- Polling with a timeout, step resumption (`STEP=`), and credential
+  refresh mid-run — the Entra token lives about an hour and stranded
+  W32's first real run twice.
+- The driver keeps its own admin port, because the operator's `make
+  approve` needs the default one. W32 found that the hard way.
+
+Acceptance: reproduce a W32 release run from a blueprint — same
+approvals filed, same digests, same audit rows — with `DRY_RUN=1` in CI
+and one real run recorded in the PR if you have a repository to cut on.
+
+**Design decisions this lane owns.** Make them, justify them in the PR,
+expect them to outlive the code:
+- **The step vocabulary**, and whether a step may be a non-tool action.
+  There is precedent: `upstreams.yaml` already declares `release_publish`,
+  which no MCP server offers, purely so its approval is bound and legible
+  like every tool call's. Follow it or argue against it.
+- **Arguments known only at run time.** The publish step binds build ids
+  produced by an earlier step. Say how the blueprint expresses that
+  without letting the agent supply the value being approved.
+- **Blueprint versus cluster disagreement** — a constraint edited by
+  hand, or a blueprint reapplied over a changed one. Applied
+  imperatively, or reconciled? Say which and what it does on conflict.
+- **Where a blueprint lives, given no checkout.** W32's names a real
+  repository and a real Azure DevOps project, and both are operator
+  config that must not be committed (`release-bind.sh` explains the
+  rule). A path argument, a well-known location, and a fetched-and-
+  verified URL all have different failure modes; pick one and say why.
+
+**Guardrails, all hard.** kmx accepts no credential material (D27) — a
+blueprint NAMES Secrets and never carries tokens, and this is the
+guardrail most likely to be bent by a format that wants to be
+self-contained. No Azure or Slack identifiers in the tree. Nothing
+weakens the four layers that make destructive operations impossible
+(server-side tool exclusion, the gateway's upstream table, the
+allowlist, GitHub's own missing force-update). The ungoverned step stays
+marked: `release-publish.sh` moves 1.28 GB with the operator's own `az`
+and `gh`, outside the gateway — the DECISION is governed, the TRANSFER
+is not, and W32 writes that down rather than glossing it. A blueprint
+that renders every step in one vocabulary launders that unless it marks
+it explicitly.
+
+**CI stays keyless (D14).** Unit tests for blueprint parsing and refusal
+cases; the milestone-1 equivalence diff as a test, not a transcript; the
+driver's approval-filing and its agent-proposed-something-else refusal
+exercised against the synthetic upstream, which already exists.
+
+**The honest-failure clause, and it is not a formality.** If the generic
+driver cannot absorb W32's seam-specific parts without becoming a
+special case per seam, the lane's deliverable is milestone 1 plus that
+finding WITH specifics — which parts resisted and why. Milestone 1
+stands alone and is worth shipping alone. A half-general driver is worse
+than an honest bespoke one, and D42 says so before you start.
+
+Branch from current main; PR targets main; no stacked bases; lane ends
+at PR-open-with-checks-green — do not merge. Report every deviation in
+the PR.
 ```
 
 ## Delta sheets from finished lanes
