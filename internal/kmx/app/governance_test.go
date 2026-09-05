@@ -57,7 +57,7 @@ func TestPlaneHostAcceptsEveryServiceFormAndNothingElse(t *testing.T) {
 		"https://KAIMAHI-PROXY.KAIMAHI.svc.cluster.local/v1",
 	}
 	for _, url := range governed {
-		if !planeHost(url, planeProxyService) {
+		if classifySeam(url, planeProxyService) != seamGoverned {
 			t.Errorf("%q is the plane's proxy and was not counted as governed", url)
 		}
 	}
@@ -70,7 +70,7 @@ func TestPlaneHostAcceptsEveryServiceFormAndNothingElse(t *testing.T) {
 		"http://10.0.0.5:8080/v1",
 	}
 	for _, url := range direct {
-		if planeHost(url, planeProxyService) {
+		if classifySeam(url, planeProxyService) == seamGoverned {
 			t.Errorf("%q is not the plane and was counted as governed", url)
 		}
 	}
@@ -95,8 +95,11 @@ func TestModelSeamsRefuseToCallADanglingReferenceDirect(t *testing.T) {
 	if got.Direct != 0 || got.Unresolved != 1 {
 		t.Fatalf("a dangling ModelConfig was resolved anyway: %+v", got)
 	}
-	if !strings.Contains(got.Reason, "orphan→gone") {
-		t.Errorf("the reason does not name the dangling pair: %q", got.Reason)
+	if len(got.UnresolvedRefs) != 1 || !strings.Contains(got.UnresolvedRefs[0], "orphan→gone") {
+		t.Errorf("the unresolved reference is not named: %v", got.UnresolvedRefs)
+	}
+	if got.Reason != "" {
+		t.Errorf("`reason` belongs to an unknown population, not a counted one: %q", got.Reason)
 	}
 	if line := seamLine(got, "agents", "agent"); !strings.Contains(line, "1 unknown") {
 		t.Errorf("the printed line hides the unknown: %q", line)
@@ -154,7 +157,7 @@ func TestCredentialsCountOnlyWhatGovernedSeamsName(t *testing.T) {
 	}
 	servers := []toolServerStatus{serverAt("kaimahi-tools", governedToolURL, "kaimahi-tools-token")}
 
-	got := credentialSeams(models, servers, []string{"kaimahi-governed-token", "openai-key"}, "")
+	got := credentialSeams(models, servers, []string{"kaimahi-governed-token", "openai-key"}, "", "")
 	if got.Required != 2 || got.Present != 1 || len(got.Missing) != 1 || got.Missing[0] != "kaimahi-tools-token" {
 		t.Fatalf("credential population wrong: %+v", got)
 	}
@@ -169,7 +172,7 @@ func TestCredentialsCountOnlyWhatGovernedSeamsName(t *testing.T) {
 }
 
 func TestCredentialsAreNoneWhenNoGovernedSeamNamesOne(t *testing.T) {
-	got := credentialSeams([]modelStatus{modelAt("ollama", "", "")}, nil, nil, "")
+	got := credentialSeams([]modelStatus{modelAt("ollama", "", "")}, nil, nil, "", "")
 	if got.State != stateNone {
 		t.Fatalf("no governed seam should be `none`, got %+v", got)
 	}
@@ -178,14 +181,35 @@ func TestCredentialsAreNoneWhenNoGovernedSeamNamesOne(t *testing.T) {
 	}
 }
 
-func TestCredentialsAreUnknownWhenTheToolSeamsCouldNotBeRead(t *testing.T) {
+// An unreadable tool-seam population must not throw away the model half's
+// answer. A token that is genuinely, knowably missing is worth more than a
+// tidy `unknown` — so the count is published and MARKED PARTIAL.
+func TestCredentialsStayPartialRatherThanLoseTheCountableHalf(t *testing.T) {
 	d := &statusData{serverErr: "connection refused"}
-	if reason := credentialReason(d); reason == "" {
-		t.Fatal("an unreadable tool-seam population left the credential count claiming to be complete")
+	d.models.Items = []modelStatus{modelAt("governed-ollama", governedModelURL, "kaimahi-governed-token")}
+	got := d.governanceOf().Credentials
+	if got.State != stateCounted || !got.Partial {
+		t.Fatalf("expected a partial count, got %+v", got)
 	}
-	got := credentialSeams(nil, nil, nil, credentialReason(d))
+	if len(got.Missing) != 1 || got.Missing[0] != "kaimahi-governed-token" {
+		t.Fatalf("the knowably-missing credential was dropped: %+v", got)
+	}
+	if line := credentialLine(got); !strings.Contains(line, "partial") {
+		t.Errorf("the line does not say the count is partial: %q", line)
+	}
+}
+
+// A Secret listing that FAILED is the case where nothing can be said. An
+// empty list would otherwise become a confident accusation naming Secrets
+// that may well exist.
+func TestCredentialsAreUnknownWhenTheSecretsCouldNotBeListed(t *testing.T) {
+	models := []modelStatus{modelAt("governed-ollama", governedModelURL, "kaimahi-governed-token")}
+	got := credentialSeams(models, nil, nil, "Error from server (Forbidden): secrets is forbidden", "")
 	if got.State != stateUnknown {
 		t.Fatalf("expected unknown, got %+v", got)
+	}
+	if len(got.Missing) != 0 {
+		t.Errorf("an unreadable listing accused specific Secrets: %+v", got.Missing)
 	}
 }
 
@@ -198,7 +222,7 @@ func TestGovernanceWithNoPlaneSaysSoAndStillCounts(t *testing.T) {
 	d.models.Items = []modelStatus{modelAt("ollama", "", "")}
 	d.servers.Items = []toolServerStatus{serverAt("kagent-tool-server", directToolURL, "")}
 
-	g := d.governance()
+	g := d.governanceOf()
 	if g.Plane.State != stateNone {
 		t.Fatalf("no plane pods should read as none: %+v", g.Plane)
 	}
@@ -217,7 +241,7 @@ func TestGovernanceWithNoPlaneSaysSoAndStillCounts(t *testing.T) {
 // not read.
 func TestGovernanceCannotTellIsNotNotInstalled(t *testing.T) {
 	d := &statusData{planeErr: "Error from server (Forbidden): pods is forbidden"}
-	g := d.governance()
+	g := d.governanceOf()
 	if g.Plane.State != stateUnknown {
 		t.Fatalf("an unreadable plane namespace was reported as absent: %+v", g.Plane)
 	}
@@ -240,15 +264,12 @@ func TestGovernanceWithAPlaneCountsGovernedSeams(t *testing.T) {
 		serverAt("kagent-tool-server", directToolURL, ""),
 	}
 	d.secrets = []string{"kaimahi-governed-token", "kaimahi-tools-token"}
-	var pod podStatus
-	pod.Metadata.Name = "kaimahi-proxy-0"
-	pod.Status.Conditions = []statusCondition{{Type: "Ready", Status: "True"}}
-	d.planePods.Items = []podStatus{pod}
+	d.planeThere, d.planeDesired, d.planeReady = true, 1, 1
 
 	var out bytes.Buffer
-	writeGovernance(&out, d.governance())
+	writeGovernance(&out, d.governanceOf())
 	text := out.String()
-	for _, want := range []string{"installed (1/1 pods ready)", "1 of 2 agents governed, 1 direct", "1 of 2 tool servers governed, 1 direct", "2 of 2 present"} {
+	for _, want := range []string{"installed (1/1 replicas ready)", "1 of 2 agents governed, 1 direct", "1 of 2 tool servers governed, 1 direct", "2 of 2 present"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)
 		}
@@ -284,7 +305,7 @@ func TestEveryStatusReadIsBounded(t *testing.T) {
 // A fully qualified Service name may carry the root's trailing dot. Reading
 // it as a different host would overstate the ungoverned count.
 func TestPlaneHostAcceptsTheRootDot(t *testing.T) {
-	if !planeHost("http://kaimahi-proxy.kaimahi.svc.cluster.local.:8080/v1", planeProxyService) {
+	if classifySeam("http://kaimahi-proxy.kaimahi.svc.cluster.local.:8080/v1", planeProxyService) != seamGoverned {
 		t.Error("a fully qualified name with the root dot was not recognised as the plane")
 	}
 }
@@ -292,8 +313,8 @@ func TestPlaneHostAcceptsTheRootDot(t *testing.T) {
 // The finding, in the wire format: a population nobody could read must not
 // hand a parser a zero it did not count.
 func TestUnknownPopulationsPublishNoCounts(t *testing.T) {
-	d := &statusData{serverErr: "Forbidden", planeErr: "Forbidden"}
-	raw, err := json.Marshal(d.governance())
+	d := &statusData{serverErr: "Forbidden", planeErr: "Forbidden", secretErr: "Forbidden"}
+	raw, err := json.Marshal(d.governanceOf())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,5 +338,70 @@ func TestUnknownPopulationsPublishNoCounts(t *testing.T) {
 	raw, _ = json.Marshal(counted)
 	if !strings.Contains(string(raw), `"governed":0`) {
 		t.Errorf("a known-zero population dropped its counts: %s", raw)
+	}
+}
+
+// A plane scaled to zero is INSTALLED and DOWN, not absent. Telling that
+// operator to run `kmx plane` would be a false absence and the wrong
+// instruction — and it would sit next to "1 of 2 agents governed", which
+// only makes sense if a plane exists.
+func TestAPlaneWithNoPodsIsInstalledAndDownNotAbsent(t *testing.T) {
+	// Scaled to zero, with Postgres still running in the same namespace —
+	// the case that would read "1/1 pods ready" if the namespace's pods
+	// were counted instead of the proxy Deployment's replicas.
+	var postgres podStatus
+	postgres.Metadata.Name = "kaimahi-postgres-0"
+	postgres.Status.Conditions = []statusCondition{{Type: "Ready", Status: "True"}}
+	d := &statusData{planeThere: true, planeDesired: 0, planeReady: 0}
+	d.planePods.Items = []podStatus{postgres}
+	g := d.governanceOf()
+	if g.Plane.State != stateInstalled || g.Plane.Ready != 0 {
+		t.Fatalf("a scaled-to-zero plane was not reported as installed and down: %+v", g.Plane)
+	}
+	var out bytes.Buffer
+	writeGovernance(&out, g)
+	text := out.String()
+	if !strings.Contains(text, "SCALED TO ZERO") || strings.Contains(text, "not installed") {
+		t.Errorf("a plane that is down reads as never deployed:\n%s", text)
+	}
+
+	// Desired replicas that are all unready is the other half of down.
+	down := (&statusData{planeThere: true, planeDesired: 2}).governanceOf()
+	out.Reset()
+	writeGovernance(&out, down)
+	if !strings.Contains(out.String(), "installed but DOWN (0/2 replicas ready)") {
+		t.Errorf("an unready plane reads as healthy:\n%s", out.String())
+	}
+}
+
+// A seam whose destination cannot be read is unresolved, not direct.
+// Counting it direct would be a confident claim built from a failed read.
+func TestAnUnreadableSeamURLIsUnresolvedNotDirect(t *testing.T) {
+	// A schemeless authority: Go parses this as a scheme with an opaque
+	// body and no host at all.
+	servers := []toolServerStatus{serverAt("bare", "kaimahi-mcp-gateway.kaimahi:8081/mcp", "")}
+	got := toolSeams(servers, "")
+	if got.Direct != 0 || got.Unresolved != 1 {
+		t.Fatalf("an unreadable URL was classified anyway: %+v", got)
+	}
+	if len(got.UnresolvedRefs) != 1 || !strings.Contains(got.UnresolvedRefs[0], "bare") {
+		t.Errorf("the unresolved server is not named: %v", got.UnresolvedRefs)
+	}
+	// A RemoteMCPServer with no URL at all is the same kind of unknown.
+	if got := toolSeams([]toolServerStatus{serverAt("empty", "", "")}, ""); got.Unresolved != 1 {
+		t.Errorf("a URL-less tool server was classified: %+v", got)
+	}
+}
+
+// The cluster domain is not always cluster.local, and a cluster built with
+// another one resolves the same Service. Refusing it would report every
+// governed seam on that cluster as direct.
+func TestAnotherClusterDomainIsStillThePlane(t *testing.T) {
+	if classifySeam("http://kaimahi-proxy.kaimahi.svc.cluster.internal:8080/v1", planeProxyService) != seamGoverned {
+		t.Error("a non-default cluster domain was not recognised as the plane")
+	}
+	// `svc` in the third label is what keeps that safe.
+	if classifySeam("http://kaimahi-proxy.kaimahi.evil.com/v1", planeProxyService) == seamGoverned {
+		t.Error("an external host wearing the Service's first two labels was counted as governed")
 	}
 }

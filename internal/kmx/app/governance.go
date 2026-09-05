@@ -22,16 +22,17 @@ import (
 //
 //  1. **The test is local.** A seam is governed when it POINTS AT the
 //     plane's Service. That is read off the cluster objects themselves, so
-//     the count works with no plane, no credential and no network — which
-//     is the whole point of a command people run when something is wrong.
-//     It is a claim about wiring, never about a plane answering: the plane
-//     line beside the counts is what says whether anything is actually in
-//     front of them.
+//     it needs no plane, no plane credential and nothing off the cluster —
+//     only the API server `kmx status` was already talking to. It is a
+//     claim about wiring, never about a plane answering: the plane line
+//     beside the counts is what says whether anything is actually in front
+//     of them.
 //
 //  2. **A zero is never invented.** W30 fixed the vocabulary for exactly
 //     this on `acted_for`: `none` is a known nothing, `unknown` is "we
-//     cannot say". A missing CRD, an RBAC denial or a dangling ModelConfig
-//     reference produces `unknown` with the reason, never "0 governed".
+//     cannot say". A population that could not be listed, a URL that could
+//     not be read and a dangling ModelConfig reference each get counted as
+//     what they are — never folded into "0 governed" or into "direct".
 
 // The plane's in-cluster seams, mirrored from k8s/plane/proxy.yaml: the
 // model seam is the proxy, the tool seam is the MCP gateway. They are
@@ -41,15 +42,30 @@ const (
 	planeNamespace      = "kaimahi"
 	planeProxyService   = "kaimahi-proxy"
 	planeGatewayService = "kaimahi-mcp-gateway"
+	// planeWorkload is the Deployment k8s/plane/proxy.yaml creates. The
+	// plane is INSTALLED when this exists — not when a pod happens to be
+	// running, because a scaled-to-zero or mid-rollout plane is a plane
+	// that is down, which is a different fact from one that was never
+	// deployed and a different thing to tell an operator to do about it.
+	planeWorkload = "kaimahi-proxy"
 )
 
-// The three answers a population can carry. `none` and `unknown` are W30's
-// words, kept rather than reinvented.
+// The answers a population can carry. `none` and `unknown` are W30's words,
+// kept rather than reinvented.
 const (
 	stateCounted   = "counted"
 	stateNone      = "none"
 	stateUnknown   = "unknown"
 	stateInstalled = "installed"
+)
+
+// How one seam classified. `unresolved` is the third answer rule 2 requires:
+// a seam whose destination could not be read is not a seam pointing
+// elsewhere.
+const (
+	seamGoverned   = "governed"
+	seamDirect     = "direct"
+	seamUnresolved = "unresolved"
 )
 
 // seamPopulation counts one KIND of governable thing. Agents, tool servers
@@ -59,14 +75,20 @@ const (
 type seamPopulation struct {
 	// State is counted, none (nothing of this kind exists) or unknown.
 	State string `json:"state"`
-	// Total, Governed and Direct are meaningful only when State is
-	// counted; Unresolved counts members whose seam could not be read —
-	// they are excluded from Governed and Direct rather than assumed.
+	// Total, Governed and Direct are meaningful only when State is counted
+	// or none; Unresolved counts members whose seam could not be read —
+	// they are excluded from Governed and Direct rather than assumed, and
+	// UnresolvedRefs names them.
 	Total      int `json:"total"`
 	Governed   int `json:"governed"`
 	Direct     int `json:"direct"`
 	Unresolved int `json:"unresolved"`
-	// Reason says why, whenever State is unknown or Unresolved is not 0.
+	// UnresolvedRefs names what could not be resolved, one entry per member
+	// counted in Unresolved.
+	UnresolvedRefs []string `json:"unresolvedRefs,omitempty"`
+	// Reason belongs to State unknown and to nothing else — a counted
+	// population explains itself through UnresolvedRefs, so a consumer
+	// never has to decide which meaning a `reason` carries.
 	Reason string `json:"reason,omitempty"`
 }
 
@@ -78,17 +100,28 @@ type credentialPopulation struct {
 	State    string   `json:"state"`
 	Required int      `json:"required"`
 	Present  int      `json:"present"`
-	Missing  []string `json:"missing,omitempty"`
-	Reason   string   `json:"reason,omitempty"`
+	Missing  []string `json:"missing"`
+	// Partial marks a count taken over only part of the population — one
+	// half of the seams could not be listed, so what they require is not in
+	// Required. The count that WAS taken is still published, because
+	// throwing away a countable half to report `unknown` would hide a
+	// missing credential that is genuinely known to be missing.
+	Partial bool   `json:"partial,omitempty"`
+	Reason  string `json:"reason,omitempty"`
 }
 
 // planePresence is whether anything is in front of the governed seams.
 type planePresence struct {
 	// State is installed, none (no plane on this cluster) or unknown.
-	State  string `json:"state"`
-	Ready  int    `json:"ready"`
-	Pods   int    `json:"pods"`
-	Reason string `json:"reason,omitempty"`
+	State string `json:"state"`
+	// Ready and Desired are the PROXY Deployment's replicas, not the
+	// namespace's pods: the plane's namespace also holds Postgres, and
+	// counting that would report a proxy scaled to zero as "1/1 ready".
+	// An installed plane with nothing ready is DOWN, and saying "not
+	// installed" about it would be the same false absence rule 2 forbids.
+	Ready   int    `json:"ready"`
+	Desired int    `json:"desired"`
+	Reason  string `json:"reason,omitempty"`
 }
 
 // governance is the whole answer, and the shape `-o json` publishes.
@@ -108,12 +141,12 @@ type governance struct {
 // they are a counted fact.
 func (p seamPopulation) MarshalJSON() ([]byte, error) {
 	type counted struct {
-		State      string `json:"state"`
-		Total      int    `json:"total"`
-		Governed   int    `json:"governed"`
-		Direct     int    `json:"direct"`
-		Unresolved int    `json:"unresolved"`
-		Reason     string `json:"reason,omitempty"`
+		State          string   `json:"state"`
+		Total          int      `json:"total"`
+		Governed       int      `json:"governed"`
+		Direct         int      `json:"direct"`
+		Unresolved     int      `json:"unresolved"`
+		UnresolvedRefs []string `json:"unresolvedRefs,omitempty"`
 	}
 	type bare struct {
 		State  string `json:"state"`
@@ -122,7 +155,7 @@ func (p seamPopulation) MarshalJSON() ([]byte, error) {
 	if p.State == stateUnknown {
 		return json.Marshal(bare{State: p.State, Reason: p.Reason})
 	}
-	return json.Marshal(counted{p.State, p.Total, p.Governed, p.Direct, p.Unresolved, p.Reason})
+	return json.Marshal(counted{p.State, p.Total, p.Governed, p.Direct, p.Unresolved, p.UnresolvedRefs})
 }
 
 func (p credentialPopulation) MarshalJSON() ([]byte, error) {
@@ -130,7 +163,8 @@ func (p credentialPopulation) MarshalJSON() ([]byte, error) {
 		State    string   `json:"state"`
 		Required int      `json:"required"`
 		Present  int      `json:"present"`
-		Missing  []string `json:"missing,omitempty"`
+		Missing  []string `json:"missing"`
+		Partial  bool     `json:"partial,omitempty"`
 		Reason   string   `json:"reason,omitempty"`
 	}
 	type bare struct {
@@ -140,14 +174,19 @@ func (p credentialPopulation) MarshalJSON() ([]byte, error) {
 	if p.State == stateUnknown {
 		return json.Marshal(bare{State: p.State, Reason: p.Reason})
 	}
-	return json.Marshal(counted{p.State, p.Required, p.Present, p.Missing, p.Reason})
+	missing := p.Missing
+	if missing == nil {
+		// Always a list, never null: `missing` is read by iterating it.
+		missing = []string{}
+	}
+	return json.Marshal(counted{p.State, p.Required, p.Present, missing, p.Partial, p.Reason})
 }
 
 func (p planePresence) MarshalJSON() ([]byte, error) {
 	type counted struct {
-		State string `json:"state"`
-		Ready int    `json:"ready"`
-		Pods  int    `json:"pods"`
+		State   string `json:"state"`
+		Ready   int    `json:"ready"`
+		Desired int    `json:"desired"`
 	}
 	type bare struct {
 		State  string `json:"state"`
@@ -156,40 +195,49 @@ func (p planePresence) MarshalJSON() ([]byte, error) {
 	if p.State == stateUnknown {
 		return json.Marshal(bare{State: p.State, Reason: p.Reason})
 	}
-	return json.Marshal(counted{p.State, p.Ready, p.Pods})
+	return json.Marshal(counted{p.State, p.Ready, p.Desired})
 }
 
-// planeHost reports whether a URL's host is the named plane Service.
+// classifySeam says where one seam points: at the plane, somewhere else, or
+// somewhere that could not be read.
+//
+// The third answer is not pedantry. A URL kmx cannot parse — empty, or an
+// authority with no scheme, which Go reads as a scheme with an opaque body
+// and no host at all — is a seam whose destination is unknown, and counting
+// it `direct` would be a confident claim built from a failed read.
+func classifySeam(rawURL, service string) string {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		// An absent field is a positive fact for a ModelConfig: the
+		// provider's own seam, not the plane's. Callers that cannot tell
+		// absence from unreadable pass a non-empty value.
+		return seamDirect
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Hostname() == "" {
+		return seamUnresolved
+	}
+	if planeHost(parsed.Hostname(), service) {
+		return seamGoverned
+	}
+	return seamDirect
+}
+
+// planeHost reports whether a host is the named plane Service.
 //
 // kagent resolves these through the cluster DNS, so every form of the same
 // Service has to count: `svc.ns`, `svc.ns.svc` and the fully qualified
-// `svc.ns.svc.cluster.local`, with or without a port. Anything else — a
-// vendor endpoint, another namespace, an IP — is not the plane, and saying
-// so is the point of the count.
-func planeHost(rawURL, service string) bool {
-	if strings.TrimSpace(rawURL) == "" {
-		return false
-	}
-	parsed, err := url.Parse(strings.TrimSpace(rawURL))
-	if err != nil {
-		return false
-	}
-	// A fully qualified name may carry the root's trailing dot; it is the
-	// same Service, so it must not read as a different one.
-	host := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
-	labels := strings.Split(host, ".")
+// `svc.ns.svc.<cluster domain>`, with or without the root's trailing dot.
+// The cluster domain is NOT pinned to cluster.local — a cluster built with
+// another one resolves the same Service, and refusing it would report every
+// governed seam on that cluster as direct. `svc` in the third label is what
+// makes this safe: `kaimahi-proxy.kaimahi.evil.com` does not have it.
+func planeHost(host, service string) bool {
+	labels := strings.Split(strings.TrimSuffix(strings.ToLower(host), "."), ".")
 	if len(labels) < 2 || labels[0] != service || labels[1] != planeNamespace {
 		return false
 	}
-	switch len(labels) {
-	case 2:
-		return true
-	case 3:
-		return labels[2] == "svc"
-	case 5:
-		return labels[2] == "svc" && labels[3] == "cluster" && labels[4] == "local"
-	}
-	return false
+	return len(labels) == 2 || labels[2] == "svc"
 }
 
 // modelSeams counts agents by where their model calls actually go.
@@ -198,6 +246,13 @@ func planeHost(rawURL, service string) bool {
 // whose ModelConfig is not on the cluster is UNRESOLVED, not ungoverned:
 // the object it points at is missing, and "direct" would be a claim about
 // a seam nobody can read.
+//
+// Only spec.openAI.baseUrl is consulted, which is exact today and is pinned
+// by more than convention: `kmx govern` routes the model seam through the
+// proxy by applying an OpenAI-shaped preset (k8s/models/governed-*.yaml),
+// and there is no other governed model route. A ModelConfig on another
+// provider therefore IS direct rather than unclassified. The day the plane
+// gains a non-OpenAI upstream, this is the function that has to learn it.
 func modelSeams(agents []agentStatus, models []modelStatus) seamPopulation {
 	byName := make(map[string]modelStatus, len(models))
 	for _, model := range models {
@@ -208,25 +263,27 @@ func modelSeams(agents []agentStatus, models []modelStatus) seamPopulation {
 		population.State = stateNone
 		return population
 	}
-	var dangling []string
 	for _, agent := range agents {
 		name := strings.TrimSpace(agent.Spec.Declarative.ModelConfig)
 		model, ok := byName[name]
 		if !ok {
 			population.Unresolved++
-			dangling = append(dangling, fmt.Sprintf("%s→%s", agent.Metadata.Name, valueOr(name, "(none)")))
+			population.UnresolvedRefs = append(population.UnresolvedRefs,
+				fmt.Sprintf("%s→%s", agent.Metadata.Name, valueOr(name, "(none)")))
 			continue
 		}
-		if planeHost(model.Spec.OpenAI.BaseURL, planeProxyService) {
+		switch classifySeam(model.Spec.OpenAI.BaseURL, planeProxyService) {
+		case seamGoverned:
 			population.Governed++
-		} else {
+		case seamUnresolved:
+			population.Unresolved++
+			population.UnresolvedRefs = append(population.UnresolvedRefs,
+				fmt.Sprintf("%s→%s (unreadable baseUrl)", agent.Metadata.Name, name))
+		default:
 			population.Direct++
 		}
 	}
-	if len(dangling) > 0 {
-		sort.Strings(dangling)
-		population.Reason = "no ModelConfig on this cluster for " + strings.Join(dangling, ", ")
-	}
+	sort.Strings(population.UnresolvedRefs)
 	return population
 }
 
@@ -242,30 +299,45 @@ func toolSeams(servers []toolServerStatus, reason string) seamPopulation {
 		return population
 	}
 	for _, server := range servers {
-		if planeHost(server.Spec.URL, planeGatewayService) {
+		// A RemoteMCPServer with no URL is not a server pointing elsewhere;
+		// it is one whose destination cannot be read.
+		switch classifySeam(valueOr(server.Spec.URL, "-"), planeGatewayService) {
+		case seamGoverned:
 			population.Governed++
-		} else {
+		case seamUnresolved:
+			population.Unresolved++
+			population.UnresolvedRefs = append(population.UnresolvedRefs,
+				server.Metadata.Name+" (unreadable url)")
+		default:
 			population.Direct++
 		}
 	}
+	sort.Strings(population.UnresolvedRefs)
 	return population
 }
 
 // credentialSeams checks that every Secret the governed seams name is
 // actually there. `present` is the list of Secret NAMES in the namespace —
 // no value is read, and none is needed to answer this.
-func credentialSeams(models []modelStatus, servers []toolServerStatus, present []string, reason string) credentialPopulation {
-	if reason != "" {
-		return credentialPopulation{State: stateUnknown, Reason: reason}
+//
+// secretErr means the Secrets could not be listed at all, which makes the
+// whole answer unknown: an empty list would otherwise become a confident
+// accusation naming Secrets that may well exist. seamErr means one half of
+// the seams could not be listed, which makes the answer PARTIAL — what the
+// other half requires is still known, and a genuinely missing token is
+// worth more than a tidy `unknown`.
+func credentialSeams(models []modelStatus, servers []toolServerStatus, present []string, secretErr, seamErr string) credentialPopulation {
+	if secretErr != "" {
+		return credentialPopulation{State: stateUnknown, Reason: secretErr}
 	}
 	required := map[string]bool{}
 	for _, model := range models {
-		if planeHost(model.Spec.OpenAI.BaseURL, planeProxyService) && model.Spec.APIKeySecret != "" {
+		if classifySeam(model.Spec.OpenAI.BaseURL, planeProxyService) == seamGoverned && model.Spec.APIKeySecret != "" {
 			required[model.Spec.APIKeySecret] = true
 		}
 	}
 	for _, server := range servers {
-		if !planeHost(server.Spec.URL, planeGatewayService) {
+		if classifySeam(valueOr(server.Spec.URL, "-"), planeGatewayService) != seamGoverned {
 			continue
 		}
 		for _, header := range server.Spec.HeadersFrom {
@@ -275,7 +347,10 @@ func credentialSeams(models []modelStatus, servers []toolServerStatus, present [
 		}
 	}
 	population := credentialPopulation{State: stateCounted, Required: len(required)}
-	if len(required) == 0 {
+	if seamErr != "" {
+		population.Partial, population.Reason = true, seamErr
+	}
+	if len(required) == 0 && !population.Partial {
 		// A known nothing: no governed seam names a credential. This is
 		// `none`, and it is not the same answer as `unknown`.
 		population.State = stateNone
@@ -306,10 +381,17 @@ func writeGovernance(out io.Writer, g governance) {
 	switch g.Plane.State {
 	case stateUnknown:
 		fmt.Fprintf(out, "  plane:        unknown — %s\n", g.Plane.Reason)
-	case stateNone:
-		fmt.Fprintln(out, "  plane:        not installed — nothing is enforced in front of these seams (`kmx plane`)")
+	case stateInstalled:
+		switch {
+		case g.Plane.Desired == 0:
+			fmt.Fprintln(out, "  plane:        installed but SCALED TO ZERO — nothing behind it is being enforced")
+		case g.Plane.Ready == 0:
+			fmt.Fprintf(out, "  plane:        installed but DOWN (0/%d replicas ready) — nothing behind it is being enforced\n", g.Plane.Desired)
+		default:
+			fmt.Fprintf(out, "  plane:        installed (%d/%d replicas ready)\n", g.Plane.Ready, g.Plane.Desired)
+		}
 	default:
-		fmt.Fprintf(out, "  plane:        installed (%d/%d pods ready)\n", g.Plane.Ready, g.Plane.Pods)
+		fmt.Fprintln(out, "  plane:        not installed — nothing is enforced in front of these seams (`kmx plane`)")
 	}
 	fmt.Fprintf(out, "  model seams:  %s\n", seamLine(g.ModelSeams, "agents", "agent"))
 	fmt.Fprintf(out, "  tool seams:   %s\n", seamLine(g.ToolSeams, "tool servers", "tool server"))
@@ -331,7 +413,7 @@ func seamLine(p seamPopulation, plural, singular string) string {
 	}
 	line := fmt.Sprintf("%d of %d %s governed, %d direct", p.Governed, p.Total, noun, p.Direct)
 	if p.Unresolved > 0 {
-		line += fmt.Sprintf(", %d unknown (%s)", p.Unresolved, p.Reason)
+		line += fmt.Sprintf(", %d unknown (%s)", p.Unresolved, strings.Join(p.UnresolvedRefs, ", "))
 	}
 	return line
 }
@@ -346,6 +428,9 @@ func credentialLine(p credentialPopulation) string {
 	line := fmt.Sprintf("%d of %d present", p.Present, p.Required)
 	if len(p.Missing) > 0 {
 		line += ", missing: " + strings.Join(p.Missing, ", ")
+	}
+	if p.Partial {
+		line += " (partial — " + p.Reason + ")"
 	}
 	return line
 }

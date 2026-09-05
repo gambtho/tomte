@@ -242,6 +242,14 @@ Governance
   credentials:  none — no governed seam names one
 ```
 
+The three lines count three different populations, and the difference is
+deliberate: **model seams** counts AGENTS by where their model calls go,
+**tool seams** counts the RemoteMCPServers on the cluster, and
+**credentials** counts the Secrets the governed seam objects NAME — so a
+governed preset no agent is using still requires its token, and a token
+that has gone missing is reported before the next call fails on it. Only
+Secret names are read; `kmx status` never reads a Secret's value.
+
 The counts are read from the cluster objects — a seam is governed when it
 points at the plane's Service — so they work with no plane, no credential and
 no network. Nothing there is a fault: the fast path is ungoverned by design,
@@ -252,7 +260,13 @@ it did not count.
 For the machine-readable form use `kmx status -o json`, `kmx status -o yaml`,
 or from Make: `make status STATUS_OUTPUT=yaml`. That document carries
 `context`, the `governance` block, and the kubectl objects verbatim under
-`items` — so `jq '.items[]'` reads exactly what it always did.
+`items` — so `jq '.items[]'` reads exactly what it always did. **What
+changed:** the top level is no longer a Kubernetes `List`, so the
+`apiVersion` and `kind` fields are gone and the output can no longer be
+piped back into `kubectl apply`. Each population's `state` is the field to
+read first: an `unknown` population publishes no counts at all, so a script
+that reads `governed` without checking `state` gets a missing key rather
+than a zero nobody counted.
 
 On the clone path the governed half is `make plane` and `make govern`, which
 are the same kmx commands with the checkout passed as the plane's source —

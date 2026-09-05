@@ -1933,6 +1933,12 @@ jobs:
           assert creds["present"] == creds["required"] and not creds.get("missing"), creds
           print("governed:", g)
           PY
+      # The cannot-tell branch, on a real cluster rather than only in a unit
+      # test: a reader that cannot list the tool seams or the Secret names
+      # produces a stated `unknown` with kubectl's own reason and NO counts.
+      - name: A reader that cannot look says unknown, and publishes no counts
+        if: steps.changes.outputs.docs_only != 'true'
+        run: bash scripts/ci/status-unknown-probe.sh
       - name: Governed tool call rides the gateway (P3 probe proof)
         if: steps.changes.outputs.docs_only != 'true'
         run: |

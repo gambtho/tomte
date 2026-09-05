@@ -1,10 +1,12 @@
 package app
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 
 	yaml "go.yaml.in/yaml/v3"
@@ -74,6 +76,18 @@ type toolServerStatus struct {
 			} `json:"valueFrom"`
 		} `json:"headersFrom"`
 	} `json:"spec"`
+}
+
+// planeDeployment is the proxy workload: its existence is what "installed"
+// means, and its replicas are what "ready" means.
+type planeDeployment struct {
+	Metadata struct{ Name string } `json:"metadata"`
+	Spec     struct {
+		Replicas int `json:"replicas"`
+	} `json:"spec"`
+	Status struct {
+		ReadyReplicas int `json:"readyReplicas"`
+	} `json:"status"`
 }
 
 type podStatus struct {
@@ -163,11 +177,12 @@ func firstLine(message string) string {
 // anywhere. This exists so a governed seam whose token Secret is missing is
 // reported as missing instead of failing at the next call.
 func (a *App) secretNames(namespace string) ([]string, string) {
+	// EVERY failure is a reason, NotFound included. A namespace with no
+	// Secrets succeeds and prints nothing; a NotFound here means the
+	// listing did not happen, and an empty list would become a confident
+	// accusation naming Secrets that may well exist.
 	raw, err := a.kubectlCapture("-n", namespace, "get", "secrets", "-o", "name", statusRequestTimeout)
 	if err != nil {
-		if isNotFound(err) {
-			return nil, ""
-		}
 		return nil, firstLine(err.Error())
 	}
 	var names []string
@@ -244,10 +259,10 @@ func (a *App) StatusWithOptions(opt StatusOptions) error {
 // `items`, so the idiom that reads them (`jq '.items[]'`) is unchanged; what
 // is new is the envelope around them.
 type statusDocument struct {
-	Context       string     `json:"context"`
-	ContextSource string     `json:"contextSource"`
-	Governance    governance `json:"governance"`
-	Items         []any      `json:"items"`
+	Context       string            `json:"context"`
+	ContextSource string            `json:"contextSource"`
+	Governance    governance        `json:"governance"`
+	Items         []json.RawMessage `json:"items"`
 }
 
 func (a *App) statusStructured(format string) error {
@@ -255,61 +270,79 @@ func (a *App) statusStructured(format string) error {
 	if err != nil {
 		return err
 	}
-	// The objects are re-read through the SAME combined get the old output
-	// used, so `items` is byte-for-byte what kubectl would have printed
-	// rather than kmx's narrower view of the same objects.
-	raw, err := a.kubectlCapture("-n", "kagent", "get", "agents,modelconfigs,pods", "-o", "json", statusRequestTimeout)
-	if err != nil {
-		return err
-	}
-	var list struct {
-		Items []any `json:"items"`
-	}
-	if err := json.Unmarshal([]byte(raw), &list); err != nil {
-		return err
-	}
-	if list.Items == nil {
-		// An empty cluster publishes `[]`, not `null`: a consumer that
-		// iterates items should find nothing there, not fall over.
-		list.Items = []any{}
-	}
 	document := statusDocument{
 		Context:       a.Cfg.KubeContext,
 		ContextSource: a.Cfg.ContextSource,
-		Governance:    data.governance(),
-		Items:         list.Items,
+		Governance:    data.governanceOf(),
+		Items:         data.items,
 	}
-	var encoded []byte
 	if format == "yaml" {
 		// json.Marshal first so the struct tags decide the field names
-		// once: one shape, two encodings.
+		// once: one shape, two encodings. UseNumber keeps integers exact
+		// through the generic form — a round trip through float64 would
+		// silently round a large counter in some CRD's status.
 		intermediate, err := json.Marshal(document)
 		if err != nil {
 			return err
 		}
+		decoder := json.NewDecoder(bytes.NewReader(intermediate))
+		decoder.UseNumber()
 		var generic any
-		if err := json.Unmarshal(intermediate, &generic); err != nil {
+		if err := decoder.Decode(&generic); err != nil {
 			return err
 		}
-		encoded, err = yaml.Marshal(generic)
+		encoded, err := yaml.Marshal(exactNumbers(generic))
 		if err != nil {
 			return err
 		}
-	} else {
-		encoded, err = json.MarshalIndent(document, "", "  ")
-		if err != nil {
-			return err
-		}
-		encoded = append(encoded, '\n')
+		_, err = a.Out.Write(encoded)
+		return err
 	}
-	_, err = a.Out.Write(encoded)
+	encoded, err := json.MarshalIndent(document, "", "  ")
+	if err != nil {
+		return err
+	}
+	_, err = a.Out.Write(append(encoded, '\n'))
 	return err
+}
+
+// exactNumbers turns json.Number back into a Go integer or float so YAML
+// emits `3`, not `"3"`. Integers that do not fit an int64 keep their exact
+// decimal text rather than being rounded into one.
+func exactNumbers(value any) any {
+	switch typed := value.(type) {
+	case json.Number:
+		if i, err := typed.Int64(); err == nil {
+			return i
+		}
+		if f, err := typed.Float64(); err == nil && !strings.ContainsAny(typed.String(), "eE") {
+			if json.Number(strconv.FormatFloat(f, 'f', -1, 64)) == typed {
+				return f
+			}
+			return typed.String()
+		} else if err == nil {
+			return f
+		}
+		return typed.String()
+	case map[string]any:
+		for key, item := range typed {
+			typed[key] = exactNumbers(item)
+		}
+		return typed
+	case []any:
+		for i, item := range typed {
+			typed[i] = exactNumbers(item)
+		}
+		return typed
+	}
+	return value
 }
 
 func (a *App) Status() error { return a.StatusWithOptions(StatusOptions{}) }
 
 // statusData is everything one `kmx status` reads, gathered once so the
-// human table and the structured document are the same facts.
+// human table and the structured document are the same facts — not two
+// reads of a cluster that may have changed between them.
 type statusData struct {
 	agents     objectList[agentStatus]
 	models     objectList[modelStatus]
@@ -317,22 +350,74 @@ type statusData struct {
 	kagentPods objectList[podStatus]
 	ollamaPods objectList[podStatus]
 	planePods  objectList[podStatus]
+	// items is the combined kagent read exactly as kubectl returned it,
+	// carried so `-o json` can publish the objects verbatim without asking
+	// the cluster a second time.
+	items      []json.RawMessage
 	secrets    []string
-	serverErr  string
-	planeErr   string
-	secretErr  string
+	planeThere bool
+	// planeDesired and planeReady come from the proxy Deployment, so a
+	// proxy scaled to zero beside a running Postgres is not reported ready.
+	planeDesired int
+	planeReady   int
+	serverErr    string
+	planeErr     string
+	secretErr    string
 }
 
+// collectStatus reads the cluster once.
+//
+// The kagent objects come from ONE combined get — the same one the old
+// kubectl-native output printed — and are demultiplexed by kind here. That
+// is not only three fewer calls: it is what makes `items` and the counts
+// beside them a single snapshot, so a consumer cannot find an Agent in
+// `items` that the count never saw.
 func (a *App) collectStatus() (*statusData, error) {
 	d := &statusData{}
-	if err := a.statusJSON("kagent", "agents", false, &d.agents); err != nil {
+	raw, err := a.kubectlCapture("-n", config_kagentNamespace, "get",
+		"agents,modelconfigs,pods", "-o", "json", statusRequestTimeout)
+	if err != nil {
 		return nil, err
 	}
-	if err := a.statusJSON("kagent", "modelconfigs", false, &d.models); err != nil {
+	var combined struct {
+		Items []json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(raw), &combined); err != nil {
 		return nil, err
 	}
-	if err := a.statusJSON("kagent", "pods", false, &d.kagentPods); err != nil {
-		return nil, err
+	d.items = combined.Items
+	if d.items == nil {
+		// An empty cluster publishes `[]`, not `null`: a consumer iterates
+		// items, and null makes them vanish with a zero exit code.
+		d.items = []json.RawMessage{}
+	}
+	for _, item := range d.items {
+		var kind struct {
+			Kind string `json:"kind"`
+		}
+		if err := json.Unmarshal(item, &kind); err != nil {
+			return nil, err
+		}
+		switch kind.Kind {
+		case "Agent":
+			var agent agentStatus
+			if err := json.Unmarshal(item, &agent); err != nil {
+				return nil, err
+			}
+			d.agents.Items = append(d.agents.Items, agent)
+		case "ModelConfig":
+			var model modelStatus
+			if err := json.Unmarshal(item, &model); err != nil {
+				return nil, err
+			}
+			d.models.Items = append(d.models.Items, model)
+		case "Pod":
+			var pod podStatus
+			if err := json.Unmarshal(item, &pod); err != nil {
+				return nil, err
+			}
+			d.kagentPods.Items = append(d.kagentPods.Items, pod)
+		}
 	}
 	if err := a.statusJSON("ollama", "pods", true, &d.ollamaPods); err != nil {
 		return nil, err
@@ -341,42 +426,49 @@ func (a *App) collectStatus() (*statusData, error) {
 	// TOLERANTLY: none of them exists on the fast path D36 made the
 	// default, and a status command that fails because the thing it is
 	// diagnosing is absent is worthless. Each failure becomes a stated
-	// `unknown`, never a silent zero.
-	d.planeErr = a.statusTolerant("kaimahi", "pods", &d.planePods)
-	d.serverErr = a.statusTolerant("kagent", "remotemcpservers", &d.servers)
-	d.secrets, d.secretErr = a.secretNames("kagent")
+	// `unknown`, never a silent zero — with one deliberate exception, noted
+	// on statusTolerant: a NotFound namespace or resource is a genuine
+	// absence and reads as an empty population.
+	var deployments objectList[planeDeployment]
+	d.planeErr = a.statusTolerant(planeNamespace, "deployments", &deployments)
+	for _, deployment := range deployments.Items {
+		if deployment.Metadata.Name == planeWorkload {
+			d.planeThere = true
+			d.planeDesired = deployment.Spec.Replicas
+			d.planeReady = deployment.Status.ReadyReplicas
+		}
+	}
+	if d.planeErr == "" {
+		d.planeErr = a.statusTolerant(planeNamespace, "pods", &d.planePods)
+	}
+	d.serverErr = a.statusTolerant(config_kagentNamespace, "remotemcpservers", &d.servers)
+	d.secrets, d.secretErr = a.secretNames(config_kagentNamespace)
 	return d, nil
 }
 
-// governance assembles the three counts and the plane's presence.
-func (d *statusData) governance() governance {
+// governanceOf assembles the three counts and the plane's presence.
+func (d *statusData) governanceOf() governance {
 	plane := planePresence{State: stateNone}
 	switch {
 	case d.planeErr != "":
 		plane = planePresence{State: stateUnknown, Reason: d.planeErr}
-	case len(d.planePods.Items) > 0:
-		ready, _, _ := podSummary(append([]podStatus(nil), d.planePods.Items...))
-		plane = planePresence{State: stateInstalled, Ready: ready, Pods: len(d.planePods.Items)}
+	case d.planeThere || len(d.planePods.Items) > 0:
+		// INSTALLED is the Deployment existing. A plane scaled to zero, or
+		// mid-rollout, or with every pod evicted, is installed and DOWN —
+		// telling that operator to run `kmx plane` would be a false absence
+		// and the wrong instruction.
+		plane = planePresence{State: stateInstalled, Ready: d.planeReady, Desired: d.planeDesired}
+	}
+	seamErr := ""
+	if d.serverErr != "" {
+		seamErr = "the tool seams could not be read, so what they require is not counted here"
 	}
 	return governance{
 		Plane:       plane,
 		ModelSeams:  modelSeams(d.agents.Items, d.models.Items),
 		ToolSeams:   toolSeams(d.servers.Items, d.serverErr),
-		Credentials: credentialSeams(d.models.Items, d.servers.Items, d.secrets, credentialReason(d)),
+		Credentials: credentialSeams(d.models.Items, d.servers.Items, d.secrets, d.secretErr, seamErr),
 	}
-}
-
-// credentialReason keeps the credential count honest about its inputs: the
-// Secret listing is only half of it, and a tool-server read that failed
-// means the required set itself is unknown.
-func credentialReason(d *statusData) string {
-	if d.secretErr != "" {
-		return d.secretErr
-	}
-	if d.serverErr != "" {
-		return "the tool seams could not be read, so what they require is unknown"
-	}
-	return ""
 }
 
 func (a *App) statusTable() error {
@@ -386,6 +478,7 @@ func (a *App) statusTable() error {
 	}
 	agents, models := data.agents, data.models
 	kagentPods, ollamaPods, planePods := data.kagentPods, data.ollamaPods, data.planePods
+	sort.Slice(kagentPods.Items, func(i, j int) bool { return kagentPods.Items[i].Metadata.Name < kagentPods.Items[j].Metadata.Name })
 
 	agentRows := make([][]string, 0, len(agents.Items))
 	allAgents := len(agents.Items) > 0
@@ -449,7 +542,7 @@ func (a *App) statusTable() error {
 	}
 	fmt.Fprintln(a.Out, "\nRuntime pods")
 	table(a.Out, []string{"NAME", "READY", "PHASE", "RESTARTS"}, podRows)
-	writeGovernance(a.Out, data.governance())
+	writeGovernance(a.Out, data.governanceOf())
 	fmt.Fprintln(a.Out, "\nNext")
 	if overall {
 		fmt.Fprintf(a.Out, "  kmx agent chat %s\n", agentRows[0][0])
