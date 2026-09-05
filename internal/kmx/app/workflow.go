@@ -295,7 +295,22 @@ func (a *App) GovernWorkflow(name string, opt WorkflowOptions) error {
 	// escape hatch. So: identical is a no-op, different is refused with
 	// the diff, and --replace is a deliberate act.
 	unchanged := false
+	remove := false
 	switch existing, present := fragments[key]; {
+	case present && fragment == "":
+		// The blueprint and these parameters produce NO bounds, and the
+		// cluster is holding some. Skipping the write would leave the
+		// old constraints admitting calls while the operator believes
+		// they applied this blueprint — the fail-open direction. The key
+		// is deleted instead.
+		if !opt.Replace {
+			return fmt.Errorf("this blueprint and these parameters declare no standing bounds, and the cluster "+
+				"holds some in %q.\n\n%s\n"+
+				"  Applying would REMOVE them. Re-run with --replace if that is what you mean",
+				key, indent(existing, "  "))
+		}
+		remove = true
+		a.notef("These parameters declare no standing bounds; the ones on the cluster will be REMOVED.")
 	case present && sameJSON(existing, fragment):
 		// Writing the identical bytes back would still roll the proxy,
 		// which is a real outage window spent on a no-op.
@@ -318,7 +333,17 @@ func (a *App) GovernWorkflow(name string, opt WorkflowOptions) error {
 		return err
 	}
 
-	if fragment != "" && !unchanged {
+	switch {
+	case remove:
+		if err := a.removeOverlayFragment(key, version); err != nil {
+			return err
+		}
+		if err := a.rollProxy(); err != nil {
+			return err
+		}
+		a.notef("Removed %s/%s. Every call those bounds used to admit is denied and filed again.",
+			scaffold.OverlayConfigMap, key)
+	case fragment != "" && !unchanged:
 		if err := a.writeOverlayFragment(key, fragment, version); err != nil {
 			return err
 		}
@@ -327,6 +352,18 @@ func (a *App) GovernWorkflow(name string, opt WorkflowOptions) error {
 		}
 		a.notef("Standing bounds written to %s/%s. They survive `kmx plane`, which reapplies the base table only.",
 			scaffold.OverlayConfigMap, key)
+	case unchanged:
+		// The fragment matching is not proof that the PLANE is serving
+		// it: a previous run could have written the key and then failed
+		// while rolling. Checking the rollout is cheap and does not
+		// restart anything, and an incomplete one is said out loud
+		// rather than skipped past.
+		if err := a.kubectlRun("-n", scaffold.PlaneNamespace, "rollout", "status",
+			"deploy/kaimahi-proxy", "--timeout=60s"); err != nil {
+			a.notef("WARNING: the bounds on the cluster match this blueprint, but the proxy's rollout is not")
+			a.notef("  complete (%v). If an earlier run failed while rolling, the plane may still be enforcing", err)
+			a.notef("  the PREVIOUS table. Force one with: kmx workflow govern … --replace")
+		}
 	}
 
 	if err := a.session(func(c *admin.Client) error {
@@ -471,6 +508,33 @@ func (a *App) writeOverlayFragment(key, fragment, version string) error {
 	// Through a 0600 file rather than argv: the patch is not secret, but
 	// every other cluster write in this repo goes through a file and a
 	// habit that has an exception is not a habit.
+	dir, err := os.MkdirTemp("", "kmx-workflow")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	path := filepath.Join(dir, "patch.json")
+	if err := os.WriteFile(path, patch, 0o600); err != nil {
+		return err
+	}
+	return a.kubectlRun("-n", scaffold.PlaneNamespace, "patch", "configmap", scaffold.OverlayConfigMap,
+		"--type", "merge", "--patch-file", path)
+}
+
+// removeOverlayFragment deletes ONE key. A null value in a merge patch
+// deletes the key and leaves every other operator's fragment alone —
+// which is why this is a patch and never a create-or-replace.
+func (a *App) removeOverlayFragment(key, version string) error {
+	if _, now, err := a.readOverlay(); err != nil {
+		return err
+	} else if now != version {
+		return fmt.Errorf("the overlay changed while this was being prepared (read at %s, now %s) — nothing "+
+			"has been removed", quoteVersion(version), quoteVersion(now))
+	}
+	patch, err := json.Marshal(map[string]any{"data": map[string]any{key: nil}})
+	if err != nil {
+		return err
+	}
 	dir, err := os.MkdirTemp("", "kmx-workflow")
 	if err != nil {
 		return err

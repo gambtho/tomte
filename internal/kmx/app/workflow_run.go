@@ -375,7 +375,7 @@ func (r *workflowRun) boundedStep(s blueprint.RenderedStep) error {
 		r.app.notef("--dry-run: stopping before the first call with consequences.")
 		return errDryRunStop
 	}
-	before, err := r.auditCount(s.Tool)
+	before, err := r.newestFor(s.Tool)
 	if err != nil {
 		return err
 	}
@@ -467,7 +467,7 @@ func (r *workflowRun) consequentialStep(s blueprint.RenderedStep) error {
 		return err
 	}
 
-	before, err := r.auditCount(s.Tool)
+	before, err := r.newestFor(s.Tool)
 	if err != nil {
 		return err
 	}
@@ -510,14 +510,25 @@ func (dryRunStop) Error() string { return "dry run: stopped before the first cal
 // --- the plane's own record -------------------------------------------
 
 type auditRow struct {
+	Created  string
 	Tool     string
 	Decision string
 	Detail   string
 	Summary  string
 }
 
+// id is a row's identity, for telling "the call produced a new row" from
+// "the page happened to shift". A COUNT cannot do that: the audit view is
+// capped, so on a busy credential a successful call can evict an older
+// row of the same tool and leave the count unchanged — and the driver
+// would then report that a call which did happen produced no audit row
+// at all, failing a release for a paging artefact.
+func (a auditRow) id() string {
+	return a.Created + "|" + a.Decision + "|" + a.Detail + "|" + a.Summary
+}
+
 func (r *workflowRun) auditRows() ([]auditRow, error) {
-	doc, err := r.client.Get("tool-audit", "/admin/tool-audit?credential="+r.bundle.Credential+"&limit=50")
+	doc, err := r.client.Get("tool-audit", "/admin/tool-audit?credential="+r.bundle.Credential+"&limit=200")
 	if err != nil {
 		return nil, err
 	}
@@ -527,6 +538,7 @@ func (r *workflowRun) auditRows() ([]auditRow, error) {
 	out := make([]auditRow, 0, len(entries))
 	for _, e := range entries {
 		out = append(out, auditRow{
+			Created:  text(e["created_at"]),
 			Tool:     text(e["tool"]),
 			Decision: text(e["decision"]),
 			// `detail` is the plane's own word for WHY: "granted",
@@ -539,39 +551,42 @@ func (r *workflowRun) auditRows() ([]auditRow, error) {
 	return out, nil
 }
 
-func (r *workflowRun) auditCount(tool string) (int, error) {
+// newestFor returns the identity of the newest audit row for a tool, or
+// "" when there is none. Taken before a call, it is what the row after
+// the call has to differ from.
+func (r *workflowRun) newestFor(tool string) (string, error) {
 	rows, err := r.auditRows()
 	if err != nil {
-		return 0, err
+		return "", err
 	}
-	n := 0
 	for _, row := range rows {
 		if row.Tool == tool {
-			n++
+			return row.id(), nil
 		}
 	}
-	return n, nil
+	return "", nil
 }
 
-// newestAudit returns the most recent audit row for a tool, and refuses
-// to invent one: if the count did not grow, the call did not reach the
-// plane at all, which is a different fact from a denial.
-func (r *workflowRun) newestAudit(tool string, before int) (auditRow, error) {
+// newestAudit returns the audit row this call produced, and refuses to
+// invent one: if the newest row for the tool is the one that was already
+// there, the call did not reach the plane at all — which is a different
+// fact from a denial, and must not be reported as either.
+func (r *workflowRun) newestAudit(tool, before string) (auditRow, error) {
 	rows, err := r.auditRows()
 	if err != nil {
 		return auditRow{}, err
 	}
-	var mine []auditRow
 	for _, row := range rows {
-		if row.Tool == tool {
-			mine = append(mine, row)
+		if row.Tool != tool {
+			continue
 		}
+		if row.id() == before {
+			break
+		}
+		return row, nil
 	}
-	if len(mine) <= before {
-		return auditRow{}, fmt.Errorf("%s produced no tool-audit row at all. The agent did not make the call — "+
-			"a tool it cannot see is a tool it cannot attempt, so there is no denial either", tool)
-	}
-	return mine[0], nil
+	return auditRow{}, fmt.Errorf("%s produced no tool-audit row at all. The agent did not make the call — "+
+		"a tool it cannot see is a tool it cannot attempt, so there is no denial either", tool)
 }
 
 func (r *workflowRun) liveGrant(tool string) (bool, error) {

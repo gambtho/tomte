@@ -208,7 +208,7 @@ would launder it. So a step with an action on your machine must carry
 `ungoverned:` and a reason, `kmx workflow show` prints those in their own
 section, and the driver repeats it before the approval:
 
-```
+```text
 NOT GOVERNED BY THE PLANE — these steps' ACTIONS run on this machine, outside the gateway.
 The plane records that a human approved the DECISION. It meters nothing, sees no bytes,
 and writes no tool-audit row for what actually moved.

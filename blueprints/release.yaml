@@ -59,7 +59,11 @@ parameters:
     pattern: '^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$'
   version:
     type: string
-    required_for: [compose, cut, publish]
+    # Every step that reads ${release_branch} needs it, because that
+    # parameter defaults from this one. Without the full list, `--step
+    # build-github` would bind cleanly and then fail on an unresolved
+    # reference after preflight — a refusal in the wrong place.
+    required_for: [compose, cut, build-github, watch-github, publish]
     help: the release being cut, e.g. v1.2.3
     pattern: '^[A-Za-z0-9][A-Za-z0-9._+-]{0,99}$'
   base:

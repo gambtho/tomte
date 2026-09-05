@@ -1233,8 +1233,13 @@ jobs:
             '{"owner": "someone-else", "repo": "the-one-repo", "state": "closed", "base": "main"}'
           KIND_CLUSTER=kaimahi-p1 bin/kmx audit tool workflow-ci | tee wf-audit-2.out
           grep -E 'workflow-ci +mcp-echo +tools/call +list_pull_requests +denied +403' wf-audit-2.out
+          # SCOPED TO THE CREDENTIAL. `kmx approvals` lists every
+          # credential's pending requests, and the release-agent steps
+          # earlier in this same job filed a hello-github request whose
+          # argument text is identical — so a bare grep would pass on
+          # that stale row even if workflow-ci filed nothing at all.
           KIND_CLUSTER=kaimahi-p1 bin/kmx approvals | tee wf-approvals-0.out
-          grep 'owner someone-else' wf-approvals-0.out
+          grep -E 'workflow-ci +tool +list_pull_requests .*owner someone-else' wf-approvals-0.out
       - name: "Workflow: the DRIVER files the request, for the call named on the command line, and stops"
         if: steps.changes.outputs.docs_only != 'true'
         run: |
@@ -1252,9 +1257,12 @@ jobs:
           cat wf-run.out
           test "$rc" != 0 || { echo "the driver proceeded with nobody having approved anything"; exit 1; }
           grep -q 'nobody decided request' wf-run.out
+          # One credential-scoped pattern, not two greps: the earlier
+          # release-agent steps filed a hello-github create_branch with
+          # exactly this argument text, so an unscoped second grep would
+          # match that row and prove nothing about this driver.
           KIND_CLUSTER=kaimahi-p1 bin/kmx approvals | tee wf-approvals.out
-          grep -E 'workflow-ci +tool +create_branch' wf-approvals.out
-          grep 'owner kaimahi-ci, repo the-one-repo, branch release/v9.9.9, from_branch main' wf-approvals.out
+          grep -E 'workflow-ci +tool +create_branch .*owner kaimahi-ci, repo the-one-repo, branch release/v9.9.9, from_branch main' wf-approvals.out
       - name: "Workflow: the driver will not ride a grant somebody gave earlier"
         if: steps.changes.outputs.docs_only != 'true'
         run: |

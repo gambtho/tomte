@@ -242,3 +242,22 @@ func TestAnUnparseableOverlayFragmentIsUnknownNotAbsent(t *testing.T) {
 		t.Fatalf("ok=%v err=%v", ok, err)
 	}
 }
+
+// TestANewAuditRowIsIdentifiedNotCounted.
+//
+// The audit view is capped, so on a busy credential a successful call
+// can evict an older row of the same tool and leave the COUNT unchanged.
+// A driver counting rows would then report that a call which did happen
+// produced no audit row, and fail a release for a paging artefact.
+func TestANewAuditRowIsIdentifiedNotCounted(t *testing.T) {
+	old := auditRow{Created: "2026-09-04T10:00:00", Tool: "create_branch", Decision: "denied", Summary: "a"}
+	fresh := auditRow{Created: "2026-09-04T10:00:05", Tool: "create_branch", Decision: "allowed", Summary: "a"}
+	if old.id() == fresh.id() {
+		t.Fatal("two different rows share an identity")
+	}
+	// Same second, same summary, different verdict: still two rows.
+	sameSecond := auditRow{Created: old.Created, Tool: old.Tool, Decision: "allowed", Summary: "a"}
+	if old.id() == sameSecond.id() {
+		t.Fatal("a decision change did not change the row identity")
+	}
+}
