@@ -386,6 +386,32 @@ rollout; the dispatcher tools are asserted to bind their selector first.
 
 **For real.** The transcript is in the pull request.
 
+## The same workflow, as a blueprint
+
+Everything above is the release agent as W32 built it: four layers, and
+one 556-line driver. [D42](COORDINATION.md) asked what a user does who
+wants this workflow, or a slightly different one, and the answer is
+[a blueprint](workflows.md) — one file, applied and run by `kmx
+workflow`, with `blueprints/release.yaml` reproducing exactly the
+governance the make targets below produce.
+
+Two things that generalising found, and neither is a defect in what
+shipped:
+
+- **`pipelines_write` has two postures at once.** `make release-bind`
+  with `ADO_PIPELINES` gives it a standing constraint, and this document
+  says those builds "run with no human at all" — while
+  `scripts/release-run.sh`'s build step files an approval request for it
+  and waits. A standing constraint ADMITS, so on a cluster where both are
+  in force the approval is not what lets the call through. The blueprint
+  cannot express both: it marks that step `kind: bounded`, which is what
+  this document describes, and kmx refuses a blueprint that declares a
+  tool consequential and bounded at once.
+- **The blueprint watches GitHub and Azure DevOps in two poll steps**
+  rather than the one combined turn `do_watch` uses, because a single
+  prompt naming both would carry an Azure organization into a run that
+  has none.
+
 ## From zero
 
 ```sh

@@ -1174,6 +1174,151 @@ jobs:
           make approval-audit | tee release-approval-audit.out
           grep -E 'hello-github +tool +create_branch +approved +admin .*branch release/v9.9.9' release-approval-audit.out
           grep -E 'hello-github +tool +actions_run_trigger +approved +admin .*method run_workflow' release-approval-audit.out
+      # ---- W35 / D42: a governed workflow, declared in one file --------
+      #
+      # Keyless like everything above it: scripts/ci/workflow-fixture.yaml
+      # points at the synthetic hosted upstream, whose policy declarations
+      # are copied from the committed table so they cannot drift. What is
+      # proven here is what no unit test can reach — that the bounds a
+      # blueprint DECLARES are the bounds the gateway ENFORCES, and that
+      # the driver files the approval request for the call named on the
+      # command line and refuses to ride one somebody gave earlier.
+      - name: "Workflow: a credential for the fixture blueprint to govern"
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          KUBECTL="kubectl --context kind-kaimahi-p1" GOVERNED_SECRET=kaimahi-workflow-ci-token \
+            bash scripts/plane-admin.sh issue workflow-ci
+      - name: "Workflow: `kmx workflow govern` writes exactly what `kmx workflow show` rendered"
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          KIND_CLUSTER=kaimahi-p1 bin/kmx workflow show --file scripts/ci/workflow-fixture.yaml \
+            --set repo=kaimahi-ci/the-one-repo --set version=v9.9.9 | tee wf-show.out
+          KIND_CLUSTER=kaimahi-p1 bin/kmx workflow govern --file scripts/ci/workflow-fixture.yaml \
+            --set repo=kaimahi-ci/the-one-repo --set version=v9.9.9 2>&1 | tee wf-govern.out
+          # The fragment on the cluster is the one the operator reviewed.
+          kubectl --context kind-kaimahi-p1 -n kaimahi get configmap kaimahi-upstreams-extra \
+            -o "jsonpath={.data.workflow-ci-fixture\.json}" | tee wf-fragment.json
+          python3 - <<'EOF'
+          import json, re, sys
+          shown = open("wf-show.out").read()
+          block = shown.split("STANDING BOUNDS", 1)[1].split("\nSTEPS", 1)[0]
+          block = block[block.index("{"):]
+          want = json.loads(block)
+          got = json.load(open("wf-fragment.json"))
+          if want != got:
+              print("shown:", json.dumps(want, indent=2))
+              print("cluster:", json.dumps(got, indent=2))
+              sys.exit("`kmx workflow show` and `kmx workflow govern` disagree")
+          c = got["standing_constraints"]["workflow-ci"]["list_pull_requests"]
+          assert {"field": "owner", "op": "eq", "value": "kaimahi-ci"} in c, c
+          assert {"field": "repo", "op": "eq", "value": "the-one-repo"} in c, c
+          EOF
+          # Nothing is allowlisted: where a constraint exists it BINDS, and
+          # an allowlist entry beside it would be another way in (P12).
+          KIND_CLUSTER=kaimahi-p1 bin/kmx tools allowlist workflow-ci | tee wf-allowlist.out
+          grep -qi 'create_branch' wf-allowlist.out && { echo "a consequential tool is allowlisted"; exit 1; } || true
+      - name: "Workflow: the bound the blueprint DECLARED is the one the gateway ENFORCES"
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          KUBECTL="kubectl --context kind-kaimahi-p1" GOVERNED_SECRET=kaimahi-workflow-ci-token UPSTREAM=mcp-echo \
+            bash scripts/tool-call-probe.sh list_pull_requests \
+            '{"owner": "kaimahi-ci", "repo": "the-one-repo", "state": "closed", "base": "main"}'
+          KIND_CLUSTER=kaimahi-p1 bin/kmx audit tool workflow-ci | tee wf-audit.out
+          grep -E 'workflow-ci +mcp-echo +tools/call +list_pull_requests +allowed +200 +within standing constraint' wf-audit.out
+      - name: "Workflow: the same read on another repository is denied and files a request"
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          KUBECTL="kubectl --context kind-kaimahi-p1" GOVERNED_SECRET=kaimahi-workflow-ci-token UPSTREAM=mcp-echo \
+            bash scripts/tool-denial-probe.sh list_pull_requests \
+            '{"owner": "someone-else", "repo": "the-one-repo", "state": "closed", "base": "main"}'
+          KIND_CLUSTER=kaimahi-p1 bin/kmx audit tool workflow-ci | tee wf-audit-2.out
+          grep -E 'workflow-ci +mcp-echo +tools/call +list_pull_requests +denied +403' wf-audit-2.out
+          # SCOPED TO THE CREDENTIAL. `kmx approvals` lists every
+          # credential's pending requests, and the release-agent steps
+          # earlier in this same job filed a hello-github request whose
+          # argument text is identical — so a bare grep would pass on
+          # that stale row even if workflow-ci filed nothing at all.
+          KIND_CLUSTER=kaimahi-p1 bin/kmx approvals | tee wf-approvals-0.out
+          grep -E 'workflow-ci +tool +list_pull_requests .*owner someone-else' wf-approvals-0.out
+      - name: "Workflow: the DRIVER files the request, for the call named on the command line, and stops"
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          # No agent turn happens here and none can: a consequential step
+          # files the request and waits for a human BEFORE the agent is
+          # asked anything. That ordering is the P13 property — what a
+          # person is shown is what the operator wrote down, never what a
+          # model emitted.
+          set +e
+          KIND_CLUSTER=kaimahi-p1 bin/kmx workflow run --file scripts/ci/workflow-fixture.yaml \
+            --step cut --set repo=kaimahi-ci/the-one-repo --set version=v9.9.9 \
+            --wait 10 --admin-port 19391 > wf-run.out 2>&1
+          rc=$?
+          set -e
+          cat wf-run.out
+          test "$rc" != 0 || { echo "the driver proceeded with nobody having approved anything"; exit 1; }
+          grep -q 'nobody decided request' wf-run.out
+          # One credential-scoped pattern, not two greps: the earlier
+          # release-agent steps filed a hello-github create_branch with
+          # exactly this argument text, so an unscoped second grep would
+          # match that row and prove nothing about this driver.
+          KIND_CLUSTER=kaimahi-p1 bin/kmx approvals | tee wf-approvals.out
+          grep -E 'workflow-ci +tool +create_branch .*owner kaimahi-ci, repo the-one-repo, branch release/v9.9.9, from_branch main' wf-approvals.out
+      - name: "Workflow: the driver will not ride a grant somebody gave earlier"
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          id=$(KIND_CLUSTER=kaimahi-p1 bin/kmx approvals \
+                 | awk '$3=="workflow-ci" && $5=="create_branch" {print $1; exit}')
+          test -n "$id"
+          KIND_CLUSTER=kaimahi-p1 bin/kmx approve "$id" --uses 1 --ttl 10m
+          set +e
+          KIND_CLUSTER=kaimahi-p1 bin/kmx workflow run --file scripts/ci/workflow-fixture.yaml \
+            --step cut --set repo=kaimahi-ci/the-one-repo --set version=v9.9.9 \
+            --wait 10 --admin-port 19391 > wf-run-2.out 2>&1
+          rc=$?
+          set -e
+          cat wf-run-2.out
+          test "$rc" != 0 || { echo "the driver spent an approval this run never described"; exit 1; }
+          grep -q 'already carries a LIVE grant' wf-run-2.out
+      - name: "Workflow: applying is idempotent, and a DIFFERENT policy is refused with the difference"
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          KIND_CLUSTER=kaimahi-p1 bin/kmx workflow govern --file scripts/ci/workflow-fixture.yaml \
+            --set repo=kaimahi-ci/the-one-repo --set version=v9.9.9 2>&1 | tee wf-again.out
+          grep -q 'already exactly these' wf-again.out
+          set +e
+          KIND_CLUSTER=kaimahi-p1 bin/kmx workflow govern --file scripts/ci/workflow-fixture.yaml \
+            --set repo=someone-else/other --set version=v9.9.9 > wf-diff.out 2>&1
+          rc=$?
+          set -e
+          cat wf-diff.out
+          test "$rc" != 0 || { echo "a different policy was applied without --replace"; exit 1; }
+          grep -q 'does not reconcile' wf-diff.out
+          # The cluster still holds the bound that was reviewed.
+          kubectl --context kind-kaimahi-p1 -n kaimahi get configmap kaimahi-upstreams-extra \
+            -o "jsonpath={.data.workflow-ci-fixture\.json}" | grep -q 'kaimahi-ci'
+      - name: "Workflow: a blueprint whose seam or policy fields the plane does not have is refused"
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          # The seam has to be renamed in BOTH places, or the blueprint is
+          # refused for an unresolved step reference before any cluster is
+          # asked anything — which would pass the test for the wrong reason.
+          sed -e 's/^  mcp-echo:/  nonesuch-server:/' \
+              -e 's/^      upstream: mcp-echo$/      upstream: nonesuch-server/' \
+            scripts/ci/workflow-fixture.yaml > wf-bad-seam.yaml
+          sed 's/^      list_pull_requests: \[owner, repo, state, base\]/      list_pull_requests: [owner, repo, state]/' \
+            scripts/ci/workflow-fixture.yaml > wf-bad-fields.yaml
+          set +e
+          KIND_CLUSTER=kaimahi-p1 bin/kmx workflow govern --file wf-bad-seam.yaml \
+            --set repo=kaimahi-ci/the-one-repo --set version=v9.9.9 > wf-bad-seam.out 2>&1
+          seam_rc=$?
+          KIND_CLUSTER=kaimahi-p1 bin/kmx workflow govern --file wf-bad-fields.yaml \
+            --set repo=kaimahi-ci/the-one-repo --set version=v9.9.9 > wf-bad-fields.out 2>&1
+          fields_rc=$?
+          set -e
+          cat wf-bad-seam.out wf-bad-fields.out
+          test "$seam_rc" != 0 && test "$fields_rc" != 0
+          grep -q 'A blueprint NAMES seams; it cannot create them' wf-bad-seam.out
+          grep -q 'these two disagree about what a human would be approving' wf-bad-fields.out
       - name: "Hosted upstreams: the record rebinds to the server's private address → the dialer refuses before any byte leaves, audited"
         if: steps.changes.outputs.docs_only != 'true'
         run: |

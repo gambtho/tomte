@@ -49,6 +49,13 @@ type validateResponse struct {
 	// answer (a verb-level binding); a tool absent from this map binds
 	// its whole canonical argument object.
 	Declared map[string][]string `json:"declared,omitempty"`
+	// TableDeclared is every tool's policy fields in the MERGED table,
+	// not only the submitted overlay's. A caller declaring a workflow
+	// against this plane (D42) states the declarations it depends on and
+	// has to be able to check them; without this it would either bind
+	// whatever happened to be configured, or have to merge the table a
+	// second time somewhere else — and there is exactly one merge.
+	TableDeclared map[string][]string `json:"table_declared,omitempty"`
 	// AlreadyAllowlisted maps a tool the overlay declares to the
 	// credentials that ALREADY allowlist that name. The gateway's
 	// allowlist is per-credential and not per-(credential, upstream), so
@@ -94,7 +101,7 @@ func (h *handler) validateConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, validateResponse{Error: err.Error()})
 		return
 	}
-	resp := validateResponse{OK: true, Declared: map[string][]string{}}
+	resp := validateResponse{OK: true, Declared: map[string][]string{}, TableDeclared: cfg.Policy().AllDeclared()}
 	for name := range cfg.ToolUpstreams {
 		resp.ToolUpstreams = append(resp.ToolUpstreams, name)
 	}

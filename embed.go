@@ -48,3 +48,23 @@ import "embed"
 //go:embed k8s/models
 //go:embed k8s/wasm/runtime.yaml
 var Manifests embed.FS
+
+// Blueprints holds the governed-workflow blueprints kmx carries (D42),
+// and the scripts their ungoverned steps run.
+//
+// Embedded for the same reason the manifests are, and it is the whole
+// reason a blueprint is usable at all after W31: the front door is `curl
+// | sh` then `kmx quickstart`, with no Go and no checkout, so a blueprint
+// that lived only in this repository's tree would make `git clone` a
+// prerequisite again — for the one feature whose point is that a
+// workflow is easy to express.
+//
+// `scripts/release-publish.sh` rides along because the release
+// blueprint's publish step runs it: the DECISION is governed by the
+// plane, the TRANSFER is this script moving artifacts with the operator's
+// own `az` and `gh`, and a step that could not find its script on a
+// machine with no checkout would be a step that only works for us.
+//
+//go:embed blueprints
+//go:embed scripts/release-publish.sh
+var Blueprints embed.FS
