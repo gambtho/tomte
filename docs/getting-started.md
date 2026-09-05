@@ -230,10 +230,29 @@ make down     # delete the kind cluster (and everything in it, ledger included)
 ```
 
 `make status` groups the selected context, agent-to-model/tool wiring, runtime
-health across kagent/Ollama/the optional plane, pod restarts, and next actions.
-For kubectl-native machine-readable Agents, ModelConfigs, and kagent-namespace
-Pods, use `kmx status -o json`, `kmx status -o yaml`, or from Make:
-`make status STATUS_OUTPUT=yaml`.
+health across kagent/Ollama/the optional plane, pod restarts, next actions, and
+a **Governance** section that counts how much of the system is actually behind
+the plane:
+
+```
+Governance
+  plane:        not installed — nothing is enforced in front of these seams (`kmx plane`)
+  model seams:  0 of 2 agents governed, 2 direct
+  tool seams:   0 of 3 tool servers governed, 3 direct
+  credentials:  none — no governed seam names one
+```
+
+The counts are read from the cluster objects — a seam is governed when it
+points at the plane's Service — so they work with no plane, no credential and
+no network. Nothing there is a fault: the fast path is ungoverned by design,
+and the counts are how you see how much of your system is still on it. A
+population kmx could not read says `unknown` and why; it never reports a zero
+it did not count.
+
+For the machine-readable form use `kmx status -o json`, `kmx status -o yaml`,
+or from Make: `make status STATUS_OUTPUT=yaml`. That document carries
+`context`, the `governance` block, and the kubectl objects verbatim under
+`items` — so `jq '.items[]'` reads exactly what it always did.
 
 On the clone path the governed half is `make plane` and `make govern`, which
 are the same kmx commands with the checkout passed as the plane's source —

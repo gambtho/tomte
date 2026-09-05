@@ -887,6 +887,34 @@ jobs:
           kubectl --context kind-kaimahi-p1 -n kagent patch agent hello-world \
             --type merge -p '{"spec":{"declarative":{"deployment":{"resources":{"requests":{"cpu":"50m","memory":"320Mi"},"limits":{"memory":"1Gi"}}}}}}'
           kubectl --context kind-kaimahi-p1 -n kagent rollout status deploy/hello-world --timeout=300s
+      # W34(a): the ungoverned state has to be COUNTABLE, and honest when
+      # there is no plane at all. This is the one window CI has with kagent
+      # up and the plane not yet deployed, so the no-plane branch is proven
+      # here rather than only in a unit test. `0 governed` and `cannot tell`
+      # are different answers: both are asserted, in the table and in the
+      # document something will parse.
+      - name: Status counts the ungoverned system and says the plane is absent
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          bin/kmx status | tee status-no-plane.out
+          grep -F 'plane:        not installed' status-no-plane.out
+          grep -E 'model seams: +0 of [0-9]+ agents? governed' status-no-plane.out
+          bin/kmx status -o json > status-no-plane.json
+          python3 - <<'PY'
+          import json
+          doc = json.load(open("status-no-plane.json"))
+          g = doc["governance"]
+          assert g["plane"]["state"] == "none", g["plane"]
+          assert g["modelSeams"]["state"] == "counted", g["modelSeams"]
+          assert g["modelSeams"]["governed"] == 0, g["modelSeams"]
+          assert g["modelSeams"]["total"] >= 1, g["modelSeams"]
+          assert g["modelSeams"]["unresolved"] == 0, g["modelSeams"]
+          assert g["credentials"]["state"] == "none", g["credentials"]
+          # The kubectl objects stay verbatim under items, so the idiom that
+          # read the old output still reads this one.
+          assert any(i["kind"] == "Agent" for i in doc["items"]), doc["items"][:1]
+          print("no plane:", g)
+          PY
       - name: Deploy the governance plane
         if: steps.changes.outputs.docs_only != 'true'
         run: make plane
@@ -1876,6 +1904,35 @@ jobs:
       - name: Govern the tools agent through the MCP gateway
         if: steps.changes.outputs.docs_only != 'true'
         run: make govern-tools
+      # W34(a): this cluster now carries BOTH — kaimahi-tools through the
+      # gateway and the chart-managed kagent-tool-server direct — so it is
+      # the one place the count can be proven to distinguish them rather
+      # than just to add up.
+      - name: Status counts the governed and the ungoverned tool servers apart
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          bin/kmx status | tee status-governed.out
+          grep -E 'plane: +installed' status-governed.out
+          grep -E 'tool seams: +1 of [0-9]+ tool servers governed, [1-9][0-9]* direct' status-governed.out
+          grep -E 'model seams: +1 of [0-9]+ agents? governed' status-governed.out
+          bin/kmx status -o json > status-governed.json
+          python3 - <<'PY'
+          import json
+          g = json.load(open("status-governed.json"))["governance"]
+          assert g["plane"]["state"] == "installed", g["plane"]
+          tools = g["toolSeams"]
+          assert tools["state"] == "counted", tools
+          assert tools["governed"] == 1, tools
+          assert tools["direct"] >= 1, tools
+          assert tools["unresolved"] == 0, tools
+          models = g["modelSeams"]
+          assert models["governed"] == 1, models
+          assert models["direct"] >= 1, models
+          creds = g["credentials"]
+          assert creds["state"] == "counted", creds
+          assert creds["present"] == creds["required"] and not creds.get("missing"), creds
+          print("governed:", g)
+          PY
       - name: Governed tool call rides the gateway (P3 probe proof)
         if: steps.changes.outputs.docs_only != 'true'
         run: |
