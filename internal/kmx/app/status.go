@@ -10,6 +10,15 @@ import (
 	yaml "go.yaml.in/yaml/v3"
 )
 
+// statusRequestTimeout bounds every read status makes.
+//
+// Re-landed from #37, whose reasoning holds and had nowhere to live once
+// scripts/status.py went: this is the command people run when something is
+// wrong, and an API server that is unreachable rather than refusing leaves a
+// bare `kubectl get` waiting on TCP. A status command that hangs is the same
+// failure as one that needs the thing being diagnosed.
+const statusRequestTimeout = "--request-timeout=15s"
+
 // StatusOptions controls the human table or the structured document.
 type StatusOptions struct {
 	Output string
@@ -126,7 +135,7 @@ func table(out io.Writer, headers []string, rows [][]string) {
 // The reason is the first line of kubectl's own complaint, so an operator
 // reads what kubectl said rather than a paraphrase of it.
 func (a *App) statusTolerant(namespace, resource string, target any) string {
-	raw, err := a.kubectlCapture("-n", namespace, "get", resource, "-o", "json")
+	raw, err := a.kubectlCapture("-n", namespace, "get", resource, "-o", "json", statusRequestTimeout)
 	if err == nil {
 		if err := json.Unmarshal([]byte(raw), target); err != nil {
 			return firstLine(err.Error())
@@ -154,7 +163,7 @@ func firstLine(message string) string {
 // anywhere. This exists so a governed seam whose token Secret is missing is
 // reported as missing instead of failing at the next call.
 func (a *App) secretNames(namespace string) ([]string, string) {
-	raw, err := a.kubectlCapture("-n", namespace, "get", "secrets", "-o", "name")
+	raw, err := a.kubectlCapture("-n", namespace, "get", "secrets", "-o", "name", statusRequestTimeout)
 	if err != nil {
 		if isNotFound(err) {
 			return nil, ""
@@ -173,7 +182,7 @@ func (a *App) secretNames(namespace string) ([]string, string) {
 }
 
 func (a *App) statusJSON(namespace, resource string, optional bool, target any) error {
-	raw, err := a.kubectlCapture("-n", namespace, "get", resource, "-o", "json")
+	raw, err := a.kubectlCapture("-n", namespace, "get", resource, "-o", "json", statusRequestTimeout)
 	if err != nil {
 		if optional && isNotFound(err) {
 			return nil
@@ -249,7 +258,7 @@ func (a *App) statusStructured(format string) error {
 	// The objects are re-read through the SAME combined get the old output
 	// used, so `items` is byte-for-byte what kubectl would have printed
 	// rather than kmx's narrower view of the same objects.
-	raw, err := a.kubectlCapture("-n", "kagent", "get", "agents,modelconfigs,pods", "-o", "json")
+	raw, err := a.kubectlCapture("-n", "kagent", "get", "agents,modelconfigs,pods", "-o", "json", statusRequestTimeout)
 	if err != nil {
 		return err
 	}
@@ -258,6 +267,11 @@ func (a *App) statusStructured(format string) error {
 	}
 	if err := json.Unmarshal([]byte(raw), &list); err != nil {
 		return err
+	}
+	if list.Items == nil {
+		// An empty cluster publishes `[]`, not `null`: a consumer that
+		// iterates items should find nothing there, not fall over.
+		list.Items = []any{}
 	}
 	document := statusDocument{
 		Context:       a.Cfg.KubeContext,

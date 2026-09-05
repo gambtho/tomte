@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/url"
@@ -98,6 +99,66 @@ type governance struct {
 	Credentials credentialPopulation `json:"credentials"`
 }
 
+// An `unknown` population publishes NO counts.
+//
+// This is the whole finding expressed in the wire format: a caller reading
+// `.governed` off a population nobody could read would get 0, which is the
+// false zero the table refuses to print. Absent forces the reader to look at
+// `state` first. A `none` population DOES carry its zeros, because there
+// they are a counted fact.
+func (p seamPopulation) MarshalJSON() ([]byte, error) {
+	type counted struct {
+		State      string `json:"state"`
+		Total      int    `json:"total"`
+		Governed   int    `json:"governed"`
+		Direct     int    `json:"direct"`
+		Unresolved int    `json:"unresolved"`
+		Reason     string `json:"reason,omitempty"`
+	}
+	type bare struct {
+		State  string `json:"state"`
+		Reason string `json:"reason,omitempty"`
+	}
+	if p.State == stateUnknown {
+		return json.Marshal(bare{State: p.State, Reason: p.Reason})
+	}
+	return json.Marshal(counted{p.State, p.Total, p.Governed, p.Direct, p.Unresolved, p.Reason})
+}
+
+func (p credentialPopulation) MarshalJSON() ([]byte, error) {
+	type counted struct {
+		State    string   `json:"state"`
+		Required int      `json:"required"`
+		Present  int      `json:"present"`
+		Missing  []string `json:"missing,omitempty"`
+		Reason   string   `json:"reason,omitempty"`
+	}
+	type bare struct {
+		State  string `json:"state"`
+		Reason string `json:"reason,omitempty"`
+	}
+	if p.State == stateUnknown {
+		return json.Marshal(bare{State: p.State, Reason: p.Reason})
+	}
+	return json.Marshal(counted{p.State, p.Required, p.Present, p.Missing, p.Reason})
+}
+
+func (p planePresence) MarshalJSON() ([]byte, error) {
+	type counted struct {
+		State string `json:"state"`
+		Ready int    `json:"ready"`
+		Pods  int    `json:"pods"`
+	}
+	type bare struct {
+		State  string `json:"state"`
+		Reason string `json:"reason,omitempty"`
+	}
+	if p.State == stateUnknown {
+		return json.Marshal(bare{State: p.State, Reason: p.Reason})
+	}
+	return json.Marshal(counted{p.State, p.Ready, p.Pods})
+}
+
 // planeHost reports whether a URL's host is the named plane Service.
 //
 // kagent resolves these through the cluster DNS, so every form of the same
@@ -113,7 +174,10 @@ func planeHost(rawURL, service string) bool {
 	if err != nil {
 		return false
 	}
-	labels := strings.Split(strings.ToLower(parsed.Hostname()), ".")
+	// A fully qualified name may carry the root's trailing dot; it is the
+	// same Service, so it must not read as a different one.
+	host := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
+	labels := strings.Split(host, ".")
 	if len(labels) < 2 || labels[0] != service || labels[1] != planeNamespace {
 		return false
 	}
@@ -250,8 +314,8 @@ func writeGovernance(out io.Writer, g governance) {
 	fmt.Fprintf(out, "  model seams:  %s\n", seamLine(g.ModelSeams, "agents", "agent"))
 	fmt.Fprintf(out, "  tool seams:   %s\n", seamLine(g.ToolSeams, "tool servers", "tool server"))
 	fmt.Fprintf(out, "  credentials:  %s\n", credentialLine(g.Credentials))
-	fmt.Fprintln(out, "  Governed = the seam points at the plane. It is read from the cluster, so it")
-	fmt.Fprintln(out, "  holds with no plane and no network; the plane line says whether one is there.")
+	fmt.Fprintln(out, "  Governed = the seam points at the plane, read from the cluster objects — no")
+	fmt.Fprintln(out, "  plane, credential or internet needed. The plane line says whether one is there.")
 }
 
 func seamLine(p seamPopulation, plural, singular string) string {

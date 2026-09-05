@@ -2,6 +2,9 @@ package app
 
 import (
 	"bytes"
+	"encoding/json"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -255,5 +258,64 @@ func TestGovernanceWithAPlaneCountsGovernedSeams(t *testing.T) {
 func TestFirstLineKeepsKubectlsOwnComplaint(t *testing.T) {
 	if got := firstLine("exit status 1: Error from server (NotFound)\ntrailing detail"); got != "exit status 1: Error from server (NotFound)" {
 		t.Errorf("unexpected reason: %q", got)
+	}
+}
+
+// #37 added finite timeouts to the status reads and its file is gone; the
+// reasoning is not. Every read status makes carries one, or an unreachable
+// API server turns the command people run when something is wrong into a
+// command that hangs.
+func TestEveryStatusReadIsBounded(t *testing.T) {
+	source, err := os.ReadFile("status.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reads := regexp.MustCompile(`kubectlCapture\([^)]*"get"[^)]*\)`).FindAllString(string(source), -1)
+	if len(reads) < 4 {
+		t.Fatalf("the scan found %d reads — it is passing vacuously, not proving anything", len(reads))
+	}
+	for _, read := range reads {
+		if !strings.Contains(read, "statusRequestTimeout") {
+			t.Errorf("an unbounded status read: %s", read)
+		}
+	}
+}
+
+// A fully qualified Service name may carry the root's trailing dot. Reading
+// it as a different host would overstate the ungoverned count.
+func TestPlaneHostAcceptsTheRootDot(t *testing.T) {
+	if !planeHost("http://kaimahi-proxy.kaimahi.svc.cluster.local.:8080/v1", planeProxyService) {
+		t.Error("a fully qualified name with the root dot was not recognised as the plane")
+	}
+}
+
+// The finding, in the wire format: a population nobody could read must not
+// hand a parser a zero it did not count.
+func TestUnknownPopulationsPublishNoCounts(t *testing.T) {
+	d := &statusData{serverErr: "Forbidden", planeErr: "Forbidden"}
+	raw, err := json.Marshal(d.governance())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var generic map[string]map[string]any
+	if err := json.Unmarshal(raw, &generic); err != nil {
+		t.Fatal(err)
+	}
+	for _, population := range []string{"toolSeams", "credentials", "plane"} {
+		got := generic[population]
+		if got["state"] != stateUnknown {
+			t.Fatalf("%s is not unknown: %v", population, got)
+		}
+		for _, absent := range []string{"governed", "direct", "total", "required", "present", "ready", "pods"} {
+			if _, ok := got[absent]; ok {
+				t.Errorf("%s published %q alongside state=unknown: %v", population, absent, got)
+			}
+		}
+	}
+	// A counted population still publishes its zeros — there they are a fact.
+	counted := governance{ModelSeams: seamPopulation{State: stateNone}}
+	raw, _ = json.Marshal(counted)
+	if !strings.Contains(string(raw), `"governed":0`) {
+		t.Errorf("a known-zero population dropped its counts: %s", raw)
 	}
 }
