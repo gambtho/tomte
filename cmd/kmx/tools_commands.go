@@ -11,8 +11,36 @@ import (
 
 func newToolsCommand(state *commandState) *cobra.Command {
 	group := &cobra.Command{Use: "tools", Short: "Manage governed MCP tool access", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error { return cmd.Help() }}
-	group.AddCommand(newToolsAddCommand(state), newToolsGovernCommand(state), newToolsUngovernCommand(state), newToolsAllowCommand(state), newToolsAllowlistCommand(state))
+	group.AddCommand(newToolsAddCommand(state), newToolsGovernCommand(state), newToolsUngovernCommand(state), newToolsAllowCommand(state), newToolsAllowlistCommand(state), newToolsSandboxCommand(state))
 	return group
+}
+
+// newToolsSandboxCommand installs the WASM runtime that tool calls execute in.
+//
+// It belongs to the `tools` family because it governs what this family
+// governs — what a tool call may do — at the runtime boundary rather than the
+// gateway's allowlist.
+//
+// It deliberately registers NO --credential. The sandbox is a node-level
+// runtime: installed once per cluster, and every governed tool call lands on
+// it whatever credential made it. A flag accepted here and then ignored is how
+// an operator comes to believe they scoped something they did not.
+func newToolsSandboxCommand(state *commandState) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "sandbox",
+		Short: "Install the WASM sandbox that tool calls execute in",
+		Args:  cobra.NoArgs,
+	}
+	cmd.RunE = appRun(state, func(a *app.App) error { return a.ToolSandbox() })
+
+	status := &cobra.Command{
+		Use:   "status",
+		Short: "Report whether the sandbox is installed and what uses it",
+		Args:  cobra.NoArgs,
+	}
+	status.RunE = appRun(state, func(a *app.App) error { return a.ToolSandboxStatus() })
+	cmd.AddCommand(status)
+	return cmd
 }
 
 func newToolsAddCommand(state *commandState) *cobra.Command {

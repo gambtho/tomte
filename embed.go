@@ -31,6 +31,10 @@ import "embed"
 // stays where D27 put it — `make model-secret`, `make copilot-secret`, the
 // scripts. kmx still accepts a credential in no form at all.
 //
+// k8s/wasm/runtime.yaml is the tool sandbox's runtime: a node installer and
+// the RuntimeClass that selects it. It rides along because `kmx tools
+// sandbox` has the same clone-free problem as the plane.
+//
 // `plane/` itself is NOT here and cannot be: it carries its own go.mod, and
 // go:embed refuses to cross a module boundary ("cannot embed directory: in
 // different module"). That is exactly why `kmx plane` FETCHES the plane's
@@ -42,4 +46,5 @@ import "embed"
 //go:embed k8s/plane/namespace.yaml k8s/plane/postgres.yaml k8s/plane/proxy.yaml
 //go:embed k8s/plane/upstreams.yaml k8s/plane/network-policy.yaml
 //go:embed k8s/models
+//go:embed k8s/wasm/runtime.yaml
 var Manifests embed.FS
