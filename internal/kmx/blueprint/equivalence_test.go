@@ -296,9 +296,15 @@ esac
 	// "one repository" case would silently become the bounded-builds
 	// one. Every variable this test controls is dropped from the
 	// inherited environment first.
+	//
+	// BASH_ENV and its relatives go too: bash SOURCES $BASH_ENV before a
+	// non-interactive script, so a developer with one set would have the
+	// contents of somebody's dotfile running inside the thing this test
+	// claims to execute unmodified.
 	controlled := map[string]bool{
 		"GITHUB_REPO": true, "ADO_ORG": true, "ADO_PROJECT": true, "ADO_PIPELINES": true,
 		"CRED_RELEASE": true, "OVERLAY_CM": true, "FRAGMENT": true, "KUBECTL": true,
+		"BASH_ENV": true, "ENV": true, "SHELLOPTS": true, "BASHOPTS": true, "IFS": true,
 	}
 	for _, kv := range os.Environ() {
 		if name, _, _ := strings.Cut(kv, "="); !controlled[name] {
