@@ -458,6 +458,14 @@ before it is written down anywhere public.
 
 ## Under consideration (not GO — do not build yet)
 
+"Not GO" is the DEFAULT for this section, not a property of every entry
+in it. An entry whose own heading records a ruling has been ruled, and
+that heading is authoritative over this one — D42 is the case today
+(ruled 2026-09-04, running as W35). Such an entry stays here only while
+its lane is unfinished, because the reasoning underneath is what the
+ruling rests on; it moves to the decisions table with its delta sheet.
+Everything without a ruling in its own heading is not GO.
+
 - **`make up` guard for governed agents** (W6 finding, 2026-09-01):
   `make up` re-applies `k8s/hello-world.yaml`, silently re-pointing the
   agent at the ungoverned model — governance quietly drops off after any
