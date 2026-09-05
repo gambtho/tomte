@@ -291,23 +291,27 @@ esac
 
 	cmd := exec.Command("bash", "scripts/release-bind.sh")
 	cmd.Dir = repoRoot
-	// The script reads its inputs from the environment, so the caller's
-	// own exported GITHUB_REPO or ADO_PIPELINES would reach it and the
-	// "one repository" case would silently become the bounded-builds
-	// one. Every variable this test controls is dropped from the
-	// inherited environment first.
+	// AN ALLOWLIST, not a denylist, and that is the whole point of it.
 	//
-	// BASH_ENV and its relatives go too: bash SOURCES $BASH_ENV before a
-	// non-interactive script, so a developer with one set would have the
-	// contents of somebody's dotfile running inside the thing this test
-	// claims to execute unmodified.
-	controlled := map[string]bool{
-		"GITHUB_REPO": true, "ADO_ORG": true, "ADO_PROJECT": true, "ADO_PIPELINES": true,
-		"CRED_RELEASE": true, "OVERLAY_CM": true, "FRAGMENT": true, "KUBECTL": true,
-		"BASH_ENV": true, "ENV": true, "SHELLOPTS": true, "BASHOPTS": true, "IFS": true,
+	// This test's claim is that it runs scripts/release-bind.sh
+	// UNMODIFIED, so what the script sees has to be what this test set
+	// and nothing else. Two ways the caller's own environment could
+	// change the answer: the script reads its inputs from it (an
+	// exported ADO_PIPELINES would silently turn the "one repository"
+	// case into the bounded-builds one), and it runs `bash` and
+	// `python3 -`, both of which take instructions from their
+	// environment — BASH_ENV is SOURCED before a non-interactive script,
+	// PYTHONPATH can put a different `json` module in front of the real
+	// one, PYTHONHOME can point the interpreter somewhere else entirely.
+	//
+	// Listing those to exclude would be a list nobody ever finishes.
+	// Naming what the script may KEEP is finite, and a name missing from
+	// it fails loudly here rather than quietly somewhere else.
+	keep := map[string]bool{
+		"HOME": true, "TMPDIR": true, "LANG": true, "LC_ALL": true, "LC_CTYPE": true,
 	}
 	for _, kv := range os.Environ() {
-		if name, _, _ := strings.Cut(kv, "="); !controlled[name] {
+		if name, _, _ := strings.Cut(kv, "="); keep[name] {
 			cmd.Env = append(cmd.Env, kv)
 		}
 	}
